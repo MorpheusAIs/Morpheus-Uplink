@@ -10,7 +10,9 @@
 # as Encrypted Secrets.
 services:
   uplink:
-    image: ghcr.io/absgrafx/uplink:v0.1.0
+    # Template only — for real deployments use the digest-pinned
+    # docker-compose.secretvm.deployed.yml attached to each GitHub release.
+    image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
     environment:
       - ROUTER_URL=http://proxy-router:8082

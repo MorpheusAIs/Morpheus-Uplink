@@ -101,13 +101,35 @@ go run ./cmd/uplink
 | `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment instead of stake |
 | `CLOSE_SESSIONS_ON_EXIT` | — | `true` | Close pooled sessions on shutdown |
 
-## Target VPS layout (next step, not in this folder yet)
+## CI/CD and versioning
 
-The SecretVM deployment adds a Traefik TLS sidecar in front (same pattern as
-`Morpheus-Lumerin-Node/proxy-router/docker-compose.tee.yml`) routing `443 →
-uplink:8080`, and the secrets block collapses to **4 values**:
-`WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`, `ROUTER_AUTH`+`ADMIN_PASSWORD`
-(can be one value), `API_KEY_SEED`.
+Semantic versioning mirrors Morpheus-Lumerin-Node's scheme, adapted to a
+single component:
+
+- **Feature branch → PR to `main`** runs vet + tests.
+- **Merge to `main`** computes the next tag from the last clean `vX.Y.Z`
+  tag (**patch** bump by default, `#minor` / `#major` in the merge commit
+  message to bump higher, floor pinned in `.github/workflows/build.yml`),
+  builds the multi-arch image, pushes `ghcr.io/absgrafx/uplink:{vX.Y.Z,latest}`,
+  and creates a GitHub release with a **digest-pinned SecretVM compose**
+  (`docker-compose.secretvm.deployed.yml`) attached — deploy that one, not
+  the mutable template.
+- **workflow_dispatch on a branch** publishes a prerelease image
+  `vX.Y.N-<branch>` (no release, no `latest`).
+
+Publishing uses the workflow `GITHUB_TOKEN`; no PAT required. One-time
+setup: after the first push, flip the `uplink` package to **public** in
+GHCR package settings so SecretVM can pull anonymously.
+
+## SecretVM deployment
+
+`deploy/secretvm/` holds the full stack: a Traefik TLS sidecar (same
+pattern as `Morpheus-Lumerin-Node/proxy-router/docker-compose.tee.yml`,
+SecretVM certs) routing `443 → uplink:8080`, the consumer proxy-router,
+and Uplink. Paste `docker-compose.secretvm.deployed.yml` from the latest
+release (digest-pinned) as the VM compose and the **5 secrets** from
+`deploy/secretvm/env.template` as Encrypted Secrets: `WALLET_PRIVATE_KEY`,
+`ETH_NODE_ADDRESS`, `ROUTER_AUTH`, `ADMIN_PASSWORD`, `API_KEY_SEED`.
 
 ## Layout
 
