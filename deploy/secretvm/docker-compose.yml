@@ -1,0 +1,96 @@
+# UPLINK on SecretVM — Personal API Gateway for Morpheus
+#
+# Pattern mirrors the provider TEE compose (Morpheus-Lumerin-Node
+# proxy-router/docker-compose.tee.yml): Traefik terminates TLS on :443 with
+# SecretVM's auto-generated certs; everything routes to uplink, which wraps
+# the consumer-mode proxy-router. No other ports face the internet — a
+# consumer node needs no inbound :3333.
+#
+# Paste this as the VM's Docker Compose, and the 5 secrets from env.template
+# as Encrypted Secrets.
+services:
+  uplink:
+    image: ghcr.io/absgrafx/uplink:v0.1.0
+    restart: unless-stopped
+    environment:
+      - ROUTER_URL=http://proxy-router:8082
+      - ROUTER_AUTH=${ROUTER_AUTH}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - API_KEY_SEED=${API_KEY_SEED}
+      - DATA_DIR=/data
+    env_file:
+      - usr/.env
+    volumes:
+      - uplink_data:/data
+    networks:
+      - web
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.uplink.rule=PathPrefix(`/`)
+      - traefik.http.routers.uplink.entrypoints=websecure
+      - traefik.http.routers.uplink.tls=true
+      - traefik.http.services.uplink.loadbalancer.server.port=8080
+
+  proxy-router:
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
+    restart: unless-stopped
+    environment:
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - ETH_NODE_CHAIN_ID=8453
+      - ETH_NODE_USE_SUBSCRIPTIONS=false
+      - COOKIE_CONTENT=${ROUTER_AUTH}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://localhost}
+      # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
+    env_file:
+      - usr/.env
+    volumes:
+      - router_data:/app/data
+    networks:
+      - web
+    # Intentionally no ports: only uplink (and traefik) can reach :8082.
+
+  traefik:
+    image: traefik:v2.10
+    restart: unless-stopped
+    command:
+      - --api.insecure=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls.options=default@file
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+    ports:
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/secure/cert:/certs:ro
+    networks:
+      - web
+    configs:
+      - source: tls_config
+        target: /etc/traefik/dynamic/tls.yml
+    env_file:
+      - usr/.env
+
+volumes:
+  uplink_data:
+  router_data:
+
+networks:
+  web:
+    driver: bridge
+
+configs:
+  tls_config:
+    content: |-
+      tls:
+        certificates:
+          - certFile: /certs/secret_vm_fullchain.pem
+            keyFile: /certs/secret_vm_private.pem
+        stores:
+          default:
+            defaultCertificate:
+              certFile: /certs/secret_vm_fullchain.pem
+              keyFile: /certs/secret_vm_private.pem

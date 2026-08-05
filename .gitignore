@@ -1,0 +1,4 @@
+uplink
+/data/
+.env
+*.log

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uplink — your personal gateway to Morpheus</title>
+<style>
+  :root { --bg:#0d0b14; --panel:#171225; --border:#2c2344; --accent:#a78bfa; --accent2:#7c3aed; --text:#e7e2f5; --muted:#8d84a8; --ok:#34d399; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 28px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:18px; margin:0; } header h1 span { color:var(--accent); }
+  header .sub { color:var(--muted); font-size:13px; }
+  main { max-width:1000px; margin:0 auto; padding:24px 28px; display:grid; gap:20px; }
+  section { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px 20px; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin:0 0 12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:500; }
+  code { background:#211a35; padding:2px 6px; border-radius:5px; font-size:12px; word-break:break-all; }
+  button { background:var(--accent2); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--muted); }
+  button:hover { filter:brightness(1.15); }
+  input { background:#0f0c1a; border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; }
+  .pill.ok { background:rgba(52,211,153,.12); color:var(--ok); }
+  .pill.bad { background:rgba(248,113,113,.12); color:var(--bad); }
+  .stat { display:flex; flex-direction:column; gap:2px; min-width:130px; }
+  .stat .v { font-size:20px; font-weight:600; } .stat .k { font-size:12px; color:var(--muted); }
+  #login { max-width:360px; margin:14vh auto; }
+  .hidden { display:none; }
+  a { color:var(--accent); }
+  .note { color:var(--muted); font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>UPLINK <span>▲</span></h1>
+  <div class="sub">your personal gateway to the Morpheus decentralized AI network</div>
+</header>
+
+<section id="login">
+  <h2>Operator.</h2>
+  <div class="row">
+    <input id="pw" type="password" placeholder="admin password" style="flex:1">
+    <button onclick="login()">Login</button>
+  </div>
+  <div class="note" id="loginMsg"></div>
+</section>
+
+<main id="app" class="hidden">
+  <section>
+    <h2>Status</h2>
+    <div class="row" id="stats"></div>
+    <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a> — login with the node's cookie credentials via the proxy.</div>
+  </section>
+
+  <section>
+    <h2>API keys</h2>
+    <div class="row" style="margin-bottom:10px">
+      <input id="keyName" placeholder="key name (e.g. cursor, my-agent)">
+      <button onclick="createKey()">Create key</button>
+    </div>
+    <div id="newKey" class="note"></div>
+    <table id="keysTable"><thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th></th></tr></thead><tbody></tbody></table>
+    <div class="note">Built-in keys, derived from your seed — they survive storage wipes:</div>
+    <div class="note"><b>Prompt key</b> (inference only — safe default for clients): <code id="promptKey">…</code></div>
+    <div class="note"><b>Master key</b> (prompt + admin API — guard it): <code id="masterKey">…</code></div>
+  </section>
+
+  <section>
+    <h2>Open sessions</h2>
+    <div class="row" style="margin-bottom:8px"><button class="ghost" onclick="closeAll()">Close all (recover stake)</button></div>
+    <table id="sessTable"><thead><tr><th>Model</th><th>Session</th><th>Usable until</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Usage</h2>
+    <table id="usageTable"><thead><tr><th>Day</th><th>Key</th><th>Model</th><th>Requests</th><th>Prompt tok</th><th>Completion tok</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+
+<script>
+let auth = sessionStorage.getItem('uplink_auth') || '';
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers, { 'Authorization': 'Basic ' + auth });
+  const res = await fetch(path, opts);
+  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function logout() {
+  sessionStorage.removeItem('uplink_auth');
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('login').classList.remove('hidden');
+}
+
+async function login() {
+  const pw = document.getElementById('pw').value;
+  auth = btoa('admin:' + pw);
+  try {
+    await api('/admin/status');
+    sessionStorage.setItem('uplink_auth', auth);
+    document.getElementById('login').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    refresh();
+  } catch (e) {
+    document.getElementById('loginMsg').textContent = 'Login failed: ' + e.message;
+  }
+}
+
+function fmtMor(v) { return (Number(v) / 1e18).toFixed(4); }
+
+async function refresh() {
+  try {
+    const st = await api('/admin/status');
+    const bal = st.balance || {};
+    const stats = [
+      { k: 'Router', v: st.routerError ? 'down' : 'healthy', cls: st.routerError ? 'bad' : 'ok' },
+      { k: 'MOR', v: bal.mor !== undefined ? fmtMor(bal.mor) : '?' },
+      { k: 'ETH', v: bal.eth !== undefined ? (Number(bal.eth) / 1e18).toFixed(5) : '?' },
+      { k: 'Open sessions', v: (st.sessions || []).length },
+    ];
+    document.getElementById('stats').innerHTML = stats.map(s =>
+      `<div class="stat"><div class="v">${s.cls ? `<span class="pill ${s.cls}">${s.v}</span>` : s.v}</div><div class="k">${s.k}</div></div>`).join('');
+    document.querySelector('#sessTable tbody').innerHTML = (st.sessions || []).map(s =>
+      `<tr><td><code>${s.modelId.slice(0,18)}…</code></td><td><code>${s.sessionId.slice(0,18)}…</code></td><td>${new Date(s.expiresAt).toLocaleTimeString()}</td></tr>`).join('') || '<tr><td colspan=3 class="note">none</td></tr>';
+
+    const ks = await api('/admin/keys');
+    document.getElementById('masterKey').textContent = ks.masterKey;
+    document.getElementById('promptKey').textContent = ks.promptKey;
+    document.querySelector('#keysTable tbody').innerHTML = (ks.keys || []).map(k =>
+      `<tr><td>${k.name}</td><td><code>${k.prefix}…</code></td><td>${new Date(k.createdAt).toLocaleDateString()}</td>
+       <td><button class="ghost" onclick="revoke('${k.id}')">Revoke</button></td></tr>`).join('') || '<tr><td colspan=4 class="note">no generated keys — master key always works</td></tr>';
+
+    const us = await api('/admin/usage');
+    document.querySelector('#usageTable tbody').innerHTML = (us.usage || []).map(u =>
+      `<tr><td>${u.day}</td><td>${u.keyId}</td><td>${u.model}</td><td>${u.requests}</td><td>${u.promptTokens}</td><td>${u.completionTokens}</td></tr>`).join('') || '<tr><td colspan=6 class="note">no usage yet</td></tr>';
+  } catch (e) { console.error(e); }
+}
+
+async function createKey() {
+  const name = document.getElementById('keyName').value.trim();
+  if (!name) return;
+  const res = await api('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+  document.getElementById('newKey').innerHTML = `New key (copy now, shown once): <code>${res.key}</code>`;
+  document.getElementById('keyName').value = '';
+  refresh();
+}
+
+async function revoke(id) {
+  if (!confirm('Revoke this key?')) return;
+  await api('/admin/keys/' + id, { method: 'DELETE' });
+  refresh();
+}
+
+async function closeAll() {
+  if (!confirm('Close all pooled sessions? Unused stake returns to the wallet.')) return;
+  await api('/admin/pool/close-all', { method: 'POST' });
+  refresh();
+}
+
+setInterval(() => { if (!document.getElementById('app').classList.contains('hidden')) refresh(); }, 30000);
+if (auth) {
+  (async () => {
+    try {
+      await api('/admin/status');
+      document.getElementById('login').classList.add('hidden');
+      document.getElementById('app').classList.remove('hidden');
+      refresh();
+    } catch (e) { logout(); }
+  })();
+}
+</script>
+</body>
+</html>

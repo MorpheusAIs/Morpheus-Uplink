@@ -1,0 +1,47 @@
+# UPLINK local development stack: consumer proxy-router + gateway.
+# No TLS here — Traefik/SecretVM certs are the VPS deployment's concern.
+#
+#   cp .env.example .env   # fill in wallet key + RPC
+#   docker compose -f docker-compose.local.yml up --build
+#
+# Gateway:  http://localhost:8080          (OpenAI-compatible /v1, GUI at /gui)
+# Router:   http://localhost:8082          (only bound to localhost for debugging)
+services:
+  proxy-router:
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
+    restart: unless-stopped
+    environment:
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
+      - ETH_NODE_USE_SUBSCRIPTIONS=${ETH_NODE_USE_SUBSCRIPTIONS:-false}
+      - COOKIE_CONTENT=${ROUTER_AUTH}
+      - WEB_PUBLIC_URL=http://localhost:8082
+      # Consumer mode: no MODELS_CONFIG_CONTENT, nothing served on :3333.
+    ports:
+      - "127.0.0.1:8082:8082"
+    volumes:
+      - router_data:/app/data
+
+  uplink:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - proxy-router
+    environment:
+      - ROUTER_URL=http://proxy-router:8082
+      - ROUTER_AUTH=${ROUTER_AUTH}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - API_KEY_SEED=${API_KEY_SEED}
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/active_models.json}
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
+      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - DATA_DIR=/data
+    ports:
+      - "8080:8080"
+    volumes:
+      - uplink_data:/data
+
+volumes:
+  router_data:
+  uplink_data:
