@@ -49,6 +49,13 @@ jobs:
           fi
       - run: go vet ./...
       - run: go test ./...
+      - name: Deploy files must be ASCII (SecretVM btoa chokes on Latin1+)
+        run: |
+          if LC_ALL=C grep -rnP '[^\x00-\x7F]' deploy/ docker-compose.local.yml .env.example; then
+            echo "❌ Non-ASCII characters found in deploy-facing files."
+            exit 1
+          fi
+          echo "✅ Deploy files are pure ASCII"
 
   generate-tag:
     name: Generate Tag
