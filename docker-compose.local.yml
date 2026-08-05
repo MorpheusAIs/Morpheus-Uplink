@@ -1,5 +1,5 @@
 # UPLINK local development stack: consumer proxy-router + gateway.
-# No TLS here — Traefik/SecretVM certs are the VPS deployment's concern.
+# No TLS here - Traefik/SecretVM certs are the VPS deployment's concern.
 #
 #   cp .env.example .env   # fill in wallet key + RPC
 #   docker compose -f docker-compose.local.yml up --build

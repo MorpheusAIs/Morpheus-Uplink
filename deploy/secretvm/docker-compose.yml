@@ -1,16 +1,16 @@
-# UPLINK on SecretVM — Personal API Gateway for Morpheus
+# UPLINK on SecretVM - Personal API Gateway for Morpheus
 #
 # Pattern mirrors the provider TEE compose (Morpheus-Lumerin-Node
 # proxy-router/docker-compose.tee.yml): Traefik terminates TLS on :443 with
 # SecretVM's auto-generated certs; everything routes to uplink, which wraps
-# the consumer-mode proxy-router. No other ports face the internet — a
+# the consumer-mode proxy-router. No other ports face the internet - a
 # consumer node needs no inbound :3333.
 #
 # Paste this as the VM's Docker Compose, and the 5 secrets from env.template
 # as Encrypted Secrets.
 services:
   uplink:
-    # Template only — for real deployments use the digest-pinned
+    # Template only - for real deployments use the digest-pinned
     # docker-compose.secretvm.deployed.yml attached to each GitHub release.
     image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
