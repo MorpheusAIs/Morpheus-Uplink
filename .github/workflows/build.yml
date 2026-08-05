@@ -1,0 +1,200 @@
+# Uplink CI/CD
+#
+# Flow (mirrors the Morpheus-Lumerin-Node semantic-versioning scheme,
+# adapted to a single-component repo):
+#
+#   - Pull requests to main        → tests only
+#   - Merge/push to main           → tests → semver tag → multi-arch image
+#                                    push to GHCR → GitHub release with a
+#                                    digest-pinned SecretVM compose attached
+#   - workflow_dispatch on branch  → prerelease build vX.Y.N-<branch>
+#                                    (image pushed, no release, no `latest`)
+#
+# Version rules on main:
+#   - floor: VMAJ_NEW/VMIN_NEW below (first release = v0.1.0)
+#   - merge commit message contains #major → major bump
+#   - merge commit message contains #minor → minor bump
+#   - otherwise                            → patch bump
+#
+# Publishing uses the workflow's GITHUB_TOKEN (packages: write) — no PAT.
+# NOTE (one-time): after the first push, make the ghcr.io/absgrafx/uplink
+# package public in its settings so SecretVM can pull anonymously.
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/absgrafx/uplink
+
+jobs:
+  test:
+    name: Vet & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go mod tidy check
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod; then
+            echo "❌ go.mod is out of date — run 'go mod tidy' and commit."
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test ./...
+
+  generate-tag:
+    name: Generate Tag
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.event_name != 'pull_request'
+    outputs:
+      tag_name: ${{ steps.gen.outputs.tag_name }}
+      vfull: ${{ steps.gen.outputs.vfull }}
+      is_release: ${{ steps.gen.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Determine version
+        id: gen
+        shell: bash
+        run: |
+          # Version floor — bump these to force a new major/minor baseline.
+          VMAJ_NEW=0
+          VMIN_NEW=1
+          set +o pipefail
+
+          # Last clean production tag (no -branch suffixes), semver-sorted.
+          VLAST=$(git tag -l "v[0-9]*" | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1 | cut -c2-)
+          if [ -n "$VLAST" ]; then
+            eval "$(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')"
+          else
+            VMAJ=0; VMIN=0; VPAT=0
+          fi
+
+          FLOOR="${VMAJ_NEW}.${VMIN_NEW}.0"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            MSG=$(git log -1 --pretty=%B)
+            HIGHEST=$(printf '%s\n%s\n' "$FLOOR" "${VLAST:-0.0.0}" | sort -V | tail -n 1)
+            if [ "$HIGHEST" = "$FLOOR" ] && [ "$FLOOR" != "$VLAST" ]; then
+              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW; VPAT=0
+              BUMP="floor (first release at v${FLOOR})"
+            elif echo "$MSG" | grep -q '#major'; then
+              VMAJ=$((VMAJ+1)); VMIN=0; VPAT=0
+              BUMP="major (#major in commit message)"
+            elif echo "$MSG" | grep -q '#minor'; then
+              VMIN=$((VMIN+1)); VPAT=0
+              BUMP="minor (#minor in commit message)"
+            else
+              VPAT=$((VPAT+1))
+              BUMP="patch"
+            fi
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VTAG=v${VFULL}
+            IS_RELEASE=true
+          else
+            # Prerelease off main: patch = commits since merge-base with main.
+            MB=$(git merge-base refs/remotes/origin/main HEAD)
+            VPAT=$(git rev-list --count --no-merges "${MB}..HEAD")
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            RNAME=${GITHUB_REF_NAME##*/}
+            VTAG=v${VFULL}-${RNAME}
+            BUMP="prerelease (${RNAME})"
+            IS_RELEASE=false
+          fi
+
+          {
+            echo "tag_name=${VTAG}"
+            echo "vfull=${VFULL}"
+            echo "is_release=${IS_RELEASE}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "✅ New tag: ${VTAG} (${BUMP})"
+            echo "✅ Image: ${IMAGE_NAME}:${VTAG}"
+            echo "ℹ️ Previous production tag: v${VLAST:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Build & Publish Image
+    runs-on: ubuntu-latest
+    needs: [generate-tag]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VTAG: ${{ needs.generate-tag.outputs.tag_name }}
+      IS_RELEASE: ${{ needs.generate-tag.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compose image tags
+        id: tags
+        run: |
+          TAGS="${IMAGE_NAME}:${VTAG}"
+          if [ "$IS_RELEASE" = "true" ]; then
+            TAGS="${TAGS},${IMAGE_NAME}:latest"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ env.VTAG }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VTAG }}
+
+      - name: Generate digest-pinned SecretVM compose
+        id: pin
+        run: |
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE_NAME}:${VTAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          sed -E "s|image: ${IMAGE_NAME}[^[:space:]]*|image: ${IMAGE_NAME}@${DIGEST}|" \
+            deploy/secretvm/docker-compose.yml > docker-compose.secretvm.deployed.yml
+          {
+            echo "✅ Image digest: ${DIGEST}"
+            echo '```yaml'
+            grep 'image: ' docker-compose.secretvm.deployed.yml
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployed compose artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-compose-secretvm-deployed-${{ env.VTAG }}
+          path: docker-compose.secretvm.deployed.yml
+
+      - name: Create GitHub release
+        if: env.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "Image: \`${IMAGE_NAME}:${VTAG}\` (digest \`${{ steps.pin.outputs.digest }}\`)"
+            echo ""
+            echo "Deploy on SecretVM with the attached \`docker-compose.secretvm.deployed.yml\` (digest-pinned) plus the secrets from \`deploy/secretvm/env.template\`."
+          } > release-notes.md
+          gh release create "${VTAG}" \
+            docker-compose.secretvm.deployed.yml \
+            --title "${VTAG}" \
+            --notes-file release-notes.md

@@ -153,14 +153,18 @@ func (s *Server) nodeProxy() http.Handler {
 	return proxy
 }
 
+// Version is set from main at startup (build-time ldflags).
+var Version = "dev"
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	routerOK := true
 	if _, err := s.router.Healthcheck(); err != nil {
 		routerOK = false
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "healthy",
-		"router": routerOK,
+		"status":  "healthy",
+		"version": Version,
+		"router":  routerOK,
 	})
 }
 
