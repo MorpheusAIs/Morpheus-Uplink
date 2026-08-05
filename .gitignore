@@ -1,4 +1,5 @@
-uplink
+# compiled binary at repo root only (not cmd/uplink/)
+/uplink
 /data/
 .env
 *.log
