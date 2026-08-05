@@ -41,6 +41,12 @@ services:
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ETH_NODE_CHAIN_ID=8453
       - ETH_NODE_USE_SUBSCRIPTIONS=false
+      # Base mainnet network config. The generic router image doesn't bake
+      # these in (only the TEE image does); BLOCKSCOUT_API_URL is required.
+      # Values from Morpheus-Lumerin-Node .github/workflows/main.env.
+      - BLOCKSCOUT_API_URL=https://base.blockscout.com/api/v2
+      - DIAMOND_CONTRACT_ADDRESS=0x6aBE1d282f72B474E54527D93b979A4f64d3030a
+      - MOR_TOKEN_ADDRESS=0x7431ada8a591c955a994a21710752ef9b882b8e3
       - COOKIE_CONTENT=${ROUTER_AUTH}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://localhost}
       # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
