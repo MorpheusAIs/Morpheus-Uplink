@@ -56,6 +56,20 @@ jobs:
             exit 1
           fi
           echo "✅ Deploy files are pure ASCII"
+      - name: SecretVM compose must not leak non-secrets into the portal form
+        run: |
+          # SecretVM scrapes every `environment:` entry and every ${VAR}
+          # into Encrypted Secrets. Non-secrets belong in configs:.
+          if grep -nE '^\s+environment:' deploy/secretvm/docker-compose.yml; then
+            echo "❌ deploy/secretvm/docker-compose.yml has an environment: block"
+            echo "   Move non-secrets into configs:; secrets stay on env_file only."
+            exit 1
+          fi
+          if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*' deploy/secretvm/docker-compose.yml; then
+            echo "❌ deploy/secretvm/docker-compose.yml uses \${} interpolation"
+            exit 1
+          fi
+          echo "✅ SecretVM compose will not invent Encrypted Secrets fields"
 
   generate-tag:
     name: Generate Tag

@@ -132,10 +132,11 @@ release (digest-pinned) as the VM compose and the **5 secrets** from
 `ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`
 (plus optional non-secret `WEB_PUBLIC_URL` for correct swagger links).
 
-The compose uses **no `${}` interpolation**: secrets reach containers only
-via `env_file` (SecretVM writes the Encrypted Secrets to `usr/.env`), so
-the portal's secrets form asks for exactly these values — non-secret
-config is baked into the compose/images and never shows up as a field.
+The compose uses **no `environment:` block and no `${}` interpolation**:
+secrets reach containers only via `env_file` (SecretVM writes Encrypted
+Secrets to `usr/.env`), and Base network config is a compose `configs`
+file mounted as the router's `/app/.env`. That way the portal's secrets
+form asks for exactly the values in `env.template` — nothing else.
 
 ## Layout
 
