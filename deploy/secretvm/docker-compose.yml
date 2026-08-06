@@ -6,13 +6,12 @@
 # the consumer-mode proxy-router. No other ports face the internet - a
 # consumer node needs no inbound :3333.
 #
-# Paste this as the VM's Docker Compose, and the secrets from env.template
-# as Encrypted Secrets.
+# Paste this as the VM's Docker Compose, and fill Encrypted Secrets
+# (SecretVM auto-prompts from the substitutions below).
 #
-# SecretVM's Encrypted Secrets form scrapes every environment: entry and
-# every compose variable substitution. Keep this file free of both for
-# non-secrets: secrets arrive only via env_file (usr/.env); Base network
-# config is a compose config mounted as the router's /app/.env.
+# Split for a clean secrets form:
+#   - Real secrets / user knobs: environment substitutions below (prompted)
+#   - Base network config: configs router_network_env (NOT prompted)
 services:
   uplink:
     # Template only - for real deployments use the digest-pinned
@@ -20,6 +19,13 @@ services:
     # ROUTER_URL and DATA_DIR defaults are baked into the image.
     image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - API_KEY_SEED=${API_KEY_SEED}
+      # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
+      - COOKIE_CONTENT=${COOKIE_CONTENT}
+      # Optional: shorter sessions lock less MOR (default 3600).
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
     env_file:
       - usr/.env
     volumes:
@@ -36,10 +42,12 @@ services:
   proxy-router:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
     restart: unless-stopped
-    # No environment: block - SecretVM would promote every entry into the
-    # Encrypted Secrets form. Secrets + optional WEB_PUBLIC_URL come from
-    # env_file; non-secret Base mainnet config is mounted below as .env
-    # (values from Morpheus-Lumerin-Node .github/workflows/main.env).
+    environment:
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - COOKIE_CONTENT=${COOKIE_CONTENT}
+      # Optional: public URL + /node so swagger "Try it out" links are right.
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://localhost}
     # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
     env_file:
       - usr/.env
@@ -83,8 +91,9 @@ networks:
     driver: bridge
 
 configs:
-  # Loaded by the router's godotenv.Load(".env") at startup. Process env
-  # from usr/.env (secrets) takes precedence over this file.
+  # Non-secret Base mainnet config (Morpheus-Lumerin-Node main.env).
+  # Kept out of environment: so SecretVM does not put these in Encrypted Secrets.
+  # Loaded by the router's godotenv.Load(".env"); process env wins over this file.
   router_network_env:
     content: |-
       ETH_NODE_CHAIN_ID=8453

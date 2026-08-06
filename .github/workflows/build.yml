@@ -56,21 +56,37 @@ jobs:
             exit 1
           fi
           echo "✅ Deploy files are pure ASCII"
-      - name: SecretVM compose must not leak non-secrets into the portal form
+      - name: SecretVM compose prompts only for real secrets
         run: |
-          # SecretVM scrapes every environment: entry and every compose
-          # variable substitution into Encrypted Secrets. Non-secrets
-          # belong in configs:. Ignore comment lines.
-          if grep -nE '^\s+environment:' deploy/secretvm/docker-compose.yml | grep -vE '^\s*[0-9]+:\s*#'; then
-            echo "❌ deploy/secretvm/docker-compose.yml has an environment: block"
-            echo "   Move non-secrets into configs:; secrets stay on env_file only."
+          # SecretVM scrapes environment: / substitutions into Encrypted
+          # Secrets. Allowlisted keys may use substitutions (so the form
+          # prompts). Non-secrets must stay in configs: only.
+          ALLOWED='ADMIN_PASSWORD|API_KEY_SEED|COOKIE_CONTENT|WALLET_PRIVATE_KEY|ETH_NODE_ADDRESS|WEB_PUBLIC_URL|SESSION_DURATION_SECONDS'
+          FORBIDDEN='ETH_NODE_CHAIN_ID|ETH_NODE_USE_SUBSCRIPTIONS|BLOCKSCOUT_API_URL|DIAMOND_CONTRACT_ADDRESS|MOR_TOKEN_ADDRESS'
+          # Any forbidden key appearing as an environment assignment/sub.
+          if grep -nE "^\s+- (${FORBIDDEN})=" deploy/secretvm/docker-compose.yml; then
+            echo "❌ Non-secret network config must not be in environment: (use configs:)"
             exit 1
           fi
-          if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*' deploy/secretvm/docker-compose.yml | grep -vE '^\s*[0-9]+:\s*#'; then
-            echo "❌ deploy/secretvm/docker-compose.yml uses compose variable substitution"
-            exit 1
-          fi
-          echo "✅ SecretVM compose will not invent Encrypted Secrets fields"
+          # Every substitution must be allowlisted (ignore comment lines).
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            var=$(echo "$line" | sed -nE 's/.*\$\{([A-Za-z_][A-Za-z0-9_]*).*/\1/p')
+            [ -z "$var" ] && continue
+            if ! echo "$var" | grep -qE "^(${ALLOWED})$"; then
+              echo "❌ Unallowlisted substitution: $line"
+              exit 1
+            fi
+          done < <(grep -nF '${' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
+          # Required secrets must be prompted.
+          for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS; do
+            needle='${'"${req}"'}'
+            if ! grep -qF "$needle" deploy/secretvm/docker-compose.yml; then
+              echo "❌ Missing required secret prompt: $req"
+              exit 1
+            fi
+          done
+          echo "✅ SecretVM compose prompts for secrets only; network config stays in configs:"
 
   generate-tag:
     name: Generate Tag

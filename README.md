@@ -127,16 +127,14 @@ GHCR package settings so SecretVM can pull anonymously.
 pattern as `Morpheus-Lumerin-Node/proxy-router/docker-compose.tee.yml`,
 SecretVM certs) routing `443 → uplink:8080`, the consumer proxy-router,
 and Uplink. Paste `docker-compose.secretvm.deployed.yml` from the latest
-release (digest-pinned) as the VM compose and the **5 secrets** from
-`deploy/secretvm/env.template` as Encrypted Secrets: `WALLET_PRIVATE_KEY`,
-`ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`
-(plus optional non-secret `WEB_PUBLIC_URL` for correct swagger links).
+release (digest-pinned) as the VM compose. The Encrypted Secrets form
+auto-prompts for the real knobs: `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`,
+`COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, plus optional
+`WEB_PUBLIC_URL` (swagger links) and `SESSION_DURATION_SECONDS`.
 
-The compose uses **no `environment:` block and no `${}` interpolation**:
-secrets reach containers only via `env_file` (SecretVM writes Encrypted
-Secrets to `usr/.env`), and Base network config is a compose `configs`
-file mounted as the router's `/app/.env`. That way the portal's secrets
-form asks for exactly the values in `env.template` — nothing else.
+Base network config (chain ID, Blockscout, Diamond, MOR token) is a
+compose `configs` mount at the router's `/app/.env` — **not** in
+`environment:` — so it never appears as a secret.
 
 ## Layout
 
