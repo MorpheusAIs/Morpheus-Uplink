@@ -7,11 +7,14 @@
 package api
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -149,6 +152,26 @@ func (s *Server) nodeProxy() http.Handler {
 		}
 		req.SetBasicAuth(s.cfg.RouterUser, s.cfg.RouterPass)
 		req.Host = target.Host
+	}
+	// The router's swagger spec declares basePath "/", so swagger-ui's
+	// "Try it out" would drop the /node prefix and miss the passthrough.
+	// Rewrite the spec so requests stay under /node/*.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if !strings.HasSuffix(resp.Request.URL.Path, "/swagger/doc.json") || resp.StatusCode != http.StatusOK {
+			return nil
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		for _, old := range []string{`"basePath": "/"`, `"basePath":"/"`} {
+			body = bytes.Replace(body, []byte(old), []byte(`"basePath": "/node"`), 1)
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		return nil
 	}
 	return proxy
 }
