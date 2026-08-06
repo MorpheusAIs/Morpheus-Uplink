@@ -12,14 +12,15 @@ services:
   uplink:
     # Template only - for real deployments use the digest-pinned
     # docker-compose.secretvm.deployed.yml attached to each GitHub release.
+    #
+    # No ${} interpolation anywhere in this file: the 5 Encrypted Secrets
+    # (see env.template) reach the containers only via env_file usr/.env,
+    # so the SecretVM portal form asks for exactly those 5 values and a
+    # partial/missing secrets paste can never be masked by empty-string
+    # overrides from the environment block. Defaults for ROUTER_URL and
+    # DATA_DIR are baked into the uplink image.
     image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
-    environment:
-      - ROUTER_URL=http://proxy-router:8082
-      - ROUTER_AUTH=${ROUTER_AUTH}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - API_KEY_SEED=${API_KEY_SEED}
-      - DATA_DIR=/data
     env_file:
       - usr/.env
     volumes:
@@ -37,18 +38,17 @@ services:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
     restart: unless-stopped
     environment:
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      # Non-secret Base mainnet network config, fixed per release. The
+      # generic router image doesn't bake these in (only the TEE image
+      # does); BLOCKSCOUT_API_URL is required. Values from
+      # Morpheus-Lumerin-Node .github/workflows/main.env.
       - ETH_NODE_CHAIN_ID=8453
       - ETH_NODE_USE_SUBSCRIPTIONS=false
-      # Base mainnet network config. The generic router image doesn't bake
-      # these in (only the TEE image does); BLOCKSCOUT_API_URL is required.
-      # Values from Morpheus-Lumerin-Node .github/workflows/main.env.
       - BLOCKSCOUT_API_URL=https://base.blockscout.com/api/v2
       - DIAMOND_CONTRACT_ADDRESS=0x6aBE1d282f72B474E54527D93b979A4f64d3030a
       - MOR_TOKEN_ADDRESS=0x7431ada8a591c955a994a21710752ef9b882b8e3
-      - COOKIE_CONTENT=${ROUTER_AUTH}
-      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://localhost}
+      # Secrets (WALLET_PRIVATE_KEY, ETH_NODE_ADDRESS, COOKIE_CONTENT) and
+      # optional WEB_PUBLIC_URL arrive via env_file only.
       # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
     env_file:
       - usr/.env
@@ -79,8 +79,6 @@ services:
     configs:
       - source: tls_config
         target: /etc/traefik/dynamic/tls.yml
-    env_file:
-      - usr/.env
 
 volumes:
   uplink_data:

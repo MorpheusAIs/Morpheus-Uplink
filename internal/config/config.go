@@ -50,7 +50,9 @@ func FromEnv() (*Config, error) {
 	}
 
 	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.
-	auth := getenv("ROUTER_AUTH", "")
+	// COOKIE_CONTENT is accepted as a fallback so a single secret can feed
+	// both containers via env_file (no compose ${} interpolation needed).
+	auth := getenv("ROUTER_AUTH", os.Getenv("COOKIE_CONTENT"))
 	if user, pass, ok := strings.Cut(auth, ":"); ok {
 		c.RouterUser, c.RouterPass = user, pass
 	}
@@ -63,7 +65,7 @@ func FromEnv() (*Config, error) {
 		missing = append(missing, "API_KEY_SEED")
 	}
 	if c.RouterUser == "" || c.RouterPass == "" {
-		missing = append(missing, "ROUTER_AUTH (user:password)")
+		missing = append(missing, "ROUTER_AUTH or COOKIE_CONTENT (user:password)")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))

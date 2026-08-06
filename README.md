@@ -90,7 +90,7 @@ go run ./cmd/uplink
 | Var | Required | Default | Purpose |
 |---|---|---|---|
 | `ROUTER_URL` | — | `http://proxy-router:8082` | C-Node admin API |
-| `ROUTER_AUTH` | yes | — | Router basic auth, `user:pass` (= `COOKIE_CONTENT`) |
+| `ROUTER_AUTH` | yes | — | Router basic auth, `user:pass` (`COOKIE_CONTENT` accepted as fallback, so one secret feeds both containers) |
 | `ADMIN_PASSWORD` | yes | — | GUI/admin login (user `admin`) |
 | `API_KEY_SEED` | yes | — | Master-key derivation seed (`openssl rand -hex 32`) |
 | `UPLINK_LISTEN` | — | `:8080` | Listen address |
@@ -129,7 +129,13 @@ SecretVM certs) routing `443 → uplink:8080`, the consumer proxy-router,
 and Uplink. Paste `docker-compose.secretvm.deployed.yml` from the latest
 release (digest-pinned) as the VM compose and the **5 secrets** from
 `deploy/secretvm/env.template` as Encrypted Secrets: `WALLET_PRIVATE_KEY`,
-`ETH_NODE_ADDRESS`, `ROUTER_AUTH`, `ADMIN_PASSWORD`, `API_KEY_SEED`.
+`ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`
+(plus optional non-secret `WEB_PUBLIC_URL` for correct swagger links).
+
+The compose uses **no `${}` interpolation**: secrets reach containers only
+via `env_file` (SecretVM writes the Encrypted Secrets to `usr/.env`), so
+the portal's secrets form asks for exactly these values — non-secret
+config is baked into the compose/images and never shows up as a field.
 
 ## Layout
 
