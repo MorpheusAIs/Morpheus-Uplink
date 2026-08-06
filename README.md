@@ -2,6 +2,9 @@
 
 **Your personal gateway to the Morpheus decentralized AI network.**
 
+**Operator guide (short chapters):**  
+[docs/README.md](docs/README.md) — prerequisites → bootstrap → GUI → apps → updates
+
 The hosted API gateway is a party line — everyone on one wire. Uplink is
 your own line in: a single small Go service that turns a Morpheus
 **consumer proxy-router (C-Node)** into a personal, OpenAI-compatible API
@@ -111,9 +114,9 @@ single component:
   tag (**patch** bump by default, `#minor` / `#major` in the merge commit
   message to bump higher, floor pinned in `.github/workflows/build.yml`),
   builds the multi-arch image, pushes `ghcr.io/absgrafx/uplink:{vX.Y.Z,latest}`,
-  and creates a GitHub release with a **digest-pinned SecretVM compose**
-  (`docker-compose.secretvm.deployed.yml`) attached — deploy that one, not
-  the mutable template.
+  and creates a GitHub release with **digest-pinned compose + env examples**
+  (`docker-compose.secretvm.deployed.yml`, `docker-compose.generic.deployed.yml`,
+  `env.*.example`) — download those assets; do not clone the repo to run.
 - **workflow_dispatch on a branch** publishes a prerelease image
   `vX.Y.N-<branch>` (no release, no `latest`).
 
@@ -121,20 +124,18 @@ Publishing uses the workflow `GITHUB_TOKEN`; no PAT required. One-time
 setup: after the first push, flip the `uplink` package to **public** in
 GHCR package settings so SecretVM can pull anonymously.
 
-## SecretVM deployment
+## Deployment
 
-`deploy/secretvm/` holds the full stack: a Traefik TLS sidecar (same
-pattern as `Morpheus-Lumerin-Node/proxy-router/docker-compose.tee.yml`,
-SecretVM certs) routing `443 → uplink:8080`, the consumer proxy-router,
-and Uplink. Paste `docker-compose.secretvm.deployed.yml` from the latest
-release (digest-pinned) as the VM compose. The Encrypted Secrets form
-auto-prompts for the real knobs: `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`,
-`COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, plus optional
-`WEB_PUBLIC_URL` (swagger links) and `SESSION_DURATION_SECONDS`.
+Step-by-step (wallet, RPC, secrets, DNS, Probe, clients): **[docs/README.md](docs/README.md)**.
 
-Base network config (chain ID, Blockscout, Diamond, MOR token) is a
-compose `configs` mount at the router's `/app/.env` — **not** in
-`environment:` — so it never appears as a secret.
+| Target | Compose (from [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest)) |
+|--------|---------|
+| **SecretVM** | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example`. Encrypted Secrets; Traefik + platform certs. |
+| **Any Docker VPS** | `docker-compose.generic.deployed.yml` + `env.generic.example`. Same images, `.env`, Caddy + Let’s Encrypt (`PUBLIC_HOST`). |
+| **TEE / compose clouds** | Same portable unit (compose + runtime secrets + TLS). Phala/dstack fit the generic pattern. |
+
+Base network config on SecretVM (chain ID, Blockscout, Diamond, MOR token) is a
+compose `configs` mount — **not** Encrypted Secrets.
 
 ## Layout
 

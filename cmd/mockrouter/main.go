@@ -12,13 +12,25 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"strings"
 	"time"
 )
 
+type mockSession struct {
+	Id           string
+	ModelAgentId string
+	Stake        string
+	EndsAt       int64
+	ClosedAt     int64
+}
+
 func main() {
 	listen := envOr("MOCK_LISTEN", ":8082")
-	user, pass, _ := strings.Cut(envOr("COOKIE_CONTENT", "admin:mockpass"), ":")
+	user, pass, _ := strings.Cut(envOr("COOKIE_CONTENT", "admin:localdev"), ":")
+
+	var mu sync.Mutex
+	open := map[string]mockSession{}
 
 	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -34,26 +46,54 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthcheck", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"status": "healthy", "version": "mock-router", "uptime": "âˆž"})
+		writeJSON(w, map[string]any{"status": "healthy", "version": "mock-router", "uptime": "∞"})
 	})
+
+	mux.HandleFunc("GET /wallet", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"address": "0x1111111111111111111111111111111111111111"})
+	}))
 
 	mux.HandleFunc("GET /blockchain/balance", requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
-			"eth": uint64(42_000_000_000_000_000),     // 0.042 ETH
-			"mor": uint64(12_500_000_000_000_000_000), // 12.5 MOR
+			"eth": "42000000000000000",              // 0.042 ETH
+			"mor": "12500000000000000000",           // 12.5 MOR
 		})
+	}))
+
+	mux.HandleFunc("GET /blockchain/sessions/user", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		list := make([]mockSession, 0, len(open))
+		for _, s := range open {
+			list = append(list, s)
+		}
+		mu.Unlock()
+		writeJSON(w, map[string]any{"sessions": list})
 	}))
 
 	mux.HandleFunc("POST /blockchain/models/{id}/session", requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		id := make([]byte, 16)
 		_, _ = rand.Read(id)
 		session := "0x" + hex.EncodeToString(id)
-		log.Printf("mock: opened session %s for model %s", session, r.PathValue("id"))
+		model := r.PathValue("id")
+		mu.Lock()
+		open[session] = mockSession{
+			Id:           session,
+			ModelAgentId: model,
+			Stake:        "1000000000000000000",
+			EndsAt:       time.Now().Add(time.Hour).Unix(),
+			ClosedAt:     0,
+		}
+		mu.Unlock()
+		log.Printf("mock: opened session %s for model %s", session, model)
 		writeJSON(w, map[string]string{"sessionID": session})
 	}))
 
 	mux.HandleFunc("POST /blockchain/sessions/{id}/close", requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("mock: closed session %s", r.PathValue("id"))
+		sid := r.PathValue("id")
+		mu.Lock()
+		delete(open, sid)
+		mu.Unlock()
+		log.Printf("mock: closed session %s", sid)
 		writeJSON(w, map[string]bool{"success": true})
 	}))
 

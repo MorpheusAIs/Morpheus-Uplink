@@ -48,6 +48,12 @@ func mockRouter(t *testing.T, sessionsOpened *atomic.Int32) *httptest.Server {
 	mux.HandleFunc("GET /blockchain/balance", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"eth":1000000000000000000,"mor":5000000000000000000}`))
 	})
+	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"address":"0x1111111111111111111111111111111111111111"}`))
+	})
+	mux.HandleFunc("GET /blockchain/sessions/user", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	})
 	mux.HandleFunc("GET /swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"swagger":"2.0","basePath": "/","paths":{}}`))
@@ -85,7 +91,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *config.Config, *atomic.Int3
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true, false), rc)
+	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true, false), rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, cfg, &opened
@@ -352,5 +358,56 @@ func TestNodeSwaggerBasePathRewrite(t *testing.T) {
 	}
 	if spec.BasePath != "/node" {
 		t.Fatalf("basePath = %q, want /node", spec.BasePath)
+	}
+}
+
+func TestImportKeyRestoresInference(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	master := keymaker.MasterKey(cfg.APIKeySeed)
+
+	// Create, capture, revoke — then import the same full key back.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"saved-in-1password"}`))
+	req.Header.Set("Authorization", "Bearer "+master)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		Key    string
+		Record keymaker.Record
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	dReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+created.Record.ID, nil)
+	dReq.Header.Set("Authorization", "Bearer "+master)
+	dResp, _ := http.DefaultClient.Do(dReq)
+	dResp.Body.Close()
+
+	body := `{"name":"restored","key":"` + created.Key + `"}`
+	iReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys/import", strings.NewReader(body))
+	iReq.Header.Set("Authorization", "Bearer "+master)
+	iReq.Header.Set("Content-Type", "application/json")
+	iResp, err := http.DefaultClient.Do(iReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iResp.Body.Close()
+	if iResp.StatusCode != http.StatusCreated {
+		t.Fatalf("import: status %d", iResp.StatusCode)
+	}
+
+	mReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/models", nil)
+	mReq.Header.Set("Authorization", "Bearer "+created.Key)
+	mResp, err := http.DefaultClient.Do(mReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mResp.Body.Close()
+	if mResp.StatusCode != http.StatusOK {
+		t.Fatalf("imported key on /v1/models: %d", mResp.StatusCode)
 	}
 }

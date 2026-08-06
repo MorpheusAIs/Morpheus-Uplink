@@ -202,25 +202,34 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ env.VTAG }}
 
-      - name: Generate digest-pinned SecretVM compose
+      - name: Generate digest-pinned deploy assets
         id: pin
         run: |
           DIGEST=$(docker buildx imagetools inspect "${IMAGE_NAME}:${VTAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          sed -E "s|image: ${IMAGE_NAME}[^[:space:]]*|image: ${IMAGE_NAME}@${DIGEST}|" \
-            deploy/secretvm/docker-compose.yml > docker-compose.secretvm.deployed.yml
+          pin_uplink() {
+            sed -E "s|image: ${IMAGE_NAME}[^[:space:]]*|image: ${IMAGE_NAME}@${DIGEST}|" "$1" > "$2"
+          }
+          pin_uplink deploy/secretvm/docker-compose.yml docker-compose.secretvm.deployed.yml
+          pin_uplink deploy/generic/docker-compose.yml docker-compose.generic.deployed.yml
+          cp deploy/secretvm/env.template env.secretvm.example
+          cp deploy/generic/env.example env.generic.example
           {
             echo "✅ Image digest: ${DIGEST}"
             echo '```yaml'
-            grep 'image: ' docker-compose.secretvm.deployed.yml
+            grep 'image: ' docker-compose.secretvm.deployed.yml docker-compose.generic.deployed.yml
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload deployed compose artifact
+      - name: Upload deployed compose artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: docker-compose-secretvm-deployed-${{ env.VTAG }}
-          path: docker-compose.secretvm.deployed.yml
+          name: uplink-deploy-${{ env.VTAG }}
+          path: |
+            docker-compose.secretvm.deployed.yml
+            docker-compose.generic.deployed.yml
+            env.secretvm.example
+            env.generic.example
 
       - name: Create GitHub release
         if: env.IS_RELEASE == 'true'
@@ -230,9 +239,17 @@ jobs:
           {
             echo "Image: \`${IMAGE_NAME}:${VTAG}\` (digest \`${{ steps.pin.outputs.digest }}\`)"
             echo ""
-            echo "Deploy on SecretVM with the attached \`docker-compose.secretvm.deployed.yml\` (digest-pinned) plus the secrets from \`deploy/secretvm/env.template\`."
+            echo "**Do not clone the repo to run Uplink.** Download the release assets and pull from \`ghcr.io\`:"
+            echo ""
+            echo "- SecretVM: \`docker-compose.secretvm.deployed.yml\` + \`env.secretvm.example\`"
+            echo "- Any Docker VPS: \`docker-compose.generic.deployed.yml\` + \`env.generic.example\`"
+            echo ""
+            echo "Operator guide: https://github.com/absgrafx/Morpheus-Uplink/blob/main/docs/README.md"
           } > release-notes.md
           gh release create "${VTAG}" \
             docker-compose.secretvm.deployed.yml \
+            docker-compose.generic.deployed.yml \
+            env.secretvm.example \
+            env.generic.example \
             --title "${VTAG}" \
             --notes-file release-notes.md

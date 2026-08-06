@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/api"
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
+	"github.com/absgrafx/morpheus-uplink/internal/housekeep"
 	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
@@ -40,7 +42,28 @@ func main() {
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover, cfg.DirectPayment)
-	srv := api.NewServer(cfg, st, cat, pl, rc)
+
+	hk, err := housekeep.New(housekeep.Config{
+		Enabled:            cfg.Housekeeping,
+		EthNodeAddress:     cfg.EthNodeAddress,
+		DiamondAddress:     cfg.DiamondAddress,
+		WalletPrivateKey:   cfg.WalletPrivateKey,
+		ChainID:            cfg.EthNodeChainID,
+		AfterUTCMinute:     5,
+		WithdrawThreshold:  big.NewInt(0), // personal gateway: reclaim any dust
+		WithdrawIterations: 255,
+		MaxWithdrawRounds:  8,
+		CheckEvery:         15 * time.Minute,
+	}, pl)
+	if err != nil {
+		log.Fatalf("housekeep: %v", err)
+	}
+
+	srv := api.NewServer(cfg, st, cat, pl, rc, hk)
+
+	hkCtx, hkCancel := context.WithCancel(context.Background())
+	defer hkCancel()
+	go hk.Start(hkCtx)
 
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -60,6 +83,7 @@ func main() {
 	<-stop
 
 	log.Println("shutting down…")
+	hkCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)

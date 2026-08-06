@@ -33,6 +33,17 @@ type Config struct {
 	DirectPayment      bool
 	// Close pooled sessions on shutdown to recover stake sooner.
 	CloseSessionsOnExit bool
+	// Optional Base HTTPS RPC for daylocked / on-hold MOR reads
+	// (getUserStakesOnHold). Same value as the router's ETH_NODE_ADDRESS.
+	EthNodeAddress string
+	// Diamond (Inference Contract) for on-hold reads. Empty = Base mainnet default.
+	DiamondAddress string
+	// Optional consumer wallet key — enables post-midnight withdrawUserStakes
+	// reclaim (same job as Infra consumer_wallet_housekeeping Lambda). Prefer
+	// sharing the router's WALLET_PRIVATE_KEY via compose.
+	WalletPrivateKey string
+	EthNodeChainID   int64
+	Housekeeping     bool
 }
 
 func FromEnv() (*Config, error) {
@@ -47,6 +58,12 @@ func FromEnv() (*Config, error) {
 		SessionFailover:     getenvBool("SESSION_FAILOVER", true),
 		DirectPayment:       getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit: getenvBool("CLOSE_SESSIONS_ON_EXIT", true),
+		EthNodeAddress:      os.Getenv("ETH_NODE_ADDRESS"),
+		DiamondAddress:      getenv("DIAMOND_CONTRACT_ADDRESS", "0x6aBE1d282f72B474E54527D93b979A4f64d3030a"),
+		WalletPrivateKey:    os.Getenv("WALLET_PRIVATE_KEY"),
+		EthNodeChainID:      int64(getenvInt("ETH_NODE_CHAIN_ID", 8453)),
+		// On when a wallet key is present unless explicitly disabled.
+		Housekeeping: getenvBool("HOUSEKEEPING", os.Getenv("WALLET_PRIVATE_KEY") != ""),
 	}
 
 	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.

@@ -76,6 +76,14 @@ func (s *Store) save() error {
 func (s *Store) AddKey(rec keymaker.Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, k := range s.st.Keys {
+		if k.Hash == rec.Hash {
+			return fmt.Errorf("key already registered")
+		}
+		if k.ID == rec.ID {
+			return fmt.Errorf("key id %s already exists", rec.ID)
+		}
+	}
 	s.st.Keys = append(s.st.Keys, rec)
 	return s.save()
 }
