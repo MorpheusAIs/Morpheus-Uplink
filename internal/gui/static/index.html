@@ -125,6 +125,20 @@
     background: var(--green-bg); border: 1px solid rgba(32, 220, 142, 0.25);
   }
   .key-block b { color: var(--green-light); }
+  .fund-callout {
+    margin-top: 14px; padding: 14px 16px; border-radius: var(--radius);
+    background: var(--green-bg); border: 1px solid rgba(32, 220, 142, 0.35);
+    display: flex; gap: 16px; align-items: flex-start; justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .fund-callout strong { color: var(--green-light); font-size: 14px; }
+  a.btn {
+    display: inline-flex; align-items: center;
+    background: var(--green); color: #03160E; border: 0;
+    border-radius: var(--radius); padding: 8px 14px;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  a.btn:hover { filter: brightness(1.08); color: #03160E; }
 
   /* Login: brand + phone as one composition */
   #login-wrap {
@@ -215,6 +229,22 @@
   <section>
     <h2>Status</h2>
     <div class="row" id="stats"></div>
+    <div class="fund-callout" id="fundCallout">
+      <div>
+        <strong>Need more MOR?</strong>
+        <p class="note" style="margin:4px 0 0">
+          Uplink is not a wallet — fund the consumer address below from your own wallet
+          (MetaMask, Rabby, etc.). Swap <b>ETH → MOR</b> on Base, then send MOR (and a little ETH for gas) to that address.
+        </p>
+        <p class="note mono" style="margin:8px 0 0">Wallet: <code id="walletAddr">…</code></p>
+      </div>
+      <div class="row">
+        <a class="btn" id="getMorBtn"
+           href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
+           target="_blank" rel="noopener noreferrer">Get MOR on Uniswap</a>
+        <button type="button" class="ghost" onclick="copyWallet(this)">Copy address</button>
+      </div>
+    </div>
     <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a> — authenticated through the gateway passthrough.</div>
   </section>
 
@@ -278,6 +308,20 @@ async function login() {
 
 function fmtMor(v) { return (Number(v) / 1e18).toFixed(4); }
 
+let walletAddress = '';
+
+async function copyWallet(btn) {
+  if (!walletAddress) return;
+  try {
+    await navigator.clipboard.writeText(walletAddress);
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = prev; }, 1200);
+    }
+  } catch (e) { console.error(e); }
+}
+
 async function refresh() {
   try {
     const st = await api('/admin/status');
@@ -292,6 +336,17 @@ async function refresh() {
     ];
     document.getElementById('stats').innerHTML = stats.map(s =>
       `<div class="stat"><div class="v">${s.cls ? `<span class="pill ${s.cls}">${s.v}</span>` : s.v}</div><div class="k">${s.k}</div></div>`).join('');
+
+    // Wallet address for the "get MOR" callout (from /node/wallet via admin status if present).
+    walletAddress = (st.wallet && st.wallet.address) || st.address || '';
+    if (!walletAddress) {
+      try {
+        const w = await api('/node/wallet');
+        walletAddress = w.address || '';
+      } catch (e) { /* optional */ }
+    }
+    document.getElementById('walletAddr').textContent = walletAddress || '(unavailable)';
+
     document.querySelector('#sessTable tbody').innerHTML = (st.sessions || []).map(s =>
       `<tr><td><code>${s.modelId.slice(0,18)}…</code></td><td><code>${s.sessionId.slice(0,18)}…</code></td><td>${new Date(s.expiresAt).toLocaleTimeString()}</td></tr>`).join('') || '<tr><td colspan=3 class="note">none</td></tr>';
 
