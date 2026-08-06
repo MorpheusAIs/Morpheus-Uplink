@@ -48,6 +48,10 @@ func mockRouter(t *testing.T, sessionsOpened *atomic.Int32) *httptest.Server {
 	mux.HandleFunc("GET /blockchain/balance", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"eth":1000000000000000000,"mor":5000000000000000000}`))
 	})
+	mux.HandleFunc("GET /swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"swagger":"2.0","basePath": "/","paths":{}}`))
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -327,5 +331,26 @@ func TestNodePassthroughRequiresAdmin(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("admin /node: status %d, want 200", resp2.StatusCode)
+	}
+}
+
+func TestNodeSwaggerBasePathRewrite(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/node/swagger/doc.json", nil)
+	req.SetBasicAuth("admin", "adminpass")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var spec struct {
+		BasePath string `json:"basePath"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.BasePath != "/node" {
+		t.Fatalf("basePath = %q, want /node", spec.BasePath)
 	}
 }
