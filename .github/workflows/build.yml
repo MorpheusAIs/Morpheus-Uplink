@@ -68,18 +68,20 @@ jobs:
             echo "❌ Non-secret network config must not be in environment: (use configs:)"
             exit 1
           fi
-          # Every substitution must be allowlisted.
+          # Every substitution must be allowlisted (ignore comment lines).
           while IFS= read -r line; do
             [ -z "$line" ] && continue
-            var=$(echo "$line" | sed -E 's/.*\$\{([A-Za-z_][A-Za-z0-9_]*).*/\1/')
+            var=$(echo "$line" | sed -nE 's/.*\$\{([A-Za-z_][A-Za-z0-9_]*).*/\1/p')
+            [ -z "$var" ] && continue
             if ! echo "$var" | grep -qE "^(${ALLOWED})$"; then
               echo "❌ Unallowlisted substitution: $line"
               exit 1
             fi
-          done < <(grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*' deploy/secretvm/docker-compose.yml | grep -vE '^\s*[0-9]+:\s*#')
+          done < <(grep -nF '${' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
           # Required secrets must be prompted.
           for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS; do
-            if ! grep -qE "\$\{${req}" deploy/secretvm/docker-compose.yml; then
+            needle='${'"${req}"'}'
+            if ! grep -qF "$needle" deploy/secretvm/docker-compose.yml; then
               echo "❌ Missing required secret prompt: $req"
               exit 1
             fi
