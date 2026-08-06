@@ -9,10 +9,10 @@
 # Paste this as the VM's Docker Compose, and the secrets from env.template
 # as Encrypted Secrets.
 #
-# SecretVM's Encrypted Secrets form scrapes every `environment:` entry and
-# every ${VAR} reference. Keep this file free of both for non-secrets:
-# secrets arrive only via env_file (usr/.env); Base network config is a
-# compose config mounted as the router's /app/.env.
+# SecretVM's Encrypted Secrets form scrapes every environment: entry and
+# every compose variable substitution. Keep this file free of both for
+# non-secrets: secrets arrive only via env_file (usr/.env); Base network
+# config is a compose config mounted as the router's /app/.env.
 services:
   uplink:
     # Template only - for real deployments use the digest-pinned
