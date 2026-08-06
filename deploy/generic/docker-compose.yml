@@ -1,0 +1,88 @@
+# Uplink on any Docker host (VPS, Phala/dstack, home lab).
+#
+# Same stack as SecretVM, but secrets come from a normal .env file and
+# Caddy terminates TLS with Let's Encrypt (no SecretVM cert mount).
+#
+# Prefer the digest-pinned release asset (no git clone):
+#   curl -fsSL -O https://github.com/absgrafx/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
+#   curl -fsSL -o .env https://github.com/absgrafx/Morpheus-Uplink/releases/latest/download/env.generic.example
+#   # edit .env (PUBLIC_HOST + secrets), then:
+#   docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
+#
+# Gateway: https://${PUBLIC_HOST}/gui
+# Only :80 and :443 need to be public. Router :8082 stays internal.
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST to your DNS name}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    networks:
+      - web
+    depends_on:
+      - uplink
+
+  uplink:
+    image: ghcr.io/absgrafx/uplink:latest
+    restart: unless-stopped
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - API_KEY_SEED=${API_KEY_SEED}
+      # Same user:pass as the router (ROUTER_AUTH in .env.example works if you also set COOKIE_CONTENT=...).
+      - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
+      - ROUTER_URL=http://proxy-router:8082
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
+      - DATA_DIR=/data
+    volumes:
+      - uplink_data:/data
+    networks:
+      - web
+    depends_on:
+      - proxy-router
+
+  proxy-router:
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
+    restart: unless-stopped
+    environment:
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
+      - ETH_NODE_USE_SUBSCRIPTIONS=false
+      - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}
+      - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
+      - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
+      - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
+      - WEB_PUBLIC_URL=https://${PUBLIC_HOST}
+    volumes:
+      - router_data:/app/data
+    networks:
+      - web
+
+volumes:
+  uplink_data:
+  router_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  web:
+    driver: bridge
+
+configs:
+  caddyfile:
+    content: |
+      {$PUBLIC_HOST} {
+        reverse_proxy uplink:8080
+      }

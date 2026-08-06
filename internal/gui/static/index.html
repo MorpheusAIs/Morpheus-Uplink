@@ -12,23 +12,19 @@
   :root {
     --bg: #0C0C0C;
     --surface: #111111;
-    --surface-raised: #161616;
     --border: #242424;
     --text: #EBEBEB;
     --muted: #A5A5A5;
     --green: #20DC8E;
     --green-light: #00FF85;
     --green-bg: #03160E;
-    --eclipse: #1C302F;
     --ok: #20DC8E;
     --bad: #ef4444;
-    --warn: #f59e0b;
     --radius: 0.5rem;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    min-height: 100vh;
+    margin: 0; min-height: 100vh;
     font-family: "IBM Plex Sans", system-ui, sans-serif;
     color: var(--text);
     background:
@@ -44,45 +40,66 @@
     border-bottom: 1px solid var(--border);
     background: rgba(12, 12, 12, 0.88);
     backdrop-filter: blur(10px);
-    padding: 16px 28px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    padding: 12px 20px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   }
-  .brand {
-    display: flex; align-items: center; gap: 12px;
-  }
-  .brand img.logo { width: 36px; height: 36px; }
-  .brand h1 {
-    margin: 0; font-size: 20px; font-weight: 700; letter-spacing: 0.04em;
-  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand img.logo { width: 32px; height: 32px; flex-shrink: 0; }
+  .brand h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
   .brand h1 span { color: var(--green-light); }
-  .sub { color: var(--muted); font-size: 13px; }
+  .sub { color: var(--muted); font-size: 12px; }
   .header-spacer { flex: 1; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px;
-    font-size: 12px; font-weight: 600;
-    color: var(--green-light);
-    background: var(--green-bg);
+    font-size: 11px; font-weight: 600;
+    color: var(--green-light); background: var(--green-bg);
     border: 1px solid rgba(32, 220, 142, 0.4);
-    border-radius: 999px;
-    padding: 5px 12px;
+    border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+  }
+  a.chip { text-decoration: none; }
+  #updateChip {
+    color: #fbbf24; background: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.45);
+  }
+  #updateChip:hover { filter: brightness(1.1); }
+
+  .tabs {
+    display: flex; gap: 4px; padding: 12px 16px 0;
+    max-width: 1040px; margin: 0 auto; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab {
+    flex: 0 0 auto;
+    background: transparent; border: 1px solid transparent;
+    color: var(--muted); border-radius: var(--radius) var(--radius) 0 0;
+    padding: 10px 14px; font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+  }
+  .tab:hover { color: var(--text); background: rgba(32, 220, 142, 0.04); }
+  .tab.active {
+    color: var(--green-light); border-color: var(--border); border-bottom-color: var(--bg);
+    background: rgba(17, 17, 17, 0.95);
   }
 
-  main { max-width: 1040px; margin: 0 auto; padding: 24px 28px 48px; display: grid; gap: 18px; }
+  main { max-width: 1040px; margin: 0 auto; padding: 0 16px 48px; }
+  .panel { display: none; }
+  .panel.active { display: grid; gap: 16px; padding-top: 4px; }
+
   section {
     background: rgba(17, 17, 17, 0.92);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px 20px;
+    padding: 16px 18px;
   }
   h2 {
-    font-size: 12px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.12em; color: var(--green); margin: 0 0 14px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--green); margin: 0 0 12px;
   }
+  h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text); }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--border); }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
   tr:hover td { background: rgba(32, 220, 142, 0.03); }
   code {
@@ -90,75 +107,91 @@
     padding: 2px 6px; border-radius: 5px; font-size: 12px; word-break: break-all;
   }
 
-  button {
+  button, .btn {
     background: var(--green); color: #03160E; border: 0;
     border-radius: var(--radius); padding: 8px 14px;
     font-size: 13px; font-weight: 600; cursor: pointer;
-    font-family: inherit;
+    font-family: inherit; display: inline-flex; align-items: center; gap: 6px;
   }
-  button.ghost {
+  button.ghost, a.btn.ghost {
     background: transparent; border: 1px solid var(--border); color: var(--muted);
   }
-  button:hover { filter: brightness(1.08); }
-  button.ghost:hover { border-color: var(--green); color: var(--green-light); }
+  button:hover, .btn:hover { filter: brightness(1.08); }
+  button.ghost:hover, a.btn.ghost:hover { border-color: var(--green); color: var(--green-light); }
+  a.btn { text-decoration: none; color: #03160E; }
+  a.btn.ghost { color: var(--muted); }
+  button.icon {
+    background: transparent; border: 1px solid rgba(32, 220, 142, 0.35);
+    color: var(--green-light); padding: 4px 8px; border-radius: 6px;
+  }
+  button.icon:hover { background: rgba(32, 220, 142, 0.1); border-color: var(--green-light); }
+  button.icon svg { width: 14px; height: 14px; display: block; }
+  button:disabled, button.ghost:disabled {
+    opacity: 0.4; cursor: not-allowed; filter: none;
+  }
+  .stat .reclaim-wrap { margin-top: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+  .stat .reclaim-wrap button { font-size: 12px; padding: 6px 10px; }
 
-  input {
+  input, textarea, select {
     background: #0a0a0a; border: 1px solid var(--border); color: var(--text);
     border-radius: var(--radius); padding: 9px 12px; font-size: 13px;
-    font-family: inherit; outline: none;
+    font-family: inherit; outline: none; width: 100%;
   }
-  input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(32, 220, 142, 0.15); }
+  textarea { min-height: 90px; resize: vertical; font-family: "IBM Plex Mono", monospace; }
+  input:focus, textarea:focus, select:focus {
+    border-color: var(--green); box-shadow: 0 0 0 3px rgba(32, 220, 142, 0.15);
+  }
 
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .secret-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 6px;
+  }
+  .secret-row code { font-size: 13px; }
   .pill {
-    display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
   }
   .pill.ok { background: rgba(32, 220, 142, 0.12); color: var(--ok); border: 1px solid rgba(32, 220, 142, 0.25); }
   .pill.bad { background: rgba(239, 68, 68, 0.12); color: var(--bad); border: 1px solid rgba(239, 68, 68, 0.25); }
-  .stat { display: flex; flex-direction: column; gap: 2px; min-width: 130px; }
-  .stat .v { font-size: 20px; font-weight: 700; }
+  .stat { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
+  .stat .v { font-size: 18px; font-weight: 700; }
   .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.45; }
   .hidden { display: none !important; }
-  .key-block {
-    margin-top: 10px; padding: 12px 14px; border-radius: var(--radius);
-    background: var(--green-bg); border: 1px solid rgba(32, 220, 142, 0.25);
-  }
-  .key-block b { color: var(--green-light); }
-  .fund-callout {
-    margin-top: 14px; padding: 14px 16px; border-radius: var(--radius);
+  .callout {
+    margin-top: 12px; padding: 14px 16px; border-radius: var(--radius);
     background: var(--green-bg); border: 1px solid rgba(32, 220, 142, 0.35);
-    display: flex; gap: 16px; align-items: flex-start; justify-content: space-between;
-    flex-wrap: wrap;
   }
-  .fund-callout strong { color: var(--green-light); font-size: 14px; }
-  a.btn {
-    display: inline-flex; align-items: center;
-    background: var(--green); color: #03160E; border: 0;
-    border-radius: var(--radius); padding: 8px 14px;
-    font-size: 13px; font-weight: 600; cursor: pointer;
+  .callout.warn {
+    background: rgba(245, 158, 11, 0.06); border-color: rgba(245, 158, 11, 0.35);
   }
-  a.btn:hover { filter: brightness(1.08); color: #03160E; }
+  .callout strong { color: var(--green-light); font-size: 14px; }
+  .callout.warn strong { color: #fbbf24; }
+  .stack { display: grid; gap: 10px; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) {
+    .split { grid-template-columns: 1fr; }
+    .brand .sub { display: none; }
+    th.hide-sm, td.hide-sm { display: none; }
+  }
 
-  /* Login: brand + phone as one composition */
   #login-wrap {
     min-height: calc(100vh - 70px);
-    display: grid;
-    place-items: center;
-    padding: 32px 20px 48px;
+    display: grid; place-items: center;
+    padding: 28px 16px 48px;
   }
   #login {
     width: min(920px, 100%);
-    display: grid;
-    grid-template-columns: 1.05fr 0.95fr;
-    gap: 36px;
-    align-items: center;
+    display: grid; grid-template-columns: 1.05fr 0.95fr;
+    gap: 28px; align-items: center;
   }
   @media (max-width: 760px) {
-    #login { grid-template-columns: 1fr; gap: 20px; text-align: center; }
+    #login { grid-template-columns: 1fr; gap: 18px; text-align: center; }
     .login-visual { order: -1; }
     .login-copy { align-items: center; }
     .login-copy .row { justify-content: center; }
+    .login-copy p { margin-left: auto; margin-right: auto; }
   }
   .login-copy { display: flex; flex-direction: column; gap: 10px; }
   .login-copy .eyebrow {
@@ -172,26 +205,82 @@
   .login-copy h2 em {
     font-style: normal; color: var(--green-light);
     text-shadow: 0 0 28px rgba(0, 255, 133, 0.25);
+    animation: cursor-blink 1.1s step-end infinite;
+  }
+  @keyframes cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
   }
   .login-copy p { margin: 0 0 8px; color: var(--muted); font-size: 15px; line-height: 1.45; max-width: 36ch; }
-  .login-visual {
-    position: relative;
-    display: grid; place-items: center;
-  }
+  .login-visual { position: relative; display: grid; place-items: center; }
   .login-visual::before {
-    content: "";
-    position: absolute;
-    width: 70%; height: 70%;
-    border-radius: 50%;
+    content: ""; position: absolute; width: 70%; height: 70%; border-radius: 50%;
     background: radial-gradient(circle, rgba(0, 255, 133, 0.18), transparent 68%);
-    filter: blur(8px);
-    z-index: 0;
+    filter: blur(8px); z-index: 0;
   }
   .login-visual img {
     position: relative; z-index: 1;
-    width: min(340px, 85vw); height: auto;
+    width: min(320px, 80vw); height: auto;
     filter: drop-shadow(0 18px 40px rgba(0, 0, 0, 0.55));
   }
+
+  .model-list {
+    max-height: 240px; overflow: auto; border: 1px solid var(--border);
+    border-radius: var(--radius); background: #0a0a0a;
+  }
+  .model-item {
+    padding: 8px 12px; cursor: pointer; font-size: 13px;
+    border-bottom: 1px solid var(--border);
+  }
+  .model-item:hover, .model-item.active {
+    background: rgba(32, 220, 142, 0.08); color: var(--green-light);
+  }
+  .model-item .tags { font-size: 11px; color: var(--muted); }
+  pre.out {
+    background: #0a0a0a; border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px; font-size: 12px; overflow: auto; max-height: 320px;
+    white-space: pre-wrap; word-break: break-word; margin: 0;
+    font-family: "IBM Plex Mono", monospace;
+  }
+
+  .key-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .key-row:last-child { border-bottom: 0; }
+  .key-row .icon-slot { flex: 0 0 auto; display: flex; width: 34px; justify-content: center; }
+  .key-row .name {
+    flex: 0 1 auto; font-weight: 600; max-width: 40%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .key-row code {
+    flex: 0 0 auto; font-size: 12px; white-space: nowrap;
+  }
+  .key-row .meta {
+    flex: 1 1 8rem; color: var(--muted); font-size: 12px; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  button.icon.danger {
+    color: #f87171; border-color: rgba(248, 113, 113, 0.45);
+  }
+  button.icon.danger:hover { background: rgba(248, 113, 113, 0.12); border-color: #f87171; color: #fecaca; }
+  .callout.warn.compact { margin-top: 0; margin-bottom: 10px; padding: 10px 12px; }
+  .callout.warn.compact p { margin: 0; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop.hidden { display: none !important; }
+  .modal {
+    width: min(480px, 100%);
+    background: var(--surface); border: 1px solid var(--green);
+    border-radius: var(--radius); padding: 18px 20px;
+  }
+  .modal h2 { margin-bottom: 8px; }
+  .modal .stack { margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -204,17 +293,21 @@
     </div>
   </div>
   <div class="header-spacer"></div>
-  <span class="chip" id="versionChip">operator console</span>
+  <div class="chips">
+    <span class="chip" id="uplinkChip">uplink …</span>
+    <span class="chip" id="routerChip">router …</span>
+    <a class="chip hidden" id="updateChip" href="https://github.com/absgrafx/Morpheus-Uplink/releases" target="_blank" rel="noopener noreferrer" title="Open releases">update available</a>
+  </div>
 </header>
 
 <div id="login-wrap">
-  <section id="login" style="background:transparent;border:0;padding:0">
+  <div id="login">
     <div class="login-copy">
       <div class="eyebrow">Establish connection</div>
       <h2>Operator.<em>_</em></h2>
       <p>Dial into your personal Morpheus gateway. One password opens the console; API keys live behind it.</p>
       <div class="row">
-        <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:180px" autocomplete="current-password">
+        <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
         <button onclick="login()">Connect</button>
       </div>
       <div class="note" id="loginMsg"></div>
@@ -222,68 +315,283 @@
     <div class="login-visual">
       <img src="/gui/uplink-phone.jpg" alt="Matrix green rotary telephone — Uplink">
     </div>
-  </section>
+  </div>
 </div>
 
-<main id="app" class="hidden">
-  <section>
-    <h2>Status</h2>
-    <div class="row" id="stats"></div>
-    <div class="fund-callout" id="fundCallout">
-      <div>
-        <strong>Need more MOR?</strong>
-        <p class="note" style="margin:4px 0 0">
-          Uplink is not a wallet — fund the consumer address below from your own wallet
-          (MetaMask, Rabby, etc.). Swap <b>ETH → MOR</b> on Base, then send MOR (and a little ETH for gas) to that address.
+<div id="app" class="hidden">
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="status" onclick="showTab('status')">Status</button>
+    <button class="tab" data-tab="keys" onclick="showTab('keys')">API Keys</button>
+    <button class="tab" data-tab="activity" onclick="showTab('activity')">Sessions &amp; Usage</button>
+    <button class="tab" data-tab="playground" onclick="showTab('playground')">Probe</button>
+  </nav>
+
+  <main>
+    <!-- STATUS -->
+    <div class="panel active" id="tab-status">
+      <section>
+        <h2>Status</h2>
+        <div class="row" id="stats"></div>
+        <div class="row" id="morBuckets" style="margin-top:14px"></div>
+        <p class="note" id="morNote" style="margin-top:8px"></p>
+        <div class="callout">
+          <strong>Need more MOR?</strong>
+          <p class="note" style="margin:4px 0 0">
+            Uplink is not a wallet — fund the consumer address from your own wallet
+            (MetaMask, Rabby, etc.). Swap <b>ETH → MOR</b> on Base, then send MOR
+            (and a little ETH for gas) here.
+          </p>
+          <div class="secret-row">
+            <span class="note" style="margin:0">Wallet:</span>
+            <code id="walletMasked">…</code>
+            <button type="button" class="icon" title="Copy full address" onclick="copySecret('wallet', this)" aria-label="Copy wallet address">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+            </button>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <a class="btn" href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
+               target="_blank" rel="noopener noreferrer">Get MOR on Uniswap</a>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="ghost" type="button" onclick="downloadSupportBundle()">Download support bundle</button>
+          <span class="note" id="supportMsg" style="margin:0"></span>
+        </div>
+        <p class="note" style="margin-top:10px">
+          Container / proxy-router logs are not streamed here yet — use your host’s
+          <code>docker logs</code> or VPS log panel for deep diagnosis. The support bundle
+          exports versions, health, sessions, and reclaim status (no private keys).
         </p>
-        <p class="note mono" style="margin:8px 0 0">Wallet: <code id="walletAddr">…</code></p>
-      </div>
+        <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a>
+          · Manual: <a href="https://github.com/absgrafx/Morpheus-Uplink/blob/main/docs/README.md" target="_blank" rel="noopener">operator guide</a>
+        </div>
+      </section>
+    </div>
+
+    <!-- KEYS -->
+    <div class="panel" id="tab-keys">
+      <section>
+        <h2>Built-in keys</h2>
+        <p class="note" style="margin-top:0">
+          From your seed — same keys after a redeploy. To rotate them, change
+          <code>API_KEY_SEED</code> in your env settings and restart.
+        </p>
+        <div id="builtinKeys" style="margin-top:8px"></div>
+      </section>
+
+      <section>
+        <h2>Ephemeral keys</h2>
+        <div class="callout warn compact">
+          <strong>Local only — they vanish on image update or redeploy.</strong>
+          <p class="note">Export below (or copy individually) and re-import after. Built-in keys come back from your seed.</p>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input id="keyName" placeholder="key name (e.g. zed, cursor, my-agent)" style="flex:1;min-width:160px">
+          <button onclick="createKey()">Create key</button>
+          <button class="ghost" type="button" onclick="openImportModal()">Import key</button>
+        </div>
+        <div id="generatedKeys" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:14px">
+          <button class="ghost" type="button" onclick="exportEphemeralKeys()">Export all</button>
+          <button class="ghost" type="button" onclick="openBulkImportModal()">Import list</button>
+          <span class="note" id="keysBulkMsg" style="margin:0"></span>
+        </div>
+      </section>
+    </div>
+
+    <!-- ACTIVITY -->
+    <div class="panel" id="tab-activity">
+      <section>
+        <div class="callout warn">
+          <strong>Temporary on this box</strong>
+          <p class="note" style="margin:4px 0 0">
+            Usage counters are local scratchpad data — they reset if you update the image or redeploy.
+            Open sessions are reloaded from chain after a restart (still-valid ones are reused;
+            past-end sessions are closed so unused stake can return and used MOR can enter daylock).
+          </p>
+        </div>
+      </section>
+      <section>
+        <h2>Open sessions</h2>
+        <p class="note" style="margin-top:0">
+          On-chain opens for this wallet. Rows marked reused are what Uplink will keep prompting against.
+        </p>
+        <div class="row" style="margin-bottom:8px">
+          <button class="ghost" onclick="closeAll()">Close all (recover stake)</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table id="sessTable">
+            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Ends</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <section>
+        <h2>Usage</h2>
+        <div style="overflow-x:auto">
+          <table id="usageTable">
+            <thead><tr><th>Day</th><th>Key</th><th>Model</th><th>Requests</th><th class="hide-sm">Prompt</th><th class="hide-sm">Completion</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- PROBE -->
+    <div class="panel" id="tab-playground">
+      <section>
+        <h2 id="pgHeading">Probe</h2>
+        <p class="note" style="margin-top:0">
+          Pick a model and an API key, send a short prompt, and inspect the response — or copy the
+          ready-made <code>curl</code> below.
+        </p>
+        <div class="split" style="margin-top:12px">
+          <div class="stack">
+            <label class="note" style="margin:0">Search models</label>
+            <input id="modelSearch" placeholder="fuzzy filter (name or tag)…" oninput="filterModels()">
+            <div class="model-list" id="modelList"><div class="note" style="padding:12px">Loading catalog…</div></div>
+            <div class="note">Selected: <code id="selectedModel">—</code></div>
+            <label class="note" style="margin:8px 0 0">API key</label>
+            <select id="pgKey" onchange="onPgKeyChange()"></select>
+          </div>
+          <div class="stack">
+            <label class="note" style="margin:0">Prompt</label>
+            <textarea id="pgPrompt">In one sentence, what is Morpheus?</textarea>
+            <div class="row">
+              <label class="note" style="margin:0;display:flex;align-items:center;gap:8px">
+                Max tokens
+                <input id="pgMaxTokens" type="number" min="16" max="4096" value="128" style="width:88px" title="max_tokens — response length cap">
+              </label>
+              <button onclick="runPlayground()">Run test</button>
+              <button class="ghost" onclick="copyCurl()">Copy curl</button>
+            </div>
+            <div class="note" id="pgStatus"></div>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>Response</h2>
+        <pre class="out" id="pgOut">—</pre>
+      </section>
+      <section>
+        <h2>curl</h2>
+        <pre class="out" id="pgCurl">—</pre>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- Import single ephemeral key -->
+<div id="importModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeImportModal()">
+  <div class="modal" role="dialog" aria-labelledby="importModalTitle">
+    <h2 id="importModalTitle">Import key</h2>
+    <p class="note" style="margin:0">Paste a saved <code>sk-…</code> ephemeral key. Master/prompt come from the seed — no import needed.</p>
+    <div class="stack">
+      <input id="importName" placeholder="name for this key">
+      <input id="importKey" placeholder="sk-…… (full key)" autocomplete="off" spellcheck="false">
       <div class="row">
-        <a class="btn" id="getMorBtn"
-           href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
-           target="_blank" rel="noopener noreferrer">Get MOR on Uniswap</a>
-        <button type="button" class="ghost" onclick="copyWallet(this)">Copy address</button>
+        <button type="button" onclick="importKey()">Import</button>
+        <button class="ghost" type="button" onclick="closeImportModal()">Cancel</button>
       </div>
+      <div id="importMsg" class="note"></div>
     </div>
-    <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a> — authenticated through the gateway passthrough.</div>
-  </section>
+  </div>
+</div>
 
-  <section>
-    <h2>API keys</h2>
-    <div class="row" style="margin-bottom:10px">
-      <input id="keyName" placeholder="key name (e.g. zed, cursor, my-agent)" style="flex:1;min-width:200px">
-      <button onclick="createKey()">Create key</button>
+<!-- Bulk import ephemeral keys -->
+<div id="bulkImportModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeBulkImportModal()">
+  <div class="modal" role="dialog" aria-labelledby="bulkImportTitle" style="width:min(560px,100%)">
+    <h2 id="bulkImportTitle">Import key list</h2>
+    <p class="note" style="margin:0">
+      Paste JSON from Export all, or one key per line as <code>name | sk-…</code>.
+    </p>
+    <div class="stack">
+      <textarea id="bulkImportText" style="min-height:160px" placeholder='{"keys":[{"name":"zed","key":"sk-…"}]}&#10;or&#10;zed | sk-…'></textarea>
+      <div class="row">
+        <button type="button" onclick="importKeyList()">Import list</button>
+        <button class="ghost" type="button" onclick="closeBulkImportModal()">Cancel</button>
+      </div>
+      <div id="bulkImportMsg" class="note"></div>
     </div>
-    <div id="newKey" class="note"></div>
-    <table id="keysTable"><thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th></th></tr></thead><tbody></tbody></table>
-    <div class="key-block">
-      <div class="note" style="margin:0 0 6px">Built-in keys, derived from your seed — they survive storage wipes:</div>
-      <div class="note"><b>Prompt key</b> (inference only — safe default for clients): <code id="promptKey">…</code></div>
-      <div class="note"><b>Master key</b> (prompt + admin API — guard it): <code id="masterKey">…</code></div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Open sessions</h2>
-    <div class="row" style="margin-bottom:8px"><button class="ghost" onclick="closeAll()">Close all (recover stake)</button></div>
-    <table id="sessTable"><thead><tr><th>Model</th><th>Session</th><th>Usable until</th></tr></thead><tbody></tbody></table>
-  </section>
-
-  <section>
-    <h2>Usage</h2>
-    <table id="usageTable"><thead><tr><th>Day</th><th>Key</th><th>Model</th><th>Requests</th><th>Prompt tok</th><th>Completion tok</th></tr></thead><tbody></tbody></table>
-  </section>
-</main>
+  </div>
+</div>
 
 <script>
 let auth = sessionStorage.getItem('uplink_auth') || '';
+let secrets = { wallet: '', prompt: '', master: '' };
+let promptKey = '';
+let allModels = [];
+let selectedModel = '';
+let generatedKeySecrets = {}; // id -> full sk-… from admin list
+let pgKeys = []; // { id, label, secret }
+let selectedKeyId = 'prompt';
+let lastClaimableWei = '0';
+let reclaimReady = false;
+let lastStatusSnapshot = null;
+const RELEASES_API = 'https://api.github.com/repos/absgrafx/Morpheus-Uplink/releases/latest';
+const RELEASES_PAGE = 'https://github.com/absgrafx/Morpheus-Uplink/releases';
+
+const copyIconSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const trashIconSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+
+function shortSecret(s, n = 7) {
+  if (!s) return '…';
+  if (s.length < n * 2 + 1) return s;
+  return s.slice(0, n) + '…' + s.slice(-n);
+}
+
+function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta }) {
+  const masked = shortSecret(secret);
+  const copyBtn = copyKind
+    ? `<button type="button" class="icon" title="Copy full key" onclick="copySecret('${copyKind}', this)" aria-label="Copy">${copyIconSvg}</button>`
+    : `<button type="button" class="icon" title="Copy full key" onclick="copyGeneratedKey('${escapeAttr(copyId)}', this)" aria-label="Copy" ${secret ? '' : 'disabled'}>${copyIconSvg}</button>`;
+  const trashBtn = canDelete
+    ? `<button type="button" class="icon danger" title="Delete key" onclick="revoke('${escapeAttr(deleteId)}')" aria-label="Delete">${trashIconSvg}</button>`
+    : '';
+  return `<div class="key-row">
+    <div class="icon-slot">${copyBtn}</div>
+    <div class="icon-slot">${trashBtn}</div>
+    <div class="name" title="${escapeAttr(name)}">${escapeHtml(name)}</div>
+    <code title="Masked — use copy for full key">${escapeHtml(masked)}</code>
+    <div class="meta" title="${escapeAttr(meta)}">${escapeHtml(meta)}</div>
+  </div>`;
+}
+
+function showTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
+  if (id === 'playground' && allModels.length === 0) loadModels();
+}
 
 async function api(path, opts = {}) {
   opts.headers = Object.assign({}, opts.headers, { 'Authorization': 'Basic ' + auth });
   const res = await fetch(path, opts);
   if (res.status === 401) { logout(); throw new Error('unauthorized'); }
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || res.statusText);
+  }
+  if (res.status === 204) return null;
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return res.json();
+  return res.text();
+}
+
+async function copySecret(kind, btn) {
+  const full = secrets[kind];
+  if (!full) return;
+  try {
+    await navigator.clipboard.writeText(full);
+    if (btn) {
+      const prev = btn.getAttribute('aria-label') || 'Copy';
+      btn.setAttribute('aria-label', 'Copied');
+      btn.style.borderColor = 'var(--green-light)';
+      setTimeout(() => {
+        btn.setAttribute('aria-label', prev);
+        btn.style.borderColor = '';
+      }, 1200);
+    }
+  } catch (e) { console.error(e); }
 }
 
 function logout() {
@@ -306,74 +614,284 @@ async function login() {
   }
 }
 
-function fmtMor(v) { return (Number(v) / 1e18).toFixed(4); }
+function fmtMor(v) {
+  if (v === undefined || v === null || v === '') return '—';
+  const n = Number(v) / 1e18;
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
 
-let walletAddress = '';
-
-async function copyWallet(btn) {
-  if (!walletAddress) return;
-  try {
-    await navigator.clipboard.writeText(walletAddress);
-    if (btn) {
-      const prev = btn.textContent;
-      btn.textContent = 'Copied';
-      setTimeout(() => { btn.textContent = prev; }, 1200);
-    }
-  } catch (e) { console.error(e); }
+function fmtEnds(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 async function refresh() {
   try {
     const st = await api('/admin/status');
     const bal = st.balance || {};
-    const ver = (st.router && st.router.version) ? st.router.version : '';
-    if (ver) document.getElementById('versionChip').textContent = 'router ' + ver;
+    const mor = st.mor || {};
+    lastStatusSnapshot = st;
+    document.getElementById('uplinkChip').textContent = 'uplink ' + (st.version || 'dev');
+    const rv = st.router && (st.router.version || st.router.Version);
+    document.getElementById('routerChip').textContent = rv ? ('router ' + rv) : (st.routerError ? 'router down' : 'router …');
+    checkForUpdate(st.version || 'dev');
+
     const stats = [
       { k: 'Router', v: st.routerError ? 'down' : 'healthy', cls: st.routerError ? 'bad' : 'ok' },
-      { k: 'MOR', v: bal.mor !== undefined ? fmtMor(bal.mor) : '?' },
-      { k: 'ETH', v: bal.eth !== undefined ? (Number(bal.eth) / 1e18).toFixed(5) : '?' },
+      { k: 'ETH (gas)', v: bal.eth !== undefined ? (Number(bal.eth) / 1e18).toFixed(5) : '?' },
       { k: 'Open sessions', v: (st.sessions || []).length },
     ];
     document.getElementById('stats').innerHTML = stats.map(s =>
       `<div class="stat"><div class="v">${s.cls ? `<span class="pill ${s.cls}">${s.v}</span>` : s.v}</div><div class="k">${s.k}</div></div>`).join('');
 
-    // Wallet address for the "get MOR" callout (from /node/wallet via admin status if present).
-    walletAddress = (st.wallet && st.wallet.address) || st.address || '';
-    if (!walletAddress) {
-      try {
-        const w = await api('/node/wallet');
-        walletAddress = w.address || '';
-      } catch (e) { /* optional */ }
-    }
-    document.getElementById('walletAddr').textContent = walletAddress || '(unavailable)';
+    lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
+    const lockedWei = mor.onHoldLockedWei != null ? String(mor.onHoldLockedWei) : null;
+    const hk = st.housekeep || {};
+    const hkLast = hk.last || {};
+    reclaimReady = !!hk.reclaimReady;
+    const canReclaim = BigInt(lastClaimableWei || '0') > 0n;
 
-    document.querySelector('#sessTable tbody').innerHTML = (st.sessions || []).map(s =>
-      `<tr><td><code>${s.modelId.slice(0,18)}…</code></td><td><code>${s.sessionId.slice(0,18)}…</code></td><td>${new Date(s.expiresAt).toLocaleTimeString()}</td></tr>`).join('') || '<tr><td colspan=3 class="note">none</td></tr>';
+    let holdNote = '';
+    if (lockedWei != null && mor.nextUnlockUTC) {
+      holdNote = 'On-hold unlocks after 00:00 UTC · next ≈ ' + new Date(mor.nextUnlockUTC).toUTCString();
+    } else if (mor.onHoldReadFailed) {
+      holdNote = 'Could not refresh on-hold / to-claim balances right now.';
+    }
+    document.getElementById('morNote').textContent = holdNote;
+
+    const claimVal = mor.onHoldClaimableWei != null ? fmtMor(mor.onHoldClaimableWei) + ' MOR' : '—';
+    const lockedVal = lockedWei != null ? fmtMor(lockedWei) + ' MOR' : '—';
+    let hkMsg = '';
+    if (hkLast.at && hkLast.message) {
+      hkMsg = escapeHtml((hkLast.status || '') + ' — ' + hkLast.message);
+    } else if (canReclaim) {
+      hkMsg = 'Past daylock — reclaim to wallet';
+    }
+
+    document.getElementById('morBuckets').innerHTML =
+      `<div class="stat"><div class="v">${fmtMor(mor.liquidWei ?? bal.mor)} MOR</div><div class="k">Wallet</div></div>` +
+      `<div class="stat"><div class="v">${fmtMor(mor.activeWei)} MOR</div><div class="k">Active</div></div>` +
+      `<div class="stat"><div class="v">${lockedVal}</div><div class="k">On hold</div></div>` +
+      `<div class="stat">
+         <div class="v">${claimVal}</div>
+         <div class="k">To claim</div>
+         <div class="reclaim-wrap">
+           <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" ${canReclaim ? '' : 'disabled'}>Reclaim</button>
+           <span class="note" id="hkNote" style="margin:0">${hkMsg}</span>
+         </div>
+       </div>`;
+
+    secrets.wallet = '';
+    try {
+      const w = await api('/node/wallet');
+      secrets.wallet = w.address || '';
+    } catch (e) { /* optional */ }
+    document.getElementById('walletMasked').textContent = shortSecret(secrets.wallet) || '(unavailable)';
+
+    document.querySelector('#sessTable tbody').innerHTML = (st.sessions || []).map(s => {
+      const status = s.pooled ? 'reused' : (s.usable ? 'open' : 'past end');
+      return `<tr>
+        <td><code>${shortSecret(s.modelId)}</code></td>
+        <td><code>${shortSecret(s.sessionId)}</code></td>
+        <td>${fmtMor(s.stakeWei)}</td>
+        <td>${fmtEnds(s.endsAt)}</td>
+        <td>${status}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan=5 class="note">none</td></tr>';
+    if (st.sessionsError && !(st.sessions || []).length) {
+      document.querySelector('#sessTable tbody').innerHTML =
+        `<tr><td colspan=5 class="note">session scan: ${escapeHtml(st.sessionsError)}</td></tr>`;
+    }
 
     const ks = await api('/admin/keys');
-    document.getElementById('masterKey').textContent = ks.masterKey;
-    document.getElementById('promptKey').textContent = ks.promptKey;
-    document.querySelector('#keysTable tbody').innerHTML = (ks.keys || []).map(k =>
-      `<tr><td>${k.name}</td><td><code>${k.prefix}…</code></td><td>${new Date(k.createdAt).toLocaleDateString()}</td>
-       <td><button class="ghost" onclick="revoke('${k.id}')">Revoke</button></td></tr>`).join('') || '<tr><td colspan=4 class="note">no generated keys — master key always works</td></tr>';
+    secrets.master = ks.masterKey || '';
+    secrets.prompt = ks.promptKey || '';
+    promptKey = secrets.prompt;
+    renderBuiltinKeys();
+    renderGeneratedKeys(ks.keys || []);
+    populatePgKeys(ks);
 
     const us = await api('/admin/usage');
     document.querySelector('#usageTable tbody').innerHTML = (us.usage || []).map(u =>
-      `<tr><td>${u.day}</td><td>${u.keyId}</td><td>${u.model}</td><td>${u.requests}</td><td>${u.promptTokens}</td><td>${u.completionTokens}</td></tr>`).join('') || '<tr><td colspan=6 class="note">no usage yet</td></tr>';
+      `<tr><td>${u.day}</td><td>${escapeHtml(u.keyId)}</td><td>${escapeHtml(u.model)}</td><td>${u.requests}</td>
+       <td class="hide-sm">${u.promptTokens}</td><td class="hide-sm">${u.completionTokens}</td></tr>`
+    ).join('') || '<tr><td colspan=6 class="note">no usage yet</td></tr>';
+  } catch (e) { console.error(e); }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderBuiltinKeys() {
+  const box = document.getElementById('builtinKeys');
+  box.innerHTML =
+    keyRowHTML({
+      copyKind: 'master', name: 'Master', secret: secrets.master,
+      meta: 'Prompt + admin — guard it',
+    }) +
+    keyRowHTML({
+      copyKind: 'prompt', name: 'Prompt', secret: secrets.prompt,
+      meta: 'Inference only — safe for clients',
+    });
+}
+
+function renderGeneratedKeys(keys) {
+  const box = document.getElementById('generatedKeys');
+  generatedKeySecrets = {};
+  window.__lastEphemeralKeys = keys || [];
+  if (!keys.length) {
+    box.innerHTML = '<div class="note">No ephemeral keys yet — create or import one.</div>';
+    return;
+  }
+  box.innerHTML = keys.map(k => {
+    const full = k.secret || '';
+    if (full) generatedKeySecrets[k.id] = full;
+    const when = k.createdAt ? new Date(k.createdAt).toLocaleDateString() : '';
+    return keyRowHTML({
+      copyId: k.id, canDelete: true, deleteId: k.id,
+      name: k.name || k.id,
+      secret: full || ((k.prefix || '') + 'xxxxxxxx'),
+      meta: when ? ('Created ' + when) : '',
+    });
+  }).join('');
+}
+
+function openImportModal() {
+  document.getElementById('importMsg').textContent = '';
+  document.getElementById('importModal').classList.remove('hidden');
+  document.getElementById('importName').focus();
+}
+function closeImportModal() {
+  document.getElementById('importModal').classList.add('hidden');
+}
+function openBulkImportModal() {
+  document.getElementById('bulkImportMsg').textContent = '';
+  document.getElementById('bulkImportModal').classList.remove('hidden');
+  document.getElementById('bulkImportText').focus();
+}
+function closeBulkImportModal() {
+  document.getElementById('bulkImportModal').classList.add('hidden');
+}
+
+function exportEphemeralKeys() {
+  const keys = Object.keys(generatedKeySecrets).map(id => {
+    const row = (window.__lastEphemeralKeys || []).find(k => k.id === id) || { id, name: id };
+    return { name: row.name || id, key: generatedKeySecrets[id], createdAt: row.createdAt || null };
+  }).filter(k => k.key);
+  if (!keys.length) {
+    document.getElementById('keysBulkMsg').textContent = 'Nothing to export.';
+    return;
+  }
+  const blob = new Blob([JSON.stringify({ keys }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uplink-ephemeral-keys.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  document.getElementById('keysBulkMsg').textContent = 'Exported ' + keys.length + ' key(s).';
+}
+
+function parseKeyList(text) {
+  text = text.trim();
+  if (!text) return [];
+  if (text.startsWith('{') || text.startsWith('[')) {
+    const data = JSON.parse(text);
+    const arr = Array.isArray(data) ? data : (data.keys || []);
+    return arr.map((k, i) => ({
+      name: k.name || ('imported-' + (i + 1)),
+      key: k.key || k.secret || '',
+    })).filter(k => k.key);
+  }
+  return text.split(/\r?\n/).map((line, i) => {
+    line = line.trim();
+    if (!line || line.startsWith('#')) return null;
+    const pipe = line.indexOf('|');
+    if (pipe >= 0) {
+      return { name: line.slice(0, pipe).trim() || ('imported-' + (i + 1)), key: line.slice(pipe + 1).trim() };
+    }
+    if (line.startsWith('sk-')) return { name: 'imported-' + (i + 1), key: line };
+    return null;
+  }).filter(Boolean);
+}
+
+async function copyGeneratedKey(id, btn) {
+  const full = generatedKeySecrets[id];
+  if (!full) return;
+  try {
+    await navigator.clipboard.writeText(full);
+    if (btn) {
+      btn.style.borderColor = 'var(--green-light)';
+      setTimeout(() => { btn.style.borderColor = ''; }, 1200);
+    }
   } catch (e) { console.error(e); }
 }
 
 async function createKey() {
   const name = document.getElementById('keyName').value.trim();
   if (!name) return;
-  const res = await api('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
-  document.getElementById('newKey').innerHTML = `New key (copy now, shown once): <code>${res.key}</code>`;
+  await api('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
   document.getElementById('keyName').value = '';
   refresh();
 }
 
+async function importKey() {
+  const name = document.getElementById('importName').value.trim();
+  const key = document.getElementById('importKey').value.trim();
+  const msg = document.getElementById('importMsg');
+  if (!name || !key) { msg.textContent = 'Name and full key are required.'; return; }
+  try {
+    await api('/admin/keys/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, key }),
+    });
+    document.getElementById('importKey').value = '';
+    document.getElementById('importName').value = '';
+    closeImportModal();
+    refresh();
+  } catch (e) {
+    msg.textContent = 'Import failed: ' + e.message;
+  }
+}
+
+async function importKeyList() {
+  const msg = document.getElementById('bulkImportMsg');
+  let items;
+  try {
+    items = parseKeyList(document.getElementById('bulkImportText').value);
+  } catch (e) {
+    msg.textContent = 'Invalid JSON: ' + e.message;
+    return;
+  }
+  if (!items.length) { msg.textContent = 'No keys found in paste.'; return; }
+  let ok = 0, skip = 0, fail = 0;
+  for (const item of items) {
+    try {
+      await api('/admin/keys/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: item.name, key: item.key }),
+      });
+      ok++;
+    } catch (e) {
+      const t = String(e.message || e);
+      if (/conflict|already|duplicate/i.test(t)) skip++;
+      else fail++;
+    }
+  }
+  msg.textContent = `Imported ${ok}` + (skip ? `, skipped ${skip}` : '') + (fail ? `, failed ${fail}` : '');
+  if (ok) {
+    document.getElementById('bulkImportText').value = '';
+    setTimeout(() => { closeBulkImportModal(); refresh(); }, 600);
+  }
+}
+
 async function revoke(id) {
-  if (!confirm('Revoke this key?')) return;
+  if (!confirm('Delete this ephemeral key?')) return;
   await api('/admin/keys/' + id, { method: 'DELETE' });
   refresh();
 }
@@ -383,6 +901,269 @@ async function closeAll() {
   await api('/admin/pool/close-all', { method: 'POST' });
   refresh();
 }
+
+function parseSemver(v) {
+  const m = String(v || '').replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+function semverNewer(a, b) {
+  const A = parseSemver(a), B = parseSemver(b);
+  if (!A || !B) return false;
+  for (let i = 0; i < 3; i++) {
+    if (A[i] !== B[i]) return A[i] > B[i];
+  }
+  return false;
+}
+async function checkForUpdate(current) {
+  const chip = document.getElementById('updateChip');
+  if (!chip) return;
+  if (!parseSemver(current)) { chip.classList.add('hidden'); return; }
+  try {
+    const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) { chip.classList.add('hidden'); return; }
+    const data = await res.json();
+    const latest = data.tag_name || '';
+    if (semverNewer(latest, current)) {
+      chip.textContent = 'update ' + latest;
+      chip.href = data.html_url || RELEASES_PAGE;
+      chip.classList.remove('hidden');
+    } else {
+      chip.classList.add('hidden');
+    }
+  } catch (_) {
+    chip.classList.add('hidden');
+  }
+}
+
+async function downloadSupportBundle() {
+  const msg = document.getElementById('supportMsg');
+  try {
+    const st = lastStatusSnapshot || await api('/admin/status');
+    const keys = await api('/admin/keys');
+    const usage = await api('/admin/usage').catch(() => ({ usage: [] }));
+    const bundle = {
+      exportedAt: new Date().toISOString(),
+      uplinkVersion: st.version || null,
+      router: st.router || null,
+      routerError: st.routerError || null,
+      mor: st.mor || null,
+      housekeep: st.housekeep || null,
+      sessions: st.sessions || [],
+      sessionsError: st.sessionsError || null,
+      keySummary: {
+        ephemeralCount: (keys.keys || []).length,
+        ephemeralNames: (keys.keys || []).map(k => k.name),
+        // Never include sk- secrets in the bundle.
+      },
+      usageRows: (usage.usage || []).length,
+      host: location.origin,
+    };
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'uplink-support-' + (st.version || 'dev') + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    if (msg) msg.textContent = 'Support bundle downloaded.';
+  } catch (e) {
+    if (msg) msg.textContent = 'Export failed: ' + e.message;
+  }
+}
+
+async function runHousekeep() {
+  const btn = document.getElementById('hkBtn');
+  const note = document.getElementById('hkNote');
+  if (btn) btn.disabled = true;
+  if (note) note.textContent = 'Reclaiming…';
+  try {
+    const res = await api('/admin/housekeep', { method: 'POST' });
+    if (note) note.textContent = (res.status || '') + ' — ' + (res.message || 'done');
+    refresh();
+  } catch (e) {
+    if (note) note.textContent = 'Reclaim failed: ' + e.message;
+    if (btn) btn.disabled = !(reclaimReady && BigInt(lastClaimableWei || '0') > 0n);
+  }
+}
+
+function populatePgKeys(ks) {
+  pgKeys = [
+    { id: 'prompt', label: 'Prompt key (inference)', secret: ks.promptKey || '' },
+    { id: 'master', label: 'Master key (full access)', secret: ks.masterKey || '' },
+  ];
+  for (const k of (ks.keys || [])) {
+    const secret = k.secret || generatedKeySecrets[k.id] || '';
+    if (!secret) continue;
+    pgKeys.push({ id: k.id, label: (k.name || k.id) + ' (extra)', secret });
+  }
+  const sel = document.getElementById('pgKey');
+  const prev = selectedKeyId;
+  sel.innerHTML = pgKeys.map(k =>
+    `<option value="${escapeAttr(k.id)}">${escapeHtml(k.label)}</option>`
+  ).join('');
+  if (pgKeys.some(k => k.id === prev)) selectedKeyId = prev;
+  else selectedKeyId = pgKeys[0] ? pgKeys[0].id : 'prompt';
+  sel.value = selectedKeyId;
+  updateCurlPreview();
+}
+
+function selectedKeySecret() {
+  const k = pgKeys.find(x => x.id === selectedKeyId);
+  return (k && k.secret) || promptKey || '';
+}
+
+function onPgKeyChange() {
+  selectedKeyId = document.getElementById('pgKey').value;
+  updateCurlPreview();
+}
+
+function shellSingleQuote(s) {
+  return String(s).replace(/'/g, `'\\''`);
+}
+
+function fuzzyScore(q, text) {
+  q = q.toLowerCase(); text = text.toLowerCase();
+  if (!q) return 1;
+  if (text.includes(q)) return 2 + (text.startsWith(q) ? 1 : 0);
+  let ti = 0;
+  for (let i = 0; i < q.length; i++) {
+    ti = text.indexOf(q[i], ti);
+    if (ti < 0) return 0;
+    ti++;
+  }
+  return 0.5;
+}
+
+async function loadModels() {
+  const box = document.getElementById('modelList');
+  if (!promptKey) { box.innerHTML = '<div class="note" style="padding:12px">Connect first…</div>'; return; }
+  try {
+    const res = await fetch('/v1/models', { headers: { 'Authorization': 'Bearer ' + promptKey } });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    allModels = (data.data || []).map(m => ({
+      id: m.id,
+      tags: (m.morpheus && m.morpheus.tags) || m.tags || [],
+    }));
+    filterModels();
+  } catch (e) {
+    box.innerHTML = `<div class="note" style="padding:12px">Catalog error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function filterModels() {
+  const q = document.getElementById('modelSearch').value.trim();
+  const scored = allModels.map(m => {
+    const hay = m.id + ' ' + (m.tags || []).join(' ');
+    return { m, s: fuzzyScore(q, hay) };
+  }).filter(x => x.s > 0).sort((a, b) => b.s - a.s || a.m.id.localeCompare(b.m.id));
+  const box = document.getElementById('modelList');
+  if (!scored.length) {
+    box.innerHTML = '<div class="note" style="padding:12px">No matches</div>';
+    return;
+  }
+  box.innerHTML = scored.slice(0, 80).map(({ m }) =>
+    `<div class="model-item${m.id === selectedModel ? ' active' : ''}" data-model-id="${escapeAttr(m.id)}" role="button" tabindex="0">
+       ${escapeHtml(m.id)}
+       ${m.tags && m.tags.length ? `<div class="tags">${escapeHtml(m.tags.slice(0, 4).join(', '))}</div>` : ''}
+     </div>`
+  ).join('');
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function selectModel(id) {
+  selectedModel = id;
+  document.getElementById('selectedModel').textContent = id;
+  filterModels();
+  updateCurlPreview();
+}
+
+document.getElementById('modelList').addEventListener('click', (e) => {
+  const item = e.target.closest('.model-item');
+  if (!item || !item.dataset.modelId) return;
+  selectModel(item.dataset.modelId);
+});
+document.getElementById('modelList').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const item = e.target.closest('.model-item');
+  if (!item || !item.dataset.modelId) return;
+  e.preventDefault();
+  selectModel(item.dataset.modelId);
+});
+
+function baseURL() {
+  return location.origin + '/v1';
+}
+
+function buildCurl() {
+  const model = selectedModel || 'MODEL';
+  const prompt = document.getElementById('pgPrompt').value;
+  const max = Number(document.getElementById('pgMaxTokens').value) || 128;
+  const key = selectedKeySecret() || 'sk-….';
+  // Pretty JSON in one single-quoted -d (newlines are fine inside quotes).
+  // Backslashes only continue between curl flags.
+  const bodyPretty =
+    '{\n' +
+    `  "model": ${JSON.stringify(model)},\n` +
+    `  "messages": [\n` +
+    `    {"role": "user", "content": ${JSON.stringify(prompt)}}\n` +
+    `  ],\n` +
+    `  "max_tokens": ${max}\n` +
+    '}';
+  return `curl -s ${baseURL()}/chat/completions \\\n` +
+    `  -H "Authorization: Bearer ${key}" \\\n` +
+    `  -H "Content-Type: application/json" \\\n` +
+    `  -d '${shellSingleQuote(bodyPretty)}'`;
+}
+
+function updateCurlPreview() {
+  document.getElementById('pgCurl').textContent = buildCurl();
+}
+
+async function copyCurl() {
+  updateCurlPreview();
+  await navigator.clipboard.writeText(buildCurl());
+  document.getElementById('pgStatus').textContent = 'curl copied to clipboard.';
+}
+
+async function runPlayground() {
+  if (!selectedModel) { document.getElementById('pgStatus').textContent = 'Select a model first.'; return; }
+  const key = selectedKeySecret();
+  if (!key) { document.getElementById('pgStatus').textContent = 'Select an API key first.'; return; }
+  updateCurlPreview();
+  document.getElementById('pgStatus').textContent = 'Running…';
+  document.getElementById('pgOut').textContent = '…';
+  const max = Number(document.getElementById('pgMaxTokens').value) || 128;
+  const body = {
+    model: selectedModel,
+    messages: [{ role: 'user', content: document.getElementById('pgPrompt').value }],
+    max_tokens: max,
+  };
+  try {
+    const res = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    let pretty = text;
+    try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (_) {}
+    document.getElementById('pgOut').textContent = pretty;
+    document.getElementById('pgStatus').textContent = res.ok ? 'OK ' + res.status : 'Error ' + res.status;
+  } catch (e) {
+    document.getElementById('pgOut').textContent = String(e);
+    document.getElementById('pgStatus').textContent = 'Request failed';
+  }
+}
+
+document.getElementById('pgPrompt').addEventListener('input', updateCurlPreview);
+document.getElementById('pgMaxTokens').addEventListener('input', updateCurlPreview);
 
 setInterval(() => { if (!document.getElementById('app').classList.contains('hidden')) refresh(); }, 30000);
 if (auth) {

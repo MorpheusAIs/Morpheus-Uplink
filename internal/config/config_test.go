@@ -3,8 +3,12 @@ package config
 import "testing"
 
 func setRequired(t *testing.T) {
+	t.Helper()
 	t.Setenv("ADMIN_PASSWORD", "pw")
 	t.Setenv("API_KEY_SEED", "seed")
+	// Clear auth vars so a developer's exported shell/.env cannot leak in.
+	t.Setenv("ROUTER_AUTH", "")
+	t.Setenv("COOKIE_CONTENT", "")
 }
 
 func TestRouterAuthPrimary(t *testing.T) {

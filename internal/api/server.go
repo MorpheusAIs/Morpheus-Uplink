@@ -20,6 +20,7 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/gui"
+	"github.com/absgrafx/morpheus-uplink/internal/housekeep"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
 	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
@@ -27,22 +28,24 @@ import (
 )
 
 type Server struct {
-	cfg       *config.Config
-	store     *store.Store
-	catalog   *catalog.Catalog
-	pool      *pool.Pool
-	router    *router.Client
-	masterKey string
-	promptKey string
+	cfg        *config.Config
+	store      *store.Store
+	catalog    *catalog.Catalog
+	pool       *pool.Pool
+	router     *router.Client
+	housekeep  *housekeep.Runner
+	masterKey  string
+	promptKey  string
 }
 
-func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client) *Server {
+func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
 	return &Server{
 		cfg:       cfg,
 		store:     st,
 		catalog:   cat,
 		pool:      pl,
 		router:    rc,
+		housekeep: hk,
 		masterKey: keymaker.MasterKey(cfg.APIKeySeed),
 		promptKey: keymaker.PromptKey(cfg.APIKeySeed),
 	}
@@ -59,10 +62,12 @@ func (s *Server) Handler() http.Handler {
 	// Admin surface.
 	mux.HandleFunc("GET /admin/keys", s.requireAdmin(s.handleListKeys))
 	mux.HandleFunc("POST /admin/keys", s.requireAdmin(s.handleCreateKey))
+	mux.HandleFunc("POST /admin/keys/import", s.requireAdmin(s.handleImportKey))
 	mux.HandleFunc("DELETE /admin/keys/{id}", s.requireAdmin(s.handleRevokeKey))
 	mux.HandleFunc("GET /admin/status", s.requireAdmin(s.handleStatus))
 	mux.HandleFunc("GET /admin/usage", s.requireAdmin(s.handleUsage))
 	mux.HandleFunc("POST /admin/pool/close-all", s.requireAdmin(s.handlePoolCloseAll))
+	mux.HandleFunc("POST /admin/housekeep", s.requireAdmin(s.handleHousekeep))
 
 	// Raw router passthrough for power users (Swagger, MyGateway-style GUIs).
 	mux.Handle("/node/", s.requireAdminHandler(s.nodeProxy()))

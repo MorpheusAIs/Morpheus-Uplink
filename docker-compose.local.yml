@@ -41,6 +41,9 @@ services:
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/active_models.json}
       - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
       - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
       - DATA_DIR=/data
     ports:
       - "8080:8080"

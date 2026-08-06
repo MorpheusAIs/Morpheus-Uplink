@@ -26,6 +26,9 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       # Optional: shorter sessions lock less MOR (default 3600).
       - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
+      # Same Base RPC + wallet as the router - daylocked MOR reads + post-midnight reclaim.
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
     env_file:
       - usr/.env
     volumes:
