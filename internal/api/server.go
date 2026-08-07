@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/status", s.requireAdmin(s.handleStatus))
 	mux.HandleFunc("GET /admin/usage", s.requireAdmin(s.handleUsage))
 	mux.HandleFunc("POST /admin/pool/close-all", s.requireAdmin(s.handlePoolCloseAll))
+	mux.HandleFunc("POST /admin/pool/close/{id}", s.requireAdmin(s.handlePoolCloseOne))
 	mux.HandleFunc("POST /admin/housekeep", s.requireAdmin(s.handleHousekeep))
 
 	// Raw router passthrough for power users (Swagger, MyGateway-style GUIs).

@@ -24,8 +24,8 @@ services:
       - API_KEY_SEED=${API_KEY_SEED}
       # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
       - COOKIE_CONTENT=${COOKIE_CONTENT}
-      # Optional: shorter sessions lock less MOR (default 3600).
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
+      # Optional: session length (default 600). Stake scales with duration.
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
       # Same Base RPC + wallet as the router - daylocked MOR reads + post-midnight reclaim.
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}

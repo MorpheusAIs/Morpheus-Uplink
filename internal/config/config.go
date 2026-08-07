@@ -54,7 +54,7 @@ func FromEnv() (*Config, error) {
 		APIKeySeed:          os.Getenv("API_KEY_SEED"),
 		DataDir:             getenv("DATA_DIR", "./data"),
 		ActiveModelsURL:     getenv("ACTIVE_MODELS_URL", "https://active.mor.org/active_models.json"),
-		SessionDurationSec:  getenvInt("SESSION_DURATION_SECONDS", 3600),
+		SessionDurationSec:  getenvInt("SESSION_DURATION_SECONDS", 600),
 		SessionFailover:     getenvBool("SESSION_FAILOVER", true),
 		DirectPayment:       getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit: getenvBool("CLOSE_SESSIONS_ON_EXIT", true),

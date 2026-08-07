@@ -281,6 +281,49 @@
   }
   .modal h2 { margin-bottom: 8px; }
   .modal .stack { margin-top: 12px; }
+
+  #logoutBtn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+  #logoutBtn.hidden { display: none !important; }
+
+  .charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  @media (max-width: 720px) {
+    .charts { grid-template-columns: 1fr; }
+  }
+  .chart-card {
+    background: #0a0a0a;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+  .chart-card h3 {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--muted); margin: 0 0 10px;
+  }
+  .chart-card svg { display: block; width: 100%; height: auto; }
+  .chart-empty { color: var(--muted); font-size: 12px; padding: 24px 0; text-align: center; }
+  .bar-list { display: grid; gap: 8px; }
+  .bar-row { display: grid; grid-template-columns: minmax(72px, 28%) 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+  .bar-row .label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { height: 8px; background: #161616; border-radius: 999px; overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--green), var(--green-light)); border-radius: 999px; }
+  .bar-row .val { color: var(--muted); font-variant-numeric: tabular-nums; }
+  button.danger-ghost {
+    background: transparent; border: 1px solid rgba(239, 68, 68, 0.45); color: #f87171;
+    padding: 4px 10px; font-size: 11px;
+  }
+  button.danger-ghost:hover { border-color: #ef4444; color: #fecaca; filter: none; }
+  td.model-cell { min-width: 120px; }
+  td.model-cell .model-name { display: block; font-weight: 600; color: var(--text); }
+  td.model-cell code { font-size: 10px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -298,6 +341,7 @@
     <span class="chip" id="routerChip">router …</span>
     <a class="chip hidden" id="updateChip" href="https://github.com/absgrafx/Morpheus-Uplink/releases" target="_blank" rel="noopener noreferrer" title="Open releases">update available</a>
   </div>
+  <button type="button" class="ghost hidden" id="logoutBtn" onclick="logout()">Log out</button>
 </header>
 
 <div id="login-wrap">
@@ -421,13 +465,27 @@
         </div>
         <div style="overflow-x:auto">
           <table id="sessTable">
-            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Ends</th><th>Status</th></tr></thead>
+            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Ends</th><th>Status</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
       </section>
       <section>
         <h2>Usage</h2>
+        <div class="charts">
+          <div class="chart-card">
+            <h3>Requests by day</h3>
+            <div id="chartRequests"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Tokens by day</h3>
+            <div id="chartTokens"></div>
+          </div>
+          <div class="chart-card" style="grid-column: 1 / -1">
+            <h3>Requests by model</h3>
+            <div id="chartModels"></div>
+          </div>
+        </div>
         <div style="overflow-x:auto">
           <table id="usageTable">
             <thead><tr><th>Day</th><th>Key</th><th>Model</th><th>Requests</th><th class="hide-sm">Prompt</th><th class="hide-sm">Completion</th></tr></thead>
@@ -594,10 +652,16 @@ async function copySecret(kind, btn) {
   } catch (e) { console.error(e); }
 }
 
+function setLoggedIn(on) {
+  document.getElementById('app').classList.toggle('hidden', !on);
+  document.getElementById('login-wrap').classList.toggle('hidden', on);
+  document.getElementById('logoutBtn').classList.toggle('hidden', !on);
+}
+
 function logout() {
   sessionStorage.removeItem('uplink_auth');
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('login-wrap').classList.remove('hidden');
+  auth = '';
+  setLoggedIn(false);
 }
 
 async function login() {
@@ -606,8 +670,7 @@ async function login() {
   try {
     await api('/admin/status');
     sessionStorage.setItem('uplink_auth', auth);
-    document.getElementById('login-wrap').classList.add('hidden');
-    document.getElementById('app').classList.remove('hidden');
+    setLoggedIn(true);
     refresh();
   } catch (e) {
     document.getElementById('loginMsg').textContent = 'Connection failed: ' + e.message;
@@ -691,35 +754,131 @@ async function refresh() {
     } catch (e) { /* optional */ }
     document.getElementById('walletMasked').textContent = shortSecret(secrets.wallet) || '(unavailable)';
 
-    document.querySelector('#sessTable tbody').innerHTML = (st.sessions || []).map(s => {
-      const status = s.pooled ? 'reused' : (s.usable ? 'open' : 'past end');
-      return `<tr>
-        <td><code>${shortSecret(s.modelId)}</code></td>
-        <td><code>${shortSecret(s.sessionId)}</code></td>
-        <td>${fmtMor(s.stakeWei)}</td>
-        <td>${fmtEnds(s.endsAt)}</td>
-        <td>${status}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan=5 class="note">none</td></tr>';
-    if (st.sessionsError && !(st.sessions || []).length) {
-      document.querySelector('#sessTable tbody').innerHTML =
-        `<tr><td colspan=5 class="note">session scan: ${escapeHtml(st.sessionsError)}</td></tr>`;
-    }
+    renderSessions(st.sessions || [], st.sessionsError || '');
 
-    const ks = await api('/admin/keys');
-    secrets.master = ks.masterKey || '';
-    secrets.prompt = ks.promptKey || '';
-    promptKey = secrets.prompt;
-    renderBuiltinKeys();
-    renderGeneratedKeys(ks.keys || []);
-    populatePgKeys(ks);
+    await refreshKeys();
 
     const us = await api('/admin/usage');
-    document.querySelector('#usageTable tbody').innerHTML = (us.usage || []).map(u =>
-      `<tr><td>${u.day}</td><td>${escapeHtml(u.keyId)}</td><td>${escapeHtml(u.model)}</td><td>${u.requests}</td>
-       <td class="hide-sm">${u.promptTokens}</td><td class="hide-sm">${u.completionTokens}</td></tr>`
-    ).join('') || '<tr><td colspan=6 class="note">no usage yet</td></tr>';
+    renderUsage(us.usage || []);
   } catch (e) { console.error(e); }
+}
+
+function renderSessions(sessions, sessionsError) {
+  const body = document.querySelector('#sessTable tbody');
+  if (sessionsError && !sessions.length) {
+    body.innerHTML = `<tr><td colspan=6 class="note">session scan: ${escapeHtml(sessionsError)}</td></tr>`;
+    return;
+  }
+  body.innerHTML = sessions.map(s => {
+    const status = s.pooled ? 'reused' : (s.usable ? 'open' : 'past end');
+    const name = s.modelName || '';
+    const modelCell = name
+      ? `<span class="model-name">${escapeHtml(name)}</span><code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`
+      : `<code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`;
+    const sid = escapeAttr(s.sessionId || '');
+    return `<tr>
+      <td class="model-cell">${modelCell}</td>
+      <td><code title="${sid}">${shortSecret(s.sessionId)}</code></td>
+      <td>${fmtMor(s.stakeWei)}</td>
+      <td>${fmtEnds(s.endsAt)}</td>
+      <td>${status}</td>
+      <td><button type="button" class="danger-ghost" onclick="closeSession(${JSON.stringify(s.sessionId)})">Close</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
+}
+
+async function refreshKeys() {
+  const ks = await api('/admin/keys');
+  secrets.master = ks.masterKey || '';
+  secrets.prompt = ks.promptKey || '';
+  promptKey = secrets.prompt;
+  renderBuiltinKeys();
+  renderGeneratedKeys(ks.keys || []);
+  populatePgKeys(ks);
+  return ks;
+}
+
+function renderUsage(rows) {
+  document.querySelector('#usageTable tbody').innerHTML = rows.map(u =>
+    `<tr><td>${u.day}</td><td>${escapeHtml(u.keyId)}</td><td>${escapeHtml(u.model)}</td><td>${u.requests}</td>
+     <td class="hide-sm">${u.promptTokens}</td><td class="hide-sm">${u.completionTokens}</td></tr>`
+  ).join('') || '<tr><td colspan=6 class="note">no usage yet</td></tr>';
+  renderUsageCharts(rows);
+}
+
+function aggregateUsage(rows) {
+  const byDay = {};
+  const byModel = {};
+  for (const u of rows) {
+    const d = u.day || 'unknown';
+    if (!byDay[d]) byDay[d] = { day: d, requests: 0, prompt: 0, completion: 0 };
+    byDay[d].requests += Number(u.requests) || 0;
+    byDay[d].prompt += Number(u.promptTokens) || 0;
+    byDay[d].completion += Number(u.completionTokens) || 0;
+    const m = u.model || 'unknown';
+    byModel[m] = (byModel[m] || 0) + (Number(u.requests) || 0);
+  }
+  const days = Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day));
+  const models = Object.entries(byModel)
+    .map(([name, requests]) => ({ name, requests }))
+    .sort((a, b) => b.requests - a.requests)
+    .slice(0, 8);
+  return { days, models };
+}
+
+function svgBars(series, valueKey, color) {
+  if (!series.length) return '<div class="chart-empty">No data yet</div>';
+  const w = 360, h = 140, padL = 28, padR = 8, padT = 10, padB = 28;
+  const max = Math.max(...series.map(d => d[valueKey]), 1);
+  const bw = (w - padL - padR) / series.length;
+  const bars = series.map((d, i) => {
+    const bh = ((d[valueKey] / max) * (h - padT - padB));
+    const x = padL + i * bw + bw * 0.15;
+    const y = h - padB - bh;
+    const label = (d.day || '').slice(5) || d.day;
+    return `<rect x="${x}" y="${y}" width="${bw * 0.7}" height="${Math.max(bh, 1)}" rx="2" fill="${color}"/>
+      <text x="${x + bw * 0.35}" y="${h - 10}" text-anchor="middle" fill="#A5A5A5" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" role="img">${bars}</svg>`;
+}
+
+function svgStackedTokens(series) {
+  if (!series.length) return '<div class="chart-empty">No data yet</div>';
+  const w = 360, h = 140, padL = 28, padR = 8, padT = 10, padB = 28;
+  const max = Math.max(...series.map(d => d.prompt + d.completion), 1);
+  const bw = (w - padL - padR) / series.length;
+  const bars = series.map((d, i) => {
+    const totalH = ((d.prompt + d.completion) / max) * (h - padT - padB);
+    const promptH = ((d.prompt / max) * (h - padT - padB));
+    const x = padL + i * bw + bw * 0.15;
+    const y = h - padB - totalH;
+    const label = (d.day || '').slice(5) || d.day;
+    return `<rect x="${x}" y="${y}" width="${bw * 0.7}" height="${Math.max(totalH - promptH, 0)}" rx="2" fill="#00FF85"/>
+      <rect x="${x}" y="${y + Math.max(totalH - promptH, 0)}" width="${bw * 0.7}" height="${Math.max(promptH, d.prompt ? 1 : 0)}" fill="#20DC8E"/>
+      <text x="${x + bw * 0.35}" y="${h - 10}" text-anchor="middle" fill="#A5A5A5" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" role="img">${bars}
+    <text x="${padL}" y="12" fill="#20DC8E" font-size="10">prompt</text>
+    <text x="${padL + 52}" y="12" fill="#00FF85" font-size="10">completion</text>
+  </svg>`;
+}
+
+function modelBars(models) {
+  if (!models.length) return '<div class="chart-empty">No data yet</div>';
+  const max = Math.max(...models.map(m => m.requests), 1);
+  return `<div class="bar-list">${models.map(m => `
+    <div class="bar-row">
+      <div class="label" title="${escapeAttr(m.name)}">${escapeHtml(m.name)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(m.requests / max) * 100}%"></div></div>
+      <div class="val">${m.requests}</div>
+    </div>`).join('')}</div>`;
+}
+
+function renderUsageCharts(rows) {
+  const { days, models } = aggregateUsage(rows);
+  document.getElementById('chartRequests').innerHTML = svgBars(days, 'requests', '#20DC8E');
+  document.getElementById('chartTokens').innerHTML = svgStackedTokens(days);
+  document.getElementById('chartModels').innerHTML = modelBars(models);
 }
 
 function escapeHtml(s) {
@@ -833,9 +992,27 @@ async function copyGeneratedKey(id, btn) {
 async function createKey() {
   const name = document.getElementById('keyName').value.trim();
   if (!name) return;
-  await api('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
-  document.getElementById('keyName').value = '';
-  refresh();
+  try {
+    const created = await api('/admin/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    document.getElementById('keyName').value = '';
+    // Refresh keys immediately (don't wait on /admin/status rehydrate).
+    const ks = await refreshKeys();
+    if (created && created.key && created.record && created.record.id) {
+      generatedKeySecrets[created.record.id] = created.key;
+      const keys = (ks.keys || []).map(k =>
+        k.id === created.record.id ? Object.assign({}, k, { secret: created.key }) : k
+      );
+      renderGeneratedKeys(keys);
+      populatePgKeys({ masterKey: secrets.master, promptKey: secrets.prompt, keys });
+    }
+    refresh().catch(() => {});
+  } catch (e) {
+    alert('Create key failed: ' + e.message);
+  }
 }
 
 async function importKey() {
@@ -900,6 +1077,17 @@ async function closeAll() {
   if (!confirm('Close all pooled sessions? Unused stake returns to the wallet.')) return;
   await api('/admin/pool/close-all', { method: 'POST' });
   refresh();
+}
+
+async function closeSession(sessionId) {
+  if (!sessionId) return;
+  if (!confirm('Close this session? Unused stake returns now; used portion daylocks.')) return;
+  try {
+    await api('/admin/pool/close/' + encodeURIComponent(sessionId), { method: 'POST' });
+    refresh();
+  } catch (e) {
+    alert('Close failed: ' + e.message);
+  }
 }
 
 function parseSemver(v) {
@@ -1170,8 +1358,7 @@ if (auth) {
   (async () => {
     try {
       await api('/admin/status');
-      document.getElementById('login-wrap').classList.add('hidden');
-      document.getElementById('app').classList.remove('hidden');
+      setLoggedIn(true);
       refresh();
     } catch (e) { logout(); }
   })();

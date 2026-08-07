@@ -38,11 +38,11 @@ WEB_PUBLIC_URL=https://localhost
 Optional (leave commented / omit unless you need them):
 
 ```bash
-#SESSION_DURATION_SECONDS=3600
+#SESSION_DURATION_SECONDS=600
 #HOUSEKEEPING=true
 ```
 
-Base network constants (chain ID, Diamond, MOR token) live in the compose `configs` block — **not** Encrypted Secrets.
+Base network constants (chain ID, Diamond, MOR token) are baked into the compose — **not** Encrypted Secrets.
 
 </details>
 
@@ -56,12 +56,11 @@ PUBLIC_HOST=uplink.yourdomain.com
 
 WALLET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
 ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
-ETH_NODE_CHAIN_ID=8453
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 
-#SESSION_DURATION_SECONDS=3600
+#SESSION_DURATION_SECONDS=600
 #HOUSEKEEPING=true
 #SESSION_FAILOVER=true
 ```

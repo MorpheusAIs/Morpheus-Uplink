@@ -43,7 +43,7 @@ services:
       - ROUTER_URL=http://proxy-router:8082
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-3600}
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
