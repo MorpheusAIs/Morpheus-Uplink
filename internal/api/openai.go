@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 // maxRequestBody caps inference request bodies (large contexts are fine,
@@ -35,12 +36,22 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			return
 		}
 
-		sessionID, err := s.pool.Ensure(modelID)
+		durationSec := 0
+		if v := r.Header.Get("X-Uplink-Session-Duration"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				durationSec = n
+			}
+		}
+		ensured, err := s.pool.EnsureDuration(modelID, durationSec)
 		if err != nil {
 			log.Printf("api: open session for %s (%s): %v", req.Model, modelID, err)
 			writeOpenAIError(w, http.StatusBadGateway, "failed to open session: "+err.Error())
 			return
 		}
+		if ensured.Opened {
+			s.store.RecordSessionOpen(keyID, req.Model, int64(ensured.DurationSec))
+		}
+		sessionID := ensured.SessionID
 
 		// First attempt probes: on a router error we retry once with a
 		// fresh session (covers expired/broken sessions) before giving up.
@@ -48,11 +59,15 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		if err != nil {
 			log.Printf("api: forward attempt 1 (model %s, session %s): %v", req.Model, sessionID, err)
 			s.pool.Invalidate(modelID)
-			sessionID, err = s.pool.Ensure(modelID)
+			ensured, err = s.pool.EnsureDuration(modelID, durationSec)
 			if err != nil {
 				writeOpenAIError(w, http.StatusBadGateway, "failed to reopen session: "+err.Error())
 				return
 			}
+			if ensured.Opened {
+				s.store.RecordSessionOpen(keyID, req.Model, int64(ensured.DurationSec))
+			}
+			sessionID = ensured.SessionID
 			res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
 			if err != nil {
 				log.Printf("api: forward attempt 2 (model %s, session %s): %v", req.Model, sessionID, err)
@@ -72,15 +87,24 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable: "+err.Error())
 		return
 	}
+	defaultDur := s.cfg.SessionDurationSec
+	if defaultDur <= 0 {
+		defaultDur = 600
+	}
 	data := make([]map[string]any, 0, len(models))
 	for _, m := range models {
+		rate := m.LowestMorPerHour()
 		data = append(data, map[string]any{
 			"id":       m.Name,
 			"object":   "model",
 			"owned_by": "morpheus",
 			"morpheus": map[string]any{
-				"blockchainId": m.ID,
-				"tags":         m.Tags,
+				"blockchainId":       m.ID,
+				"tags":               m.Tags,
+				"modelType":          m.ModelType,
+				"priceMorPerHour":    rate,
+				"stakeMorForDefault": m.StakeMORForDuration(defaultDur),
+				"sessionDurationSec": defaultDur,
 			},
 		})
 	}

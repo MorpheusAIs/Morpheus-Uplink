@@ -182,7 +182,11 @@ func (r *Runner) Run(ctx context.Context) Result {
 	}
 	if hold.Claimable.Cmp(thresh) < 0 {
 		res.Status = "skipped"
-		res.Message = "claimable below threshold (" + formatMOR(hold.Claimable) + " MOR)"
+		if hold.Locked.Sign() > 0 {
+			res.Message = "nothing to reclaim yet — " + formatMOR(hold.Locked) + " MOR still on hold until 00:00 UTC"
+		} else {
+			res.Message = "nothing to reclaim (" + formatMOR(hold.Claimable) + " MOR claimable)"
+		}
 		log.Printf("housekeep: %s", res.Message)
 		return res
 	}

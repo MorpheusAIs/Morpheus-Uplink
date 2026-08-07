@@ -230,6 +230,7 @@ func IsNothingToWithdraw(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "sessionuseramounttowithdrawiszero") ||
 		strings.Contains(s, "amounttowithdrawiszero") ||
-		// common estimateGas wording when selector isn't decoded
+		// estimateGas often returns a bare revert when there is nothing to pull
+		(strings.Contains(s, "eth_estimategas") && strings.Contains(s, "execution reverted")) ||
 		(strings.Contains(s, "execution reverted") && strings.Contains(s, "a98a7c6b"))
 }

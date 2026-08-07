@@ -96,9 +96,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	status := map[string]any{
-		"version":      Version,
-		"sessions":     sessions, // on-chain opens (pooled flagged)
-		"poolSessions": s.pool.Snapshot(),
+		"version":               Version,
+		"sessions":              sessions, // on-chain opens (pooled flagged)
+		"poolSessions":          s.pool.Snapshot(),
+		"sessionDurationSec":    s.cfg.SessionDurationSec,
+		"sessionDurationDefault": s.cfg.SessionDurationSec,
 	}
 	if msg := s.pool.RehydrateError(); msg != "" {
 		status["sessionsError"] = msg
@@ -193,8 +195,18 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
-	s.pool.CloseAll()
-	writeJSON(w, http.StatusOK, map[string]any{"closed": true})
+	res := s.pool.CloseAll()
+	status := http.StatusOK
+	if res.Attempted > 0 && res.Closed == 0 {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, map[string]any{
+		"closed":    res.Closed > 0,
+		"attempted": res.Attempted,
+		"ok":        res.Closed,
+		"failed":    res.Failed,
+		"errors":    res.Errors,
+	})
 }
 
 func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
