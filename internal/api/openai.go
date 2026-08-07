@@ -38,7 +38,11 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 
 		durationSec := 0
 		if v := r.Header.Get("X-Uplink-Session-Duration"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n, err := strconv.Atoi(v); err == nil {
+				if n < 600 {
+					writeOpenAIError(w, http.StatusBadRequest, "X-Uplink-Session-Duration must be >= 600 seconds (protocol floor)")
+					return
+				}
 				durationSec = n
 			}
 		}
@@ -93,17 +97,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	data := make([]map[string]any, 0, len(models))
 	for _, m := range models {
-		rate := m.LowestMorPerHour()
+		bid, _ := m.LowestBid()
 		data = append(data, map[string]any{
 			"id":       m.Name,
 			"object":   "model",
 			"owned_by": "morpheus",
 			"morpheus": map[string]any{
-				"blockchainId":       m.ID,
-				"tags":               m.Tags,
-				"modelType":          m.ModelType,
-				"priceMorPerHour":    rate,
-				"stakeMorForDefault": m.StakeMORForDuration(defaultDur),
+				"blockchainId":      m.ID,
+				"tags":              m.Tags,
+				"modelType":         m.ModelType,
+				"priceMorPerHour":   m.LowestMorPerHour(),
+				"pricePerSecondWei": bid.PricePerSecond,
 				"sessionDurationSec": defaultDur,
 			},
 		})

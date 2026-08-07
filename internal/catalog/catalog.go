@@ -5,6 +5,7 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,41 +28,55 @@ type Model struct {
 	BidDetail []BidDetail `json:"bidDetail"`
 }
 
-// LowestMorPerHour is the cheapest healthy (or any) bid's MOR/hour rate.
-// Zero if no bids.
-func (m Model) LowestMorPerHour() float64 {
-	best := 0.0
-	for _, b := range m.BidDetail {
-		if b.PriceMorPerHour <= 0 {
-			continue
-		}
-		healthy := b.Status == "" || strings.EqualFold(b.Status, "healthy")
-		if !healthy {
-			continue
-		}
-		if best == 0 || b.PriceMorPerHour < best {
-			best = b.PriceMorPerHour
-		}
-	}
-	if best > 0 {
-		return best
-	}
-	// Fall back to any positive bid if none marked healthy.
-	for _, b := range m.BidDetail {
-		if b.PriceMorPerHour > 0 && (best == 0 || b.PriceMorPerHour < best) {
-			best = b.PriceMorPerHour
+// LowestBid returns the cheapest healthy bid (by pricePerSecond), or any
+// positive bid if none are marked healthy. ok=false when no usable bid.
+func (m Model) LowestBid() (BidDetail, bool) {
+	var best BidDetail
+	var bestPPS *big.Int
+	pick := func(onlyHealthy bool) {
+		for _, b := range m.BidDetail {
+			if onlyHealthy {
+				if b.Status != "" && !strings.EqualFold(b.Status, "healthy") {
+					continue
+				}
+			}
+			pps, ok := new(big.Int).SetString(strings.TrimSpace(b.PricePerSecond), 10)
+			if !ok || pps.Sign() <= 0 {
+				continue
+			}
+			if bestPPS == nil || pps.Cmp(bestPPS) < 0 {
+				bestPPS = pps
+				best = b
+			}
 		}
 	}
-	return best
+	pick(true)
+	if bestPPS == nil {
+		pick(false)
+	}
+	return best, bestPPS != nil
 }
 
-// StakeMORForDuration estimates MOR locked for a session of durationSec
-// at the lowest bid (priceMorPerHour * hours).
-func (m Model) StakeMORForDuration(durationSec int) float64 {
-	if durationSec <= 0 {
+// LowestMorPerHour is the cheapest bid's catalog MOR/hour (display only).
+func (m Model) LowestMorPerHour() float64 {
+	b, ok := m.LowestBid()
+	if !ok {
 		return 0
 	}
-	return m.LowestMorPerHour() * (float64(durationSec) / 3600.0)
+	return b.PriceMorPerHour
+}
+
+// LowestPricePerSecondWei is the cheapest bid's price/second in wei.
+func (m Model) LowestPricePerSecondWei() *big.Int {
+	b, ok := m.LowestBid()
+	if !ok {
+		return nil
+	}
+	n, ok := new(big.Int).SetString(strings.TrimSpace(b.PricePerSecond), 10)
+	if !ok {
+		return nil
+	}
+	return n
 }
 
 type activeModelsFile struct {
