@@ -99,7 +99,7 @@ go run ./cmd/uplink
 | `UPLINK_LISTEN` | — | `:8080` | Listen address |
 | `DATA_DIR` | — | `./data` | JSON state file location |
 | `ACTIVE_MODELS_URL` | — | `https://active.mor.org/active_models.json` | Model catalog |
-| `SESSION_DURATION_SECONDS` | — | `3600` | Per-session duration (stake scales with this) |
+| `SESSION_DURATION_SECONDS` | — | `600` | Per-session duration (stake scales with this) |
 | `SESSION_FAILOVER` | — | `true` | Router-side provider failover at open |
 | `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment instead of stake |
 | `CLOSE_SESSIONS_ON_EXIT` | — | `true` | Close pooled sessions on shutdown |

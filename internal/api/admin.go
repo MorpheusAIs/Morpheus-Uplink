@@ -89,9 +89,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		_ = err
 	}
 
+	sessions := s.pool.ChainOpen()
+	for i := range sessions {
+		if name := s.catalog.NameByID(sessions[i].ModelID); name != "" {
+			sessions[i].ModelName = name
+		}
+	}
 	status := map[string]any{
 		"version":      Version,
-		"sessions":     s.pool.ChainOpen(), // on-chain opens (pooled flagged)
+		"sessions":     sessions, // on-chain opens (pooled flagged)
 		"poolSessions": s.pool.Snapshot(),
 	}
 	if msg := s.pool.RehydrateError(); msg != "" {
@@ -189,4 +195,17 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
 	s.pool.CloseAll()
 	writeJSON(w, http.StatusOK, map[string]any{"closed": true})
+}
+
+func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "missing session id", http.StatusBadRequest)
+		return
+	}
+	if err := s.pool.CloseSession(id); err != nil {
+		http.Error(w, "close session: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"closed": true, "sessionId": id})
 }

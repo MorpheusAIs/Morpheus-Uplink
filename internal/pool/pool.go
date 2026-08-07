@@ -41,6 +41,7 @@ type Pool struct {
 // ChainSession is an open (ClosedAt==0) on-chain session for display.
 type ChainSession struct {
 	ModelID   string    `json:"modelId"`
+	ModelName string    `json:"modelName,omitempty"` // catalog name when known
 	SessionID string    `json:"sessionId"`
 	StakeWei  string    `json:"stakeWei"`
 	EndsAt    time.Time `json:"endsAt"`
@@ -268,6 +269,26 @@ func (p *Pool) setRehydrateErr(msg string) {
 	p.chainMu.Lock()
 	p.rehydrateErr = msg
 	p.chainMu.Unlock()
+}
+
+// CloseSession closes one session by id (pooled and/or on-chain), then rescans.
+func (p *Pool) CloseSession(sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	p.mu.Lock()
+	for modelID, e := range p.entries {
+		if e.sessionID == sessionID {
+			delete(p.entries, modelID)
+			break
+		}
+	}
+	p.mu.Unlock()
+	if err := p.client.CloseSession(sessionID); err != nil {
+		_ = p.RehydrateForce()
+		return err
+	}
+	return p.RehydrateForce()
 }
 
 // CloseAll closes every pooled session, then any remaining on-chain opens

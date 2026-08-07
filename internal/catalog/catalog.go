@@ -28,6 +28,7 @@ type Catalog struct {
 	mu        sync.Mutex
 	models    []Model
 	byName    map[string]string // lowercase name -> id
+	byID      map[string]string // lowercase id -> display name
 	fetchedAt time.Time
 	ttl       time.Duration
 }
@@ -54,11 +55,14 @@ func (c *Catalog) refresh() error {
 		return fmt.Errorf("parse model catalog: %w", err)
 	}
 	byName := make(map[string]string, len(file.Models))
+	byID := make(map[string]string, len(file.Models))
 	for _, m := range file.Models {
 		byName[strings.ToLower(m.Name)] = m.ID
+		byID[strings.ToLower(m.ID)] = m.Name
 	}
 	c.models = file.Models
 	c.byName = byName
+	c.byID = byID
 	c.fetchedAt = time.Now()
 	return nil
 }
@@ -101,4 +105,15 @@ func (c *Catalog) List() ([]Model, error) {
 	out := make([]Model, len(c.models))
 	copy(out, c.models)
 	return out, nil
+}
+
+// NameByID returns the catalog display name for a blockchain model id.
+// Empty string if unknown.
+func (c *Catalog) NameByID(id string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureFresh(); err != nil {
+		return ""
+	}
+	return c.byID[strings.ToLower(id)]
 }
