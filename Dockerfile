@@ -7,10 +7,14 @@ COPY internal ./internal
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /uplink ./cmd/uplink
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates && adduser -D -u 10001 uplink
-USER uplink
+RUN apk add --no-cache ca-certificates su-exec \
+  && adduser -D -u 10001 uplink \
+  && mkdir -p /data && chown uplink:uplink /data
 COPY --from=build /uplink /usr/local/bin/uplink
+COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 ENV DATA_DIR=/data
 VOLUME /data
 EXPOSE 8080
-ENTRYPOINT ["uplink"]
+# Run entrypoint as root so it can chown the volume, then drop to uplink.
+ENTRYPOINT ["/docker-entrypoint.sh"]

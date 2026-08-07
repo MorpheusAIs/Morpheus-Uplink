@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -93,7 +95,13 @@ func (c *Client) OpenSession(modelID string, req OpenSessionRequest) (string, er
 }
 
 func (c *Client) CloseSession(sessionID string) error {
-	return c.doJSON(http.MethodPost, "/blockchain/sessions/"+sessionID+"/close", nil, nil)
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("empty session id")
+	}
+	// Empty JSON body — some proxies reject POST with no body.
+	path := "/blockchain/sessions/" + url.PathEscape(sessionID) + "/close"
+	return c.doJSON(http.MethodPost, path, map[string]any{}, nil)
 }
 
 // Balance returns the router wallet's ETH and MOR balances (wei-scale ints).

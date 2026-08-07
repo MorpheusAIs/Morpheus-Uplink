@@ -3,6 +3,7 @@
 package pool
 
 import (
+	"fmt"
 	"log"
 	"math/big"
 	"sync"
@@ -60,13 +61,35 @@ func New(client *router.Client, durationSec int, failover, directPayment bool) *
 	}
 }
 
+// DurationSec is the configured default session length.
+func (p *Pool) DurationSec() int { return p.duration }
+
+// EnsureResult is returned by EnsureDuration.
+type EnsureResult struct {
+	SessionID   string
+	Opened      bool // true when a new on-chain session was opened
+	DurationSec int
+}
+
 // Ensure returns an open session for the model, opening one if needed.
-// Concurrent requests for the same model share a single open call.
 func (p *Pool) Ensure(modelID string) (string, error) {
+	res, err := p.EnsureDuration(modelID, 0)
+	if err != nil {
+		return "", err
+	}
+	return res.SessionID, nil
+}
+
+// EnsureDuration returns an open session. durationSec <= 0 uses the pool default.
+// An existing pooled session is reused when it still has usable time left.
+func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, error) {
+	if durationSec <= 0 {
+		durationSec = p.duration
+	}
 	p.mu.Lock()
 	if e, ok := p.entries[modelID]; ok && time.Now().Before(e.expiresAt) {
 		p.mu.Unlock()
-		return e.sessionID, nil
+		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
 	}
 	lock, ok := p.opening[modelID]
 	if !ok {
@@ -78,30 +101,29 @@ func (p *Pool) Ensure(modelID string) (string, error) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	// Someone else may have opened it while we waited on the lock.
 	p.mu.Lock()
 	if e, ok := p.entries[modelID]; ok && time.Now().Before(e.expiresAt) {
 		p.mu.Unlock()
-		return e.sessionID, nil
+		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
 	}
 	p.mu.Unlock()
 
 	sessionID, err := p.client.OpenSession(modelID, router.OpenSessionRequest{
-		SessionDuration: p.duration,
+		SessionDuration: durationSec,
 		Failover:        p.failover,
 		DirectPayment:   p.direct,
 	})
 	if err != nil {
-		return "", err
+		return EnsureResult{}, err
 	}
 	p.mu.Lock()
 	p.entries[modelID] = entry{
 		sessionID: sessionID,
-		expiresAt: time.Now().Add(time.Duration(p.duration)*time.Second - expiryBuffer),
+		expiresAt: time.Now().Add(time.Duration(durationSec)*time.Second - expiryBuffer),
 	}
 	p.mu.Unlock()
-	log.Printf("pool: opened session %s for model %s (duration %ds)", sessionID, modelID, p.duration)
-	return sessionID, nil
+	log.Printf("pool: opened session %s for model %s (duration %ds)", sessionID, modelID, durationSec)
+	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
 }
 
 // Invalidate drops the pooled session for a model (e.g. after a failed
@@ -274,7 +296,7 @@ func (p *Pool) setRehydrateErr(msg string) {
 // CloseSession closes one session by id (pooled and/or on-chain), then rescans.
 func (p *Pool) CloseSession(sessionID string) error {
 	if sessionID == "" {
-		return nil
+		return fmt.Errorf("empty session id")
 	}
 	p.mu.Lock()
 	for modelID, e := range p.entries {
@@ -291,33 +313,47 @@ func (p *Pool) CloseSession(sessionID string) error {
 	return p.RehydrateForce()
 }
 
+// CloseAllResult summarizes a mass close attempt.
+type CloseAllResult struct {
+	Attempted int      `json:"attempted"`
+	Closed    int      `json:"closed"`
+	Failed    int      `json:"failed"`
+	Errors    []string `json:"errors,omitempty"`
+}
+
 // CloseAll closes every pooled session, then any remaining on-chain opens
 // from the last scan (recovers unused stake sooner than waiting for expiry).
-func (p *Pool) CloseAll() {
+func (p *Pool) CloseAll() CloseAllResult {
 	p.mu.Lock()
 	entries := p.entries
 	p.entries = map[string]entry{}
 	p.mu.Unlock()
-	closed := map[string]bool{}
+	seen := map[string]bool{}
+	res := CloseAllResult{}
+	tryClose := func(sessionID, label string) {
+		if sessionID == "" || seen[sessionID] {
+			return
+		}
+		seen[sessionID] = true
+		res.Attempted++
+		if err := p.client.CloseSession(sessionID); err != nil {
+			res.Failed++
+			msg := label + ": " + err.Error()
+			if len(res.Errors) < 5 {
+				res.Errors = append(res.Errors, msg)
+			}
+			log.Printf("pool: close session %s: %v", sessionID, err)
+			return
+		}
+		res.Closed++
+		log.Printf("pool: closed session %s (%s)", sessionID, label)
+	}
 	for modelID, e := range entries {
-		if err := p.client.CloseSession(e.sessionID); err != nil {
-			log.Printf("pool: close session %s (model %s): %v", e.sessionID, modelID, err)
-		} else {
-			log.Printf("pool: closed session %s (model %s)", e.sessionID, modelID)
-			closed[e.sessionID] = true
-		}
+		tryClose(e.sessionID, "pooled "+modelID)
 	}
-	// Also close any open sessions still listed from chain (orphans).
 	for _, s := range p.ChainOpen() {
-		if closed[s.SessionID] {
-			continue
-		}
-		if err := p.client.CloseSession(s.SessionID); err != nil {
-			log.Printf("pool: close on-chain session %s: %v", s.SessionID, err)
-		} else {
-			log.Printf("pool: closed on-chain session %s (model %s)", s.SessionID, s.ModelID)
-		}
+		tryClose(s.SessionID, "on-chain "+s.ModelID)
 	}
-	// Refresh view after mass close.
 	_ = p.RehydrateForce()
+	return res
 }

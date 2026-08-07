@@ -23,6 +23,9 @@ type UsageRow struct {
 	Requests         int64  `json:"requests"`
 	PromptTokens     int64  `json:"promptTokens"`
 	CompletionTokens int64  `json:"completionTokens"`
+	// SessionSeconds accumulates configured open duration when a new
+	// on-chain session is opened for this key/model (MOR-lock relevant).
+	SessionSeconds int64 `json:"sessionSeconds,omitempty"`
 }
 
 type state struct {
@@ -134,7 +137,25 @@ func (s *Store) RecordUsage(keyID, model string, promptTokens, completionTokens 
 	row.Requests++
 	row.PromptTokens += promptTokens
 	row.CompletionTokens += completionTokens
-	// Usage is best-effort; a failed save is not worth failing a request.
+	_ = s.save()
+}
+
+// RecordSessionOpen credits sessionSeconds when a new on-chain session is
+// opened (not when an existing pooled session is reused).
+func (s *Store) RecordSessionOpen(keyID, model string, sessionSeconds int64) {
+	if sessionSeconds <= 0 {
+		return
+	}
+	day := time.Now().UTC().Format("2006-01-02")
+	id := day + "|" + keyID + "|" + model
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.st.Usage[id]
+	if !ok {
+		row = &UsageRow{Day: day, KeyID: keyID, Model: model}
+		s.st.Usage[id] = row
+	}
+	row.SessionSeconds += sessionSeconds
 	_ = s.save()
 }
 

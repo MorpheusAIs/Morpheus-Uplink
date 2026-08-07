@@ -11,10 +11,57 @@ import (
 	"time"
 )
 
+type BidDetail struct {
+	BidID           string  `json:"bidId"`
+	ProviderID      string  `json:"providerId"`
+	PricePerSecond  string  `json:"pricePerSecond"`
+	PriceMorPerHour float64 `json:"priceMorPerHour"`
+	Status          string  `json:"status"`
+}
+
 type Model struct {
-	Name string   `json:"Name"`
-	ID   string   `json:"Id"`
-	Tags []string `json:"Tags"`
+	Name      string      `json:"Name"`
+	ID        string      `json:"Id"`
+	Tags      []string    `json:"Tags"`
+	ModelType string      `json:"ModelType"`
+	BidDetail []BidDetail `json:"bidDetail"`
+}
+
+// LowestMorPerHour is the cheapest healthy (or any) bid's MOR/hour rate.
+// Zero if no bids.
+func (m Model) LowestMorPerHour() float64 {
+	best := 0.0
+	for _, b := range m.BidDetail {
+		if b.PriceMorPerHour <= 0 {
+			continue
+		}
+		healthy := b.Status == "" || strings.EqualFold(b.Status, "healthy")
+		if !healthy {
+			continue
+		}
+		if best == 0 || b.PriceMorPerHour < best {
+			best = b.PriceMorPerHour
+		}
+	}
+	if best > 0 {
+		return best
+	}
+	// Fall back to any positive bid if none marked healthy.
+	for _, b := range m.BidDetail {
+		if b.PriceMorPerHour > 0 && (best == 0 || b.PriceMorPerHour < best) {
+			best = b.PriceMorPerHour
+		}
+	}
+	return best
+}
+
+// StakeMORForDuration estimates MOR locked for a session of durationSec
+// at the lowest bid (priceMorPerHour * hours).
+func (m Model) StakeMORForDuration(durationSec int) float64 {
+	if durationSec <= 0 {
+		return 0
+	}
+	return m.LowestMorPerHour() * (float64(durationSec) / 3600.0)
 }
 
 type activeModelsFile struct {
