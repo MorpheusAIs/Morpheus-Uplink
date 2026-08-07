@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/chain"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
+	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +208,82 @@ func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
 		"ok":        res.Closed,
 		"failed":    res.Failed,
 		"errors":    res.Errors,
+	})
+}
+
+// handleEstimateStake returns the real on-chain MOR lock for a model + duration:
+// stake ≈ (supply × pricePerSecond × duration) ÷ today's emissions budget.
+func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
+	modelName := r.URL.Query().Get("model")
+	if modelName == "" {
+		http.Error(w, `query "model" required`, http.StatusBadRequest)
+		return
+	}
+	durationSec := s.cfg.SessionDurationSec
+	if durationSec < 600 {
+		durationSec = 600
+	}
+	if v := r.URL.Query().Get("duration"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 600 {
+			http.Error(w, `duration must be an integer >= 600`, http.StatusBadRequest)
+			return
+		}
+		durationSec = n
+	}
+
+	modelID, err := s.catalog.Resolve(modelName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	models, err := s.catalog.List()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	var pps *big.Int
+	var rate float64
+	for _, m := range models {
+		if m.ID == modelID || m.Name == modelName {
+			pps = m.LowestPricePerSecondWei()
+			rate = m.LowestMorPerHour()
+			break
+		}
+	}
+	if pps == nil {
+		http.Error(w, "no bid price for model", http.StatusNotFound)
+		return
+	}
+
+	supply, err := s.router.TokenSupply()
+	if err != nil {
+		http.Error(w, "token supply: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	budget, err := s.router.TodaysBudget()
+	if err != nil {
+		http.Error(w, "todays budget: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	stake, err := router.SessionStakeWei(supply, budget, pps, int64(durationSec))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"model":              modelName,
+		"modelId":            modelID,
+		"durationSec":        durationSec,
+		"priceMorPerHour":    rate,
+		"pricePerSecondWei":  pps.String(),
+		"stakeWei":           stake.String(),
+		"sessionCostWei":     new(big.Int).Mul(pps, big.NewInt(int64(durationSec))).String(),
+		"supplyWei":          supply.String(),
+		"budgetWei":          budget.String(),
+		"minDurationSec":     600,
+		"explanation":        "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget — not MOR/h × hours.",
 	})
 }
 
