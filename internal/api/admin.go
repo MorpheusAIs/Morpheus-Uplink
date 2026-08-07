@@ -287,6 +287,73 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleEstimateStakes returns on-chain lock estimates for every catalog model
+// at the given duration, plus liquid wallet MOR for affordability checks.
+func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
+	durationSec := s.cfg.SessionDurationSec
+	if durationSec < 600 {
+		durationSec = 600
+	}
+	if v := r.URL.Query().Get("duration"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 600 {
+			http.Error(w, `duration must be an integer >= 600`, http.StatusBadRequest)
+			return
+		}
+		durationSec = n
+	}
+
+	models, err := s.catalog.List()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	supply, err := s.router.TokenSupply()
+	if err != nil {
+		http.Error(w, "token supply: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	budget, err := s.router.TodaysBudget()
+	if err != nil {
+		http.Error(w, "todays budget: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	var liquidWei *big.Int
+	if bal, err := s.router.Balance(); err == nil {
+		liquidWei = morFromBalance(bal)
+	}
+
+	out := make([]map[string]any, 0, len(models))
+	for _, m := range models {
+		pps := m.LowestPricePerSecondWei()
+		if pps == nil {
+			continue
+		}
+		stake, err := router.SessionStakeWei(supply, budget, pps, int64(durationSec))
+		if err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"model":             m.Name,
+			"modelId":           m.ID,
+			"priceMorPerHour":   m.LowestMorPerHour(),
+			"pricePerSecondWei": pps.String(),
+			"stakeWei":          stake.String(),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"durationSec":    durationSec,
+		"minDurationSec": 600,
+		"liquidWei":      bigStr(liquidWei),
+		"supplyWei":      supply.String(),
+		"budgetWei":      budget.String(),
+		"models":         out,
+		"explanation":    "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget.",
+	})
+}
+
 func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
