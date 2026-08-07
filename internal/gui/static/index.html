@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Uplink — your personal gateway to Morpheus</title>
+<title>Uplink Morpheus</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -328,6 +328,22 @@
     border: 1px solid rgba(32, 220, 142, 0.35);
     border-radius: 999px; padding: 3px 8px; white-space: nowrap;
   }
+  .model-item.unaffordable {
+    opacity: 0.42; cursor: not-allowed;
+  }
+  .model-item.unaffordable .bid-pill {
+    color: var(--muted); background: transparent;
+    border-color: var(--border);
+  }
+  .model-item.unaffordable.active {
+    opacity: 0.7; border-color: rgba(239, 68, 68, 0.35);
+  }
+  textarea.curl-edit {
+    min-height: 200px; max-height: 420px;
+    font-size: 12px; line-height: 1.45;
+    white-space: pre; overflow: auto;
+  }
+  .curl-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
   .lock-preview {
     margin: 0; padding: 12px 14px;
     border: 1px solid rgba(32, 220, 142, 0.35);
@@ -453,11 +469,6 @@
   }
   @media (min-width: 800px) {
     .probe-row-meta { grid-template-columns: 1.2fr 1fr; }
-    /* Narrower model list; estimate card gets the wider column and stays content-height, centered */
-    .probe-row-models {
-      grid-template-columns: minmax(220px, 0.72fr) minmax(280px, 1.28fr);
-      align-items: center;
-    }
     .probe-io { grid-template-columns: 1fr 1fr; }
   }
   .theme-toggle {
@@ -684,7 +695,8 @@
           On-chain opens for this wallet. Rows marked reused are what Uplink will keep prompting against.
         </p>
         <div class="row" style="margin-bottom:8px">
-          <button class="ghost" onclick="closeAll()">Close all (recover stake)</button>
+          <button class="ghost" id="closeAllBtn" onclick="closeAll()">Close all (recover stake)</button>
+          <span class="note" id="sessNote" style="margin:0"></span>
         </div>
         <div style="overflow-x:auto">
           <table id="sessTable">
@@ -748,14 +760,16 @@
               <div class="note" id="pgDurationDefault" style="margin:0">Deploy default shown after connect.</div>
             </div>
           </div>
-          <div class="probe-row probe-row-models">
-            <div class="field">
+          <div class="field">
+            <div class="field-head">
               <label class="note" for="modelSearch">Search models</label>
-              <input id="modelSearch" placeholder="fuzzy filter (name or tag)…" oninput="filterModels()">
-              <div class="model-list" id="modelList"><div class="note" style="padding:12px">Loading catalog…</div></div>
-              <div class="note" style="margin:0">Selected: <code id="selectedModel">—</code></div>
+              <span class="hint" id="stakeListHint" title="Lock = on-chain stake for the duration above">Pills show lock for duration · grey = can't afford from liquid</span>
             </div>
-            <div class="lock-preview" id="lockPreview">Select a model to estimate on-chain MOR lock.</div>
+            <input id="modelSearch" placeholder="fuzzy filter (name or tag)…" oninput="filterModels()">
+            <div class="model-list" id="modelList"><div class="note" style="padding:12px">Loading catalog…</div></div>
+            <div class="note" style="margin:0">Selected: <code id="selectedModel">—</code>
+              <span id="selectedStakeNote"></span>
+            </div>
           </div>
         </div>
         <div class="probe-prompt" style="margin-top:16px">
@@ -777,7 +791,12 @@
       <div class="probe-io">
         <section>
           <h2>curl</h2>
-          <pre class="out" id="pgCurl">—</pre>
+          <textarea class="out curl-edit" id="pgCurl" spellcheck="false" oninput="curlDirty=true"></textarea>
+          <div class="curl-actions">
+            <button type="button" onclick="runCurlCommand()">Run command</button>
+            <button type="button" class="ghost" onclick="copyCurl()">Copy</button>
+            <button type="button" class="ghost" onclick="resetCurlFromForm()">Reset from form</button>
+          </div>
         </section>
         <section>
           <h2>Response</h2>
@@ -833,7 +852,12 @@ let defaultSessionDuration = 600;
 let generatedKeySecrets = {}; // id -> full sk-… from admin list
 let pgKeys = []; // { id, label, secret }
 let selectedKeyId = 'prompt';
+let keyLabels = {}; // usage keyId -> "Name (abcd1234)"
 let lastClaimableWei = '0';
+let liquidWei = '0';
+let modelStakes = {}; // model name -> { stakeWei, stakeMor }
+let stakesSeq = 0;
+let curlDirty = false;
 let reclaimReady = false;
 let lastStatusSnapshot = null;
 const RELEASES_API = 'https://api.github.com/repos/absgrafx/Morpheus-Uplink/releases/latest';
@@ -962,8 +986,9 @@ async function refresh() {
       if (defNote) {
         defNote.textContent = 'Deploy default: ' + defaultSessionDuration + 's (' + fmtDuration(defaultSessionDuration) + ').';
       }
-      updateLockPreview();
+      refreshModelStakes();
     }
+    if (st.mor && st.mor.liquidWei != null) liquidWei = String(st.mor.liquidWei);
     checkForUpdate(st.version || 'dev');
 
     const stats = [
@@ -1034,6 +1059,11 @@ async function refresh() {
   } catch (e) { console.error(e); }
 }
 
+function setSessNote(msg) {
+  const el = document.getElementById('sessNote');
+  if (el) el.textContent = msg || '';
+}
+
 function renderSessions(sessions, sessionsError) {
   const body = document.querySelector('#sessTable tbody');
   if (sessionsError && !sessions.length) {
@@ -1046,14 +1076,14 @@ function renderSessions(sessions, sessionsError) {
     const modelCell = name
       ? `<span class="model-name">${escapeHtml(name)}</span><code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`
       : `<code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`;
-    const sid = escapeAttr(s.sessionId || '');
+    const sid = s.sessionId || '';
     return `<tr>
       <td class="model-cell">${modelCell}</td>
-      <td><code title="${sid}">${shortSecret(s.sessionId)}</code></td>
+      <td><code title="${escapeAttr(sid)}">${shortSecret(sid)}</code></td>
       <td>${fmtMor(s.stakeWei)}</td>
       <td>${fmtEnds(s.endsAt)}</td>
       <td>${status}</td>
-      <td><button type="button" class="danger-ghost" onclick="closeSession(${JSON.stringify(s.sessionId)})">Close</button></td>
+      <td><button type="button" class="danger-ghost" data-sid="${escapeAttr(sid)}" onclick="closeSession(this.dataset.sid, this)" ${sid ? '' : 'disabled'}>Close</button></td>
     </tr>`;
   }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
 }
@@ -1065,13 +1095,42 @@ async function refreshKeys() {
   promptKey = secrets.prompt;
   renderBuiltinKeys();
   renderGeneratedKeys(ks.keys || []);
+  rebuildKeyLabels(ks);
   populatePgKeys(ks);
   return ks;
 }
 
+function keyFingerprint(secret) {
+  if (!secret) return '';
+  const s = String(secret).replace(/^sk-[a-z]+\./i, '').replace(/^sk-/, '');
+  return s.slice(0, 8);
+}
+
+function formatKeyLabel(name, secret, fallbackId) {
+  const n = name || fallbackId || 'key';
+  const fp = keyFingerprint(secret);
+  return fp ? `${n} (${fp})` : n;
+}
+
+function labelForKeyId(keyId) {
+  if (!keyId) return 'unknown';
+  return keyLabels[keyId] || keyId;
+}
+
+function rebuildKeyLabels(ks) {
+  keyLabels = {
+    master: formatKeyLabel('Master', ks.masterKey || secrets.master, 'master'),
+    prompt: formatKeyLabel('Prompt', ks.promptKey || secrets.prompt, 'prompt'),
+  };
+  for (const k of (ks.keys || [])) {
+    const secret = k.secret || generatedKeySecrets[k.id] || '';
+    keyLabels[k.id] = formatKeyLabel(k.name || k.id, secret, k.id);
+  }
+}
+
 function renderUsage(rows) {
   document.querySelector('#usageTable tbody').innerHTML = rows.map(u =>
-    `<tr><td>${u.day}</td><td>${escapeHtml(u.keyId)}</td><td>${escapeHtml(u.model)}</td><td>${u.requests}</td>
+    `<tr><td>${u.day}</td><td title="${escapeAttr(u.keyId)}">${escapeHtml(labelForKeyId(u.keyId))}</td><td>${escapeHtml(u.model)}</td><td>${u.requests}</td>
      <td class="hide-sm">${u.promptTokens}</td><td class="hide-sm">${u.completionTokens}</td></tr>`
   ).join('') || '<tr><td colspan=6 class="note">no usage yet</td></tr>';
   renderUsageCharts(rows);
@@ -1100,7 +1159,7 @@ function aggregateUsage(rows) {
     .sort((a, b) => b.seconds - a.seconds)
     .slice(0, 8);
   const keys = Object.entries(byKey)
-    .map(([name, requests]) => ({ name, requests }))
+    .map(([id, requests]) => ({ id, name: labelForKeyId(id), requests }))
     .sort((a, b) => b.requests - a.requests)
     .slice(0, 8);
   return { days, models, keys };
@@ -1193,9 +1252,11 @@ function svgStackedByKey(days) {
     const label = (d.day || '').slice(5) || d.day;
     return stack + `<text x="${padL + i * bw + bw * 0.35}" y="${h - 10}" text-anchor="middle" fill="#A5A5A5" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>`;
   }).join('');
-  const legend = topKeys.map((k, i) =>
-    `<text x="${padL + i * 62}" y="12" fill="${colors[i % colors.length]}" font-size="9">${escapeHtml(k.slice(0, 8))}</text>`
-  ).join('');
+  const legend = topKeys.map((k, i) => {
+    const label = labelForKeyId(k);
+    const short = label.length > 14 ? label.slice(0, 13) + '…' : label;
+    return `<text x="${padL + i * 68}" y="12" fill="${colors[i % colors.length]}" font-size="9">${escapeHtml(short)}</text>`;
+  }).join('');
   return `<svg viewBox="0 0 ${w} ${h}" role="img">${legend}${bars}</svg>`;
 }
 
@@ -1212,7 +1273,7 @@ function renderUsageCharts(rows) {
     keyBox.innerHTML = keys.length
       ? `<div class="bar-list">${keys.map(k => `
           <div class="bar-row">
-            <div class="label" title="${escapeAttr(k.name)}">${escapeHtml(k.name)}</div>
+            <div class="label" title="${escapeAttr(k.id)}">${escapeHtml(k.name)}</div>
             <div class="bar-track"><div class="bar-fill" style="width:${(k.requests / max) * 100}%"></div></div>
             <div class="val">${k.requests}</div>
           </div>`).join('')}</div>`
@@ -1413,7 +1474,10 @@ async function revoke(id) {
 }
 
 async function closeAll() {
-  if (!confirm('Close all open sessions? Unused stake returns to the wallet; used portion daylocks.')) return;
+  if (!confirm('Close all open sessions? Unused stake returns to the wallet; used portion daylocks.\n\nThis walks each session id via the router close API and can take a while.')) return;
+  const btn = document.getElementById('closeAllBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Closing…'; }
+  setSessNote('Closing all sessions on-chain (one tx each)… hang tight.');
   try {
     const res = await fetch('/admin/pool/close-all', {
       method: 'POST',
@@ -1421,28 +1485,43 @@ async function closeAll() {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok && !(body.ok > 0)) {
-      throw new Error((body.errors && body.errors[0]) || body.error || (await res.text()) || res.statusText);
+      throw new Error((body.errors && body.errors[0]) || body.error || res.statusText);
     }
     const msg = `Closed ${body.ok || 0}/${body.attempted || 0}` +
       (body.failed ? ` (${body.failed} failed)` : '');
+    setSessNote(msg + ' — refreshing…');
     if (body.failed) alert(msg + '\n' + (body.errors || []).join('\n'));
     else if (!(body.ok > 0)) alert(msg + ' — router may have rejected the close (check host logs).');
-    refresh();
+    else alert(msg);
+    await refresh();
+    setSessNote(msg);
   } catch (e) {
+    setSessNote('Close all failed: ' + e.message);
     alert('Close all failed: ' + e.message);
-    refresh();
+    await refresh();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Close all (recover stake)'; }
   }
 }
 
-async function closeSession(sessionId) {
-  if (!sessionId) return;
-  if (!confirm('Close this session? Unused stake returns now; used portion daylocks.')) return;
+async function closeSession(sessionId, btn) {
+  if (!sessionId) {
+    setSessNote('Missing session id — cannot close.');
+    alert('Missing session id — cannot close.');
+    return;
+  }
+  if (!confirm('Close this session?\n' + sessionId + '\n\nUnused stake returns now; used portion daylocks. On-chain close can take 30–90s.')) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Closing…'; }
+  setSessNote('Closing ' + shortSecret(sessionId) + ' via router…');
   try {
     await api('/admin/pool/close/' + encodeURIComponent(sessionId), { method: 'POST' });
-    refresh();
+    setSessNote('Closed ' + shortSecret(sessionId) + ' — refreshing…');
+    await refresh();
+    setSessNote('Closed ' + shortSecret(sessionId));
   } catch (e) {
-    alert('Close failed: ' + e.message + '\n\nOften this means the router could not finish the on-chain close (gas, provider report, or auth). Check docker logs for proxy-router.');
-    refresh();
+    setSessNote('Close failed: ' + e.message);
+    alert('Close failed: ' + e.message + '\n\nOften the router could not finish the on-chain close (gas, provider report, or auth). Check docker logs for proxy-router.');
+    await refresh();
   }
 }
 
@@ -1462,7 +1541,6 @@ function fmtMorRate(n) {
 
 const MIN_SESSION_DURATION = 600;
 let lockPreviewTimer = 0;
-let lockPreviewSeq = 0;
 
 function probeDurationSec() {
   const n = Number(document.getElementById('pgDuration')?.value);
@@ -1480,9 +1558,8 @@ function onDurationInput() {
   el.title = belowFloor
     ? 'Minimum 600 seconds (10 minutes). Values below the floor are rejected.'
     : 'Minimum 600 seconds (10 minutes). Shorter values are rejected — on-chain floor.';
-  filterModels();
   updateCurlPreview();
-  updateLockPreview();
+  refreshModelStakes();
 }
 
 function weiToMorNum(weiStr) {
@@ -1494,59 +1571,68 @@ function weiToMorNum(weiStr) {
   }
 }
 
-function updateLockPreview() {
-  const box = document.getElementById('lockPreview');
-  if (!box) return;
+function hasReusableSession(modelName) {
+  const sessions = (lastStatusSnapshot && lastStatusSnapshot.sessions) || [];
+  return sessions.some(s => {
+    if (!s) return false;
+    if (!(s.usable || s.pooled)) return false;
+    return s.modelName === modelName;
+  });
+}
+
+function canAffordModel(modelName) {
+  const st = modelStakes[modelName];
+  if (!st || !st.stakeWei) return true;
+  if (hasReusableSession(modelName)) return true;
+  try {
+    return BigInt(String(st.stakeWei)) <= BigInt(String(liquidWei || '0'));
+  } catch (_) {
+    return true;
+  }
+}
+
+function refreshModelStakes() {
   clearTimeout(lockPreviewTimer);
   const el = document.getElementById('pgDuration');
   const raw = Number(el?.value);
   if (Number.isFinite(raw) && raw > 0 && raw < MIN_SESSION_DURATION) {
-    box.classList.add('warn');
-    box.innerHTML = `Duration must be at least <strong>600s (10m)</strong>. Below that, session open fails.`;
+    filterModels();
     return;
   }
   const dur = probeDurationSec();
-  const m = allModels.find(x => x.id === selectedModel);
-  if (!m) {
-    box.classList.remove('warn');
-    box.innerHTML = 'Select a model to estimate on-chain MOR lock for <strong>' + fmtDuration(dur) + '</strong>.';
-    return;
-  }
-  box.classList.remove('warn');
-  const rate = Number(m.priceMorPerHour) || 0;
-  box.innerHTML = `<strong>${escapeHtml(m.id)}</strong> · estimating lock for <strong>${fmtDuration(dur)}</strong>…`;
-  const seq = ++lockPreviewSeq;
+  const seq = ++stakesSeq;
   lockPreviewTimer = setTimeout(async () => {
     if (!auth) {
-      // Local UI preview without admin API — show rate only.
-      box.innerHTML =
-        `<strong>${escapeHtml(m.id)}</strong><br>` +
-        (rate > 0
-          ? `Lowest bid ≈ <strong>${fmtMorRate(rate)} MOR/h</strong> · duration <strong>${fmtDuration(dur)}</strong>`
-          : `No bid price in catalog · duration <strong>${fmtDuration(dur)}</strong>`) +
-        `<div class="note" style="margin:6px 0 0">On-chain lock uses supply÷budget (not MOR/h × hours). Connect for a live estimate.</div>`;
+      // Preview mode: fake stakes from MOR/h × hours (display only).
+      modelStakes = {};
+      for (const m of allModels) {
+        const rate = Number(m.priceMorPerHour) || 0;
+        if (rate <= 0) continue;
+        const stakeMor = rate * (dur / 3600) * 250; // rough preview multiplier
+        modelStakes[m.id] = { stakeWei: String(Math.round(stakeMor * 1e18)), stakeMor, preview: true };
+      }
+      filterModels();
       return;
     }
     try {
-      const data = await api('/admin/estimate-stake?model=' + encodeURIComponent(m.id) + '&duration=' + dur);
-      if (seq !== lockPreviewSeq) return;
-      const stakeMor = weiToMorNum(data.stakeWei);
-      const rateLive = Number(data.priceMorPerHour) || rate;
-      const stakeTxt = Number.isFinite(stakeMor) ? fmtMorRate(stakeMor) : '?';
-      box.innerHTML =
-        `<strong>${escapeHtml(data.model || m.id)}</strong><br>` +
-        `Lock ≈ <strong>${stakeTxt} MOR</strong> for <strong>${fmtDuration(dur)}</strong>` +
-        (rateLive > 0 ? ` · bid <strong>${fmtMorRate(rateLive)} MOR/h</strong>` : '') +
-        `<div class="note" style="margin:6px 0 0">On-chain stake ≠ MOR/h × hours (supply ÷ today’s emissions). Existing sessions may be reused.</div>`;
+      const data = await api('/admin/estimate-stakes?duration=' + dur);
+      if (seq !== stakesSeq) return;
+      if (data.liquidWei != null) liquidWei = String(data.liquidWei);
+      modelStakes = {};
+      for (const row of (data.models || [])) {
+        modelStakes[row.model] = {
+          stakeWei: String(row.stakeWei || '0'),
+          stakeMor: weiToMorNum(row.stakeWei),
+          priceMorPerHour: Number(row.priceMorPerHour) || 0,
+        };
+      }
+      filterModels();
     } catch (e) {
-      if (seq !== lockPreviewSeq) return;
-      box.classList.add('warn');
-      box.innerHTML =
-        `<strong>${escapeHtml(m.id)}</strong> — lock estimate unavailable` +
-        (rate > 0 ? ` · bid <strong>${fmtMorRate(rate)} MOR/h</strong>` : '') +
-        `<div class="note" style="margin:6px 0 0">${escapeHtml(e.message || 'error')}</div>`;
+      if (seq !== stakesSeq) return;
+      console.warn('estimate-stakes failed', e);
+      filterModels();
     }
-  }, 280);
+  }, 220);
 }
 
 function parseSemver(v) {
@@ -1635,13 +1721,13 @@ async function runHousekeep() {
 
 function populatePgKeys(ks) {
   pgKeys = [
-    { id: 'prompt', label: 'Prompt key (inference)', secret: ks.promptKey || '' },
-    { id: 'master', label: 'Master key (full access)', secret: ks.masterKey || '' },
+    { id: 'prompt', label: formatKeyLabel('Prompt key', ks.promptKey || '', 'prompt'), secret: ks.promptKey || '' },
+    { id: 'master', label: formatKeyLabel('Master key', ks.masterKey || '', 'master'), secret: ks.masterKey || '' },
   ];
   for (const k of (ks.keys || [])) {
     const secret = k.secret || generatedKeySecrets[k.id] || '';
     if (!secret) continue;
-    pgKeys.push({ id: k.id, label: (k.name || k.id) + ' (extra)', secret });
+    pgKeys.push({ id: k.id, label: formatKeyLabel(k.name || k.id, secret, k.id), secret });
   }
   const sel = document.getElementById('pgKey');
   const prev = selectedKeyId;
@@ -1694,10 +1780,11 @@ async function loadModels() {
         id: m.id,
         tags: mor.tags || m.tags || [],
         priceMorPerHour: Number(mor.priceMorPerHour) || 0,
+        pricePerSecondWei: mor.pricePerSecondWei || '',
       };
     });
     filterModels();
-    updateLockPreview();
+    refreshModelStakes();
   } catch (e) {
     box.innerHTML = `<div class="note" style="padding:12px">Catalog error: ${escapeHtml(e.message)}</div>`;
   }
@@ -1714,12 +1801,27 @@ function filterModels() {
     box.innerHTML = '<div class="note" style="padding:12px">No matches</div>';
     return;
   }
+  const dur = probeDurationSec();
   box.innerHTML = scored.slice(0, 80).map(({ m }) => {
-    const rate = Number(m.priceMorPerHour) || 0;
-    const pill = rate > 0
-      ? `<span class="bid-pill" title="Lowest healthy bid (MOR per hour of inference)">${fmtMorRate(rate)} MOR/h</span>`
-      : `<span class="bid-pill" title="No bid price in catalog">no bid</span>`;
-    return `<div class="model-item${m.id === selectedModel ? ' active' : ''}" data-model-id="${escapeAttr(m.id)}" role="button" tabindex="0">
+    const st = modelStakes[m.id];
+    const afford = canAffordModel(m.id);
+    const reuse = hasReusableSession(m.id);
+    let pill;
+    if (st && Number.isFinite(st.stakeMor)) {
+      const title = reuse
+        ? `Reusable open session — no new lock needed (would lock ~${fmtMorRate(st.stakeMor)} MOR for ${fmtDuration(dur)})`
+        : (afford
+          ? `Expected on-chain lock for ${fmtDuration(dur)}`
+          : `Need ~${fmtMorRate(st.stakeMor)} MOR liquid (wallet has less)`);
+      pill = `<span class="bid-pill" title="${escapeAttr(title)}">~${fmtMorRate(st.stakeMor)} lock</span>`;
+    } else {
+      pill = `<span class="bid-pill" title="Estimating lock…">…</span>`;
+    }
+    const cls = [
+      m.id === selectedModel ? 'active' : '',
+      afford ? '' : 'unaffordable',
+    ].filter(Boolean).join(' ');
+    return `<div class="model-item${cls ? ' ' + cls : ''}" data-model-id="${escapeAttr(m.id)}" role="button" tabindex="0">
        <div class="meta">
          ${escapeHtml(m.id)}
          ${m.tags && m.tags.length ? `<div class="tags">${escapeHtml(m.tags.slice(0, 4).join(', '))}</div>` : ''}
@@ -1727,6 +1829,21 @@ function filterModels() {
        ${pill}
      </div>`;
   }).join('');
+  updateSelectedStakeNote();
+}
+
+function updateSelectedStakeNote() {
+  const note = document.getElementById('selectedStakeNote');
+  if (!note) return;
+  if (!selectedModel) { note.textContent = ''; return; }
+  const st = modelStakes[selectedModel];
+  if (!st || !Number.isFinite(st.stakeMor)) { note.textContent = ''; return; }
+  const reuse = hasReusableSession(selectedModel);
+  const afford = canAffordModel(selectedModel);
+  note.innerHTML = reuse
+    ? ` · reusable session (no new lock; would be ~${fmtMorRate(st.stakeMor)} MOR)`
+    : ` · lock ≈ <strong style="color:var(--green-light)">${fmtMorRate(st.stakeMor)} MOR</strong>` +
+      (afford ? '' : ' <span style="color:var(--bad)">(exceeds liquid)</span>');
 }
 
 function escapeAttr(s) {
@@ -1738,7 +1855,6 @@ function selectModel(id) {
   document.getElementById('selectedModel').textContent = id;
   filterModels();
   updateCurlPreview();
-  updateLockPreview();
 }
 
 document.getElementById('modelList').addEventListener('click', (e) => {
@@ -1782,13 +1898,76 @@ function buildCurl() {
 }
 
 function updateCurlPreview() {
-  document.getElementById('pgCurl').textContent = buildCurl();
+  if (curlDirty) return;
+  const el = document.getElementById('pgCurl');
+  if (el) el.value = buildCurl();
+}
+
+function resetCurlFromForm() {
+  curlDirty = false;
+  updateCurlPreview();
+  document.getElementById('pgStatus').textContent = 'curl reset from form.';
 }
 
 async function copyCurl() {
-  updateCurlPreview();
-  await navigator.clipboard.writeText(buildCurl());
+  const text = document.getElementById('pgCurl')?.value || buildCurl();
+  await navigator.clipboard.writeText(text);
   document.getElementById('pgStatus').textContent = 'curl copied to clipboard.';
+}
+
+function parseCurlCommand(text) {
+  const src = String(text || '');
+  const auth = src.match(/Authorization:\s*Bearer\s+([^\s"']+)/i);
+  const dur = src.match(/X-Uplink-Session-Duration:\s*(\d+)/i);
+  let bodyRaw = '';
+  const dq = src.match(/-d\s+'([\s\S]*?)'\s*$/m) || src.match(/-d\s+'([\s\S]*?)'/);
+  const dq2 = src.match(/-d\s+"([\s\S]*?)"\s*$/m);
+  if (dq) bodyRaw = dq[1].replace(/'\\''/g, "'");
+  else if (dq2) bodyRaw = dq2[1];
+  else {
+    const bare = src.match(/-d\s+(\{[\s\S]*\})\s*$/);
+    if (bare) bodyRaw = bare[1];
+  }
+  if (!bodyRaw) throw new Error('Could not find JSON -d body in curl text');
+  let body;
+  try { body = JSON.parse(bodyRaw); }
+  catch (e) { throw new Error('Invalid JSON in curl -d body: ' + e.message); }
+  return {
+    key: auth ? auth[1] : '',
+    duration: dur ? Number(dur[1]) : probeDurationSec(),
+    body,
+  };
+}
+
+async function postChatCompletion({ key, duration, body }) {
+  document.getElementById('pgStatus').textContent = 'Running…';
+  document.getElementById('pgOut').textContent = '…';
+  const res = await fetch('/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + key,
+      'Content-Type': 'application/json',
+      'X-Uplink-Session-Duration': String(duration),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let pretty = text;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (_) {}
+  document.getElementById('pgOut').textContent = pretty;
+  document.getElementById('pgStatus').textContent = res.ok ? 'OK ' + res.status : 'Error ' + res.status;
+}
+
+async function runCurlCommand() {
+  try {
+    const parsed = parseCurlCommand(document.getElementById('pgCurl').value);
+    if (!parsed.key) throw new Error('No Authorization Bearer key in curl');
+    if (!(parsed.duration >= MIN_SESSION_DURATION)) throw new Error('Session duration must be ≥ 600');
+    await postChatCompletion(parsed);
+  } catch (e) {
+    document.getElementById('pgOut').textContent = String(e.message || e);
+    document.getElementById('pgStatus').textContent = 'curl parse/run failed';
+  }
 }
 
 async function runPlayground() {
@@ -1802,9 +1981,8 @@ async function runPlayground() {
     document.getElementById('pgDuration').focus();
     return;
   }
+  curlDirty = false;
   updateCurlPreview();
-  document.getElementById('pgStatus').textContent = 'Running…';
-  document.getElementById('pgOut').textContent = '…';
   const max = Number(document.getElementById('pgMaxTokens').value) || 128;
   const body = {
     model: selectedModel,
@@ -1812,28 +1990,15 @@ async function runPlayground() {
     max_tokens: max,
   };
   try {
-    const res = await fetch('/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + key,
-        'Content-Type': 'application/json',
-        'X-Uplink-Session-Duration': String(probeDurationSec()),
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
-    let pretty = text;
-    try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (_) {}
-    document.getElementById('pgOut').textContent = pretty;
-    document.getElementById('pgStatus').textContent = res.ok ? 'OK ' + res.status : 'Error ' + res.status;
+    await postChatCompletion({ key, duration: probeDurationSec(), body });
   } catch (e) {
     document.getElementById('pgOut').textContent = String(e);
     document.getElementById('pgStatus').textContent = 'Request failed';
   }
 }
 
-document.getElementById('pgPrompt').addEventListener('input', updateCurlPreview);
-document.getElementById('pgMaxTokens').addEventListener('input', updateCurlPreview);
+document.getElementById('pgPrompt').addEventListener('input', () => { curlDirty = false; updateCurlPreview(); });
+document.getElementById('pgMaxTokens').addEventListener('input', () => { curlDirty = false; updateCurlPreview(); });
 
 function startMatrixRain() {
   const canvas = document.getElementById('matrixBg');
@@ -1896,6 +2061,7 @@ function enterUiPreview() {
   document.getElementById('routerChip').textContent = 'router preview';
   setLoggedIn(true);
   document.getElementById('logoutBtn').classList.remove('hidden');
+  liquidWei = String(3n * 10n ** 18n); // 3 MOR fake liquid for grey-out demo
   allModels = [
     { id: 'glm-5.2', tags: ['LLM', 'glm', 'size:l'], priceMorPerHour: 0.0959 },
     { id: 'glm-5.2:web', tags: ['LLM', 'glm', 'web'], priceMorPerHour: 0.1583 },
@@ -1903,10 +2069,10 @@ function enterUiPreview() {
   ];
   selectedModel = 'glm-5.2';
   document.getElementById('selectedModel').textContent = selectedModel;
-  filterModels();
-  updateLockPreview();
+  keyLabels = { prompt: 'Prompt (abcd1234)', '26828ebd': 'test1 (5647d122)' };
+  refreshModelStakes();
   updateCurlPreview();
-  console.info('Uplink UI preview mode — visual only. Live stake estimate needs /admin/estimate-stake.');
+  console.info('Uplink UI preview mode — visual only. Live stake estimate needs /admin/estimate-stakes.');
 }
 
 const THEME_KEY = 'uplink_theme';

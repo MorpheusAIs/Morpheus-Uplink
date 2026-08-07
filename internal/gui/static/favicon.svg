@@ -3,7 +3,7 @@
   <defs>
     <style>
       .cls-bg { fill: #000; stroke-width: 0px; }
-      .cls-1 { fill: #fff; stroke-width: 0px; }
+      .cls-1 { fill: #6B21A8; stroke-width: 0px; }
     </style>
   </defs>
   <rect class="cls-bg" x="0" y="0" width="500" height="500" rx="96" ry="96"/>
