@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,14 +24,24 @@ type UsageRow struct {
 	Requests         int64  `json:"requests"`
 	PromptTokens     int64  `json:"promptTokens"`
 	CompletionTokens int64  `json:"completionTokens"`
-	// SessionSeconds accumulates configured open duration when a new
-	// on-chain session is opened for this key/model (MOR-lock relevant).
+	// SessionSeconds is actual on-chain open time (ClosedAt − OpenedAt),
+	// credited when a session closes with a receipt — not the configured
+	// open duration.
 	SessionSeconds int64 `json:"sessionSeconds,omitempty"`
 }
 
+// OpenSessionMeta tracks who opened a session so close can attribute usage.
+type OpenSessionMeta struct {
+	KeyID   string `json:"keyId"`
+	Model   string `json:"model"`
+	Tracked int64  `json:"trackedAt"` // unix when we recorded the open
+}
+
 type state struct {
-	Keys  []keymaker.Record        `json:"keys"`
-	Usage map[string]*UsageRow `json:"usage"` // "day|keyId|model"
+	Keys            []keymaker.Record           `json:"keys"`
+	Usage           map[string]*UsageRow        `json:"usage"` // "day|keyId|model"
+	OpenSessions    map[string]OpenSessionMeta  `json:"openSessions,omitempty"`
+	SessionTimeMode string                      `json:"sessionTimeMode,omitempty"` // "actual" after migration
 }
 
 type Store struct {
@@ -59,6 +70,17 @@ func Open(dataDir string) (*Store, error) {
 	}
 	if s.st.Usage == nil {
 		s.st.Usage = map[string]*UsageRow{}
+	}
+	if s.st.OpenSessions == nil {
+		s.st.OpenSessions = map[string]OpenSessionMeta{}
+	}
+	// One-time migrate off the old "credit full open duration on open" model.
+	if s.st.SessionTimeMode != "actual" {
+		for _, row := range s.st.Usage {
+			row.SessionSeconds = 0
+		}
+		s.st.SessionTimeMode = "actual"
+		_ = s.save()
 	}
 	return s, nil
 }
@@ -140,22 +162,58 @@ func (s *Store) RecordUsage(keyID, model string, promptTokens, completionTokens 
 	_ = s.save()
 }
 
-// RecordSessionOpen credits sessionSeconds when a new on-chain session is
-// opened (not when an existing pooled session is reused).
-func (s *Store) RecordSessionOpen(keyID, model string, sessionSeconds int64) {
-	if sessionSeconds <= 0 {
+// TrackSessionOpen remembers key/model for a newly opened session so close
+// can attribute actual on-chain duration.
+func (s *Store) TrackSessionOpen(sessionID, keyID, model string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.st.OpenSessions == nil {
+		s.st.OpenSessions = map[string]OpenSessionMeta{}
+	}
+	s.st.OpenSessions[sessionID] = OpenSessionMeta{
+		KeyID:   keyID,
+		Model:   model,
+		Tracked: time.Now().Unix(),
+	}
+	_ = s.save()
+}
+
+// RecordSessionClose credits actual used seconds (from chain OpenedAt/ClosedAt)
+// to the key/model that opened the session. modelFallback is used when we have
+// no local open tracking (e.g. session opened before this build).
+func (s *Store) RecordSessionClose(sessionID string, actualSeconds int64, modelFallback string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || actualSeconds <= 0 {
 		return
 	}
 	day := time.Now().UTC().Format("2006-01-02")
-	id := day + "|" + keyID + "|" + model
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	keyID := "unknown"
+	model := modelFallback
+	if meta, ok := s.st.OpenSessions[sessionID]; ok {
+		if meta.KeyID != "" {
+			keyID = meta.KeyID
+		}
+		if meta.Model != "" {
+			model = meta.Model
+		}
+		delete(s.st.OpenSessions, sessionID)
+	}
+	if model == "" {
+		model = "unknown"
+	}
+	id := day + "|" + keyID + "|" + model
 	row, ok := s.st.Usage[id]
 	if !ok {
 		row = &UsageRow{Day: day, KeyID: keyID, Model: model}
 		s.st.Usage[id] = row
 	}
-	row.SessionSeconds += sessionSeconds
+	row.SessionSeconds += actualSeconds
 	_ = s.save()
 }
 

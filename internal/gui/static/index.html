@@ -684,8 +684,8 @@
           <strong>Temporary on this box</strong>
           <p class="note" style="margin:4px 0 0">
             Usage counters are local scratchpad data — they reset if you update the image or redeploy.
-            Open sessions are reloaded from chain after a restart (still-valid ones are reused;
-            past-end sessions are closed so unused stake can return and used MOR can enter daylock).
+            Session time is actual on-chain open duration (ClosedAt − OpenedAt), credited when a session
+            closes — not the configured open length. Open sessions reload from chain after a restart.
           </p>
         </div>
       </section>
@@ -717,7 +717,7 @@
             <div id="chartTokens"></div>
           </div>
           <div class="chart-card">
-            <h3>Session time by model</h3>
+            <h3>Session time by model (actual)</h3>
             <div id="chartModels"></div>
           </div>
           <div class="chart-card">
@@ -1489,11 +1489,19 @@ async function closeAll() {
     }
     const msg = `Closed ${body.ok || 0}/${body.attempted || 0}` +
       (body.failed ? ` (${body.failed} failed)` : '');
-    setSessNote(msg + ' — refreshing…');
+    if (body.ok > 0 && lastStatusSnapshot) {
+      lastStatusSnapshot.sessions = [];
+      renderSessions([], '');
+    }
+    setSessNote(msg + ' — confirming…');
     if (body.failed) alert(msg + '\n' + (body.errors || []).join('\n'));
     else if (!(body.ok > 0)) alert(msg + ' — router may have rejected the close (check host logs).');
     else alert(msg);
-    await refresh();
+    for (let i = 0; i < 4; i++) {
+      await sleep(i === 0 ? 800 : 1500);
+      await refresh();
+      if (!((lastStatusSnapshot && lastStatusSnapshot.sessions) || []).length) break;
+    }
     setSessNote(msg);
   } catch (e) {
     setSessNote('Close all failed: ' + e.message);
@@ -1502,6 +1510,29 @@ async function closeAll() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Close all (recover stake)'; }
   }
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function removeSessionFromUI(sessionId) {
+  if (lastStatusSnapshot && Array.isArray(lastStatusSnapshot.sessions)) {
+    lastStatusSnapshot.sessions = lastStatusSnapshot.sessions.filter(s => s.sessionId !== sessionId);
+    renderSessions(lastStatusSnapshot.sessions, lastStatusSnapshot.sessionsError || '');
+  }
+}
+
+async function refreshUntilSessionGone(sessionId, attempts) {
+  for (let i = 0; i < attempts; i++) {
+    await sleep(i === 0 ? 800 : 1500);
+    await refresh();
+    const still = ((lastStatusSnapshot && lastStatusSnapshot.sessions) || [])
+      .some(s => s.sessionId === sessionId);
+    if (!still) return true;
+    setSessNote('Closed ' + shortSecret(sessionId) + ' — waiting for chain index (' + (i + 1) + '/' + attempts + ')…');
+  }
+  return false;
 }
 
 async function closeSession(sessionId, btn) {
@@ -1515,9 +1546,12 @@ async function closeSession(sessionId, btn) {
   setSessNote('Closing ' + shortSecret(sessionId) + ' via router…');
   try {
     await api('/admin/pool/close/' + encodeURIComponent(sessionId), { method: 'POST' });
-    setSessNote('Closed ' + shortSecret(sessionId) + ' — refreshing…');
-    await refresh();
-    setSessNote('Closed ' + shortSecret(sessionId));
+    removeSessionFromUI(sessionId);
+    setSessNote('Closed ' + shortSecret(sessionId) + ' — confirming…');
+    const gone = await refreshUntilSessionGone(sessionId, 5);
+    setSessNote(gone
+      ? ('Closed ' + shortSecret(sessionId))
+      : ('Closed ' + shortSecret(sessionId) + ' — row may linger until chain index catches up; refresh shortly.'));
   } catch (e) {
     setSessNote('Close failed: ' + e.message);
     alert('Close failed: ' + e.message + '\n\nOften the router could not finish the on-chain close (gas, provider report, or auth). Check docker logs for proxy-router.');

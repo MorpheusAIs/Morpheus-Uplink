@@ -53,7 +53,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			return
 		}
 		if ensured.Opened {
-			s.store.RecordSessionOpen(keyID, req.Model, int64(ensured.DurationSec))
+			s.store.TrackSessionOpen(ensured.SessionID, keyID, req.Model)
 		}
 		sessionID := ensured.SessionID
 
@@ -69,7 +69,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				return
 			}
 			if ensured.Opened {
-				s.store.RecordSessionOpen(keyID, req.Model, int64(ensured.DurationSec))
+				s.store.TrackSessionOpen(ensured.SessionID, keyID, req.Model)
 			}
 			sessionID = ensured.SessionID
 			res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
