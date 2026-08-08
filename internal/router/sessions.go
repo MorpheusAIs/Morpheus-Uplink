@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Session is a proxy-router /blockchain/sessions/* row (capitalized JSON
@@ -100,6 +101,57 @@ func (s Session) ActualDurationSec() int64 {
 		return 0
 	}
 	return s.ClosedAt - s.OpenedAt
+}
+
+func durationFromOpen(openedAt int64) int64 {
+	now := time.Now().Unix()
+	if now < openedAt {
+		now = openedAt
+	}
+	sec := now - openedAt
+	if sec < 1 {
+		return 1
+	}
+	return sec
+}
+
+// AwaitActualDuration polls GetSession until ClosedAt is indexed. After a
+// successful close tx, indexer lag often leaves ClosedAt=0 for several seconds;
+// we fall back to now−OpenedAt so the GUI still credits real open time.
+func (c *Client) AwaitActualDuration(sessionID string, attempts int, delay time.Duration) (Session, int64, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	if delay <= 0 {
+		delay = time.Second
+	}
+	var last Session
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			time.Sleep(delay)
+		}
+		s, err := c.GetSession(sessionID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		last = s
+		if sec := s.ActualDurationSec(); sec > 0 {
+			return s, sec, nil
+		}
+		// Prefer receipt ClosedAt, but don't stall forever on index lag.
+		if i >= 2 && s.OpenedAt > 0 {
+			return s, durationFromOpen(s.OpenedAt), nil
+		}
+	}
+	if last.OpenedAt > 0 {
+		return last, durationFromOpen(last.OpenedAt), nil
+	}
+	if lastErr != nil {
+		return last, 0, lastErr
+	}
+	return last, 0, fmt.Errorf("session %s: missing OpenedAt after close", sessionID)
 }
 
 // WalletAddress returns the consumer wallet used by the proxy-router.
