@@ -22,6 +22,10 @@ type entry struct {
 	stake     *big.Int
 }
 
+// OnSessionClosed is invoked after a successful on-chain close so callers can
+// attribute actual usage (OpenedAt→ClosedAt) from the receipt.
+type OnSessionClosed func(sessionID string)
+
 type Pool struct {
 	client   *router.Client
 	duration int
@@ -31,6 +35,8 @@ type Pool struct {
 	mu      sync.Mutex
 	entries map[string]entry       // modelID -> session
 	opening map[string]*sync.Mutex // per-model open lock
+
+	onClosed OnSessionClosed
 
 	// Last on-chain open-session scan (for GUI), refreshed by Rehydrate.
 	chainMu       sync.Mutex
@@ -63,6 +69,16 @@ func New(client *router.Client, durationSec int, failover, directPayment bool) *
 
 // DurationSec is the configured default session length.
 func (p *Pool) DurationSec() int { return p.duration }
+
+// SetOnSessionClosed registers a hook run after each successful close.
+func (p *Pool) SetOnSessionClosed(fn OnSessionClosed) { p.onClosed = fn }
+
+func (p *Pool) notifyClosed(sessionID string) {
+	if p.onClosed == nil || sessionID == "" {
+		return
+	}
+	p.onClosed(sessionID)
+}
 
 // EnsureResult is returned by EnsureDuration.
 type EnsureResult struct {
@@ -237,6 +253,7 @@ func (p *Pool) rehydrate(force bool) error {
 				})
 			} else {
 				log.Printf("pool: closed expired session %s (model %s)", s.ID, s.ModelAgentID)
+				p.notifyClosed(s.ID)
 			}
 			continue
 		}
@@ -310,6 +327,7 @@ func (p *Pool) CloseSession(sessionID string) error {
 		_ = p.RehydrateForce()
 		return err
 	}
+	p.notifyClosed(sessionID)
 	return p.RehydrateForce()
 }
 
@@ -347,6 +365,7 @@ func (p *Pool) CloseAll() CloseAllResult {
 		}
 		res.Closed++
 		log.Printf("pool: closed session %s (%s)", sessionID, label)
+		p.notifyClosed(sessionID)
 	}
 	for modelID, e := range entries {
 		tryClose(e.sessionID, "pooled "+modelID)

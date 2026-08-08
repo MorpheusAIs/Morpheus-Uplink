@@ -42,6 +42,27 @@ func main() {
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover, cfg.DirectPayment)
+	// Attribute actual session wall-time (ClosedAt − OpenedAt) when a close
+	// lands on-chain — not the configured open duration.
+	pl.SetOnSessionClosed(func(sessionID string) {
+		detail, err := rc.GetSession(sessionID)
+		if err != nil {
+			log.Printf("usage: get closed session %s: %v", sessionID, err)
+			return
+		}
+		sec := detail.ActualDurationSec()
+		if sec <= 0 {
+			log.Printf("usage: session %s missing open/close timestamps (opened=%d closed=%d)",
+				sessionID, detail.OpenedAt, detail.ClosedAt)
+			return
+		}
+		model := cat.NameByID(detail.ModelAgentID)
+		if model == "" {
+			model = detail.ModelAgentID
+		}
+		st.RecordSessionClose(sessionID, sec, model)
+		log.Printf("usage: session %s actual %ds for model %s", sessionID, sec, model)
+	})
 
 	hk, err := housekeep.New(housekeep.Config{
 		Enabled:            cfg.Housekeeping,
