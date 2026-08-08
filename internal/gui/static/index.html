@@ -782,10 +782,9 @@
               Max tokens
               <input id="pgMaxTokens" type="number" min="16" max="4096" value="128" style="width:88px" title="max_tokens — response length cap">
             </label>
-            <button onclick="runPlayground()">Run test</button>
-            <button class="ghost" onclick="copyCurl()">Copy curl</button>
+            <button type="button" onclick="runPlayground()" title="⌘↵ / Ctrl+Enter">Run test</button>
           </div>
-          <div class="note" id="pgStatus"></div>
+          <div class="note" id="pgStatus">⌘↵ / Ctrl+Enter runs the test · Enter inserts a new line</div>
         </div>
       </section>
       <div class="probe-io">
@@ -860,6 +859,10 @@ let stakesSeq = 0;
 let curlDirty = false;
 let reclaimReady = false;
 let lastStatusSnapshot = null;
+/** Session ids we successfully closed; hide until chain index drops them. */
+const pendingClosed = new Set();
+/** Raw on-chain open ids from last status poll (before pendingClosed filter). */
+const lastRawSessionIds = new Set();
 const RELEASES_API = 'https://api.github.com/repos/absgrafx/Morpheus-Uplink/releases/latest';
 const RELEASES_PAGE = 'https://github.com/absgrafx/Morpheus-Uplink/releases';
 
@@ -1050,7 +1053,18 @@ async function refresh() {
     } catch (e) { /* optional */ }
     document.getElementById('walletMasked').textContent = shortSecret(secrets.wallet) || '(unavailable)';
 
-    renderSessions(st.sessions || [], st.sessionsError || '');
+    const rawSessions = st.sessions || [];
+    lastRawSessionIds.clear();
+    for (const s of rawSessions) {
+      if (s.sessionId) lastRawSessionIds.add(s.sessionId);
+    }
+    for (const id of [...pendingClosed]) {
+      if (!lastRawSessionIds.has(id)) pendingClosed.delete(id);
+    }
+    const visible = rawSessions.filter(s => !pendingClosed.has(s.sessionId));
+    st.sessions = visible;
+    lastStatusSnapshot = st;
+    renderSessions(visible, st.sessionsError || '');
 
     await refreshKeys();
 
@@ -1203,9 +1217,9 @@ function svgStackedTokens(series) {
 }
 
 function svgDonut(slices) {
-  if (!slices.length) return '<div class="chart-empty">No session opens recorded yet</div>';
+  if (!slices.length) return '<div class="chart-empty">No closed sessions credited yet</div>';
   const total = slices.reduce((s, x) => s + x.value, 0);
-  if (total <= 0) return '<div class="chart-empty">No session opens recorded yet</div>';
+  if (total <= 0) return '<div class="chart-empty">No closed sessions credited yet</div>';
   const colors = ['#20DC8E', '#00FF85', '#5CE3B0', '#148F5C', '#A5A5A5', '#3b82f6', '#f59e0b', '#ef4444'];
   const cx = 90, cy = 70, r = 48, ri = 28;
   let angle = -Math.PI / 2;
@@ -1489,18 +1503,21 @@ async function closeAll() {
     }
     const msg = `Closed ${body.ok || 0}/${body.attempted || 0}` +
       (body.failed ? ` (${body.failed} failed)` : '');
-    if (body.ok > 0 && lastStatusSnapshot) {
-      lastStatusSnapshot.sessions = [];
-      renderSessions([], '');
+    if (body.ok > 0) {
+      for (const id of [...lastRawSessionIds]) pendingClosed.add(id);
+      if (lastStatusSnapshot) {
+        lastStatusSnapshot.sessions = [];
+        renderSessions([], '');
+      }
     }
     setSessNote(msg + ' — confirming…');
     if (body.failed) alert(msg + '\n' + (body.errors || []).join('\n'));
     else if (!(body.ok > 0)) alert(msg + ' — router may have rejected the close (check host logs).');
     else alert(msg);
-    for (let i = 0; i < 4; i++) {
-      await sleep(i === 0 ? 800 : 1500);
+    for (let i = 0; i < 6; i++) {
+      await sleep(i === 0 ? 800 : 2000);
       await refresh();
-      if (!((lastStatusSnapshot && lastStatusSnapshot.sessions) || []).length) break;
+      if (![...pendingClosed].some(id => lastRawSessionIds.has(id))) break;
     }
     setSessNote(msg);
   } catch (e) {
@@ -1525,11 +1542,11 @@ function removeSessionFromUI(sessionId) {
 
 async function refreshUntilSessionGone(sessionId, attempts) {
   for (let i = 0; i < attempts; i++) {
-    await sleep(i === 0 ? 800 : 1500);
+    await sleep(i === 0 ? 800 : 2000);
     await refresh();
-    const still = ((lastStatusSnapshot && lastStatusSnapshot.sessions) || [])
-      .some(s => s.sessionId === sessionId);
-    if (!still) return true;
+    // Row stays hidden via pendingClosed; wait until chain index drops it
+    // (and give usage attribution time to land).
+    if (!lastRawSessionIds.has(sessionId)) return true;
     setSessNote('Closed ' + shortSecret(sessionId) + ' — waiting for chain index (' + (i + 1) + '/' + attempts + ')…');
   }
   return false;
@@ -1546,13 +1563,18 @@ async function closeSession(sessionId, btn) {
   setSessNote('Closing ' + shortSecret(sessionId) + ' via router…');
   try {
     await api('/admin/pool/close/' + encodeURIComponent(sessionId), { method: 'POST' });
+    pendingClosed.add(sessionId);
     removeSessionFromUI(sessionId);
     setSessNote('Closed ' + shortSecret(sessionId) + ' — confirming…');
-    const gone = await refreshUntilSessionGone(sessionId, 5);
+    const gone = await refreshUntilSessionGone(sessionId, 8);
+    // One more beat for async usage credit (ClosedAt poll runs in background).
+    await sleep(2500);
+    await refresh();
     setSessNote(gone
       ? ('Closed ' + shortSecret(sessionId))
-      : ('Closed ' + shortSecret(sessionId) + ' — row may linger until chain index catches up; refresh shortly.'));
+      : ('Closed ' + shortSecret(sessionId) + ' — hidden here until chain index catches up.'));
   } catch (e) {
+    pendingClosed.delete(sessionId);
     setSessNote('Close failed: ' + e.message);
     alert('Close failed: ' + e.message + '\n\nOften the router could not finish the on-chain close (gas, provider report, or auth). Check docker logs for proxy-router.');
     await refresh();
@@ -2032,6 +2054,12 @@ async function runPlayground() {
 }
 
 document.getElementById('pgPrompt').addEventListener('input', () => { curlDirty = false; updateCurlPreview(); });
+document.getElementById('pgPrompt').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    runPlayground();
+  }
+});
 document.getElementById('pgMaxTokens').addEventListener('input', () => { curlDirty = false; updateCurlPreview(); });
 
 function startMatrixRain() {

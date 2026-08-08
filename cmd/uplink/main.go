@@ -42,18 +42,12 @@ func main() {
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover, cfg.DirectPayment)
-	// Attribute actual session wall-time (ClosedAt − OpenedAt) when a close
-	// lands on-chain — not the configured open duration.
+	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
+	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {
-		detail, err := rc.GetSession(sessionID)
+		detail, sec, err := rc.AwaitActualDuration(sessionID, 8, 2*time.Second)
 		if err != nil {
-			log.Printf("usage: get closed session %s: %v", sessionID, err)
-			return
-		}
-		sec := detail.ActualDurationSec()
-		if sec <= 0 {
-			log.Printf("usage: session %s missing open/close timestamps (opened=%d closed=%d)",
-				sessionID, detail.OpenedAt, detail.ClosedAt)
+			log.Printf("usage: closed session %s: %v", sessionID, err)
 			return
 		}
 		model := cat.NameByID(detail.ModelAgentID)
@@ -61,7 +55,11 @@ func main() {
 			model = detail.ModelAgentID
 		}
 		st.RecordSessionClose(sessionID, sec, model)
-		log.Printf("usage: session %s actual %ds for model %s", sessionID, sec, model)
+		src := "receipt"
+		if detail.ClosedAt <= 0 {
+			src = "open+now"
+		}
+		log.Printf("usage: session %s actual %ds for model %s (%s)", sessionID, sec, model, src)
 	})
 
 	hk, err := housekeep.New(housekeep.Config{

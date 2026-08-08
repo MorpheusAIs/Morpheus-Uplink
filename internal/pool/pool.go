@@ -77,7 +77,8 @@ func (p *Pool) notifyClosed(sessionID string) {
 	if p.onClosed == nil || sessionID == "" {
 		return
 	}
-	p.onClosed(sessionID)
+	// Caller may poll chain; never block close/rehydrate on usage attribution.
+	go p.onClosed(sessionID)
 }
 
 // EnsureResult is returned by EnsureDuration.
