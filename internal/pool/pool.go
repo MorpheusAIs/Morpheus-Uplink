@@ -98,7 +98,7 @@ func (p *Pool) Ensure(modelID string) (string, error) {
 }
 
 // EnsureDuration returns an open session. durationSec <= 0 uses the pool default.
-// An existing pooled session is reused when it still has usable time left.
+// Reuse order: in-memory pool → adopt a still-open on-chain session → open new.
 func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, error) {
 	if durationSec <= 0 {
 		durationSec = p.duration
@@ -118,12 +118,19 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	lock.Lock()
 	defer lock.Unlock()
 
-	p.mu.Lock()
-	if e, ok := p.entries[modelID]; ok && time.Now().Before(e.expiresAt) {
-		p.mu.Unlock()
-		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
+	if res, ok := p.cachedSession(modelID, durationSec); ok {
+		return res, nil
 	}
-	p.mu.Unlock()
+
+	// Memory miss (restart, invalidate after a bad prompt, etc.): prefer the
+	// already-staked on-chain session over opening another and double-locking MOR.
+	if err := p.RehydrateForce(); err != nil {
+		log.Printf("pool: rehydrate before open for %s: %v", modelID, err)
+	}
+	if res, ok := p.cachedSession(modelID, durationSec); ok {
+		log.Printf("pool: adopted on-chain session %s for model %s", res.SessionID, modelID)
+		return res, nil
+	}
 
 	sessionID, err := p.client.OpenSession(modelID, router.OpenSessionRequest{
 		SessionDuration: durationSec,
@@ -141,6 +148,16 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	p.mu.Unlock()
 	log.Printf("pool: opened session %s for model %s (duration %ds)", sessionID, modelID, durationSec)
 	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
+}
+
+func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[modelID]
+	if !ok || !time.Now().Before(e.expiresAt) {
+		return EnsureResult{}, false
+	}
+	return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, true
 }
 
 // Invalidate drops the pooled session for a model (e.g. after a failed
