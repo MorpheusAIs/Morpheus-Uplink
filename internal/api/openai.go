@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // maxRequestBody caps inference request bodies (large contexts are fine,
@@ -57,11 +58,16 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		}
 		sessionID := ensured.SessionID
 
-		// First attempt probes: on a router error we retry once with a
-		// fresh session (covers expired/broken sessions) before giving up.
+		// First attempt probes. Only rotate the session when the router says
+		// the session itself is dead — provider/prompt errors must not burn
+		// another stake while a usable session is still open on-chain.
 		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
 		if err != nil {
 			log.Printf("api: forward attempt 1 (model %s, session %s): %v", req.Model, sessionID, err)
+			if !isSessionDeadError(err) {
+				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
+				return
+			}
 			s.pool.Invalidate(modelID)
 			ensured, err = s.pool.EnsureDuration(modelID, durationSec)
 			if err != nil {
@@ -81,6 +87,32 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		}
 		s.store.RecordUsage(keyID, req.Model, res.PromptTokens, res.CompletionTokens)
 	}
+}
+
+// isSessionDeadError is true when the router rejected the session id itself
+// (expired / missing). Other failures (provider, payload, capacity) keep the
+// pooled session so we do not try to stake again mid-window.
+func isSessionDeadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"session expired",
+		"session not found",
+		"missing session",
+		"no session",
+		"unknown session",
+		"invalid session",
+		"session closed",
+		"session is closed",
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleModels lists catalog models in OpenAI list format, with Morpheus
