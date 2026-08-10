@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Uplink Morpheus</title>
-<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/svg+xml" href="favicon.svg?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -115,6 +115,14 @@
     color: #00FF85; background: #03160E;
     border-color: rgba(32, 220, 142, 0.4);
   }
+  header .chip.mor-avail {
+    color: #00FF85; background: #03160E;
+    border-color: rgba(32, 220, 142, 0.55);
+  }
+  header .chip.gas {
+    color: #93C5FD; background: #0B1220;
+    border-color: rgba(37, 99, 235, 0.55);
+  }
   header #updateChip {
     color: #fbbf24; background: rgba(245, 158, 11, 0.1);
     border-color: rgba(245, 158, 11, 0.45);
@@ -212,8 +220,43 @@
   button:disabled, button.ghost:disabled {
     opacity: 0.4; cursor: not-allowed; filter: none;
   }
-  .stat .reclaim-wrap { margin-top: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-  .stat .reclaim-wrap button { font-size: 12px; padding: 6px 10px; }
+  .status-health {
+    display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap;
+  }
+  .status-health .stat { min-width: 0; }
+  .health-stack {
+    display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  }
+  .health-stack .pill { width: fit-content; }
+  .mor-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(180px, 1.35fr);
+    gap: 12px;
+    margin-top: 14px;
+    align-items: start;
+  }
+  .mor-grid .stat { min-width: 0; }
+  .claim-col {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 12px;
+    row-gap: 4px;
+    align-items: start;
+    min-width: 0;
+  }
+  .claim-col .stat { grid-column: 1; grid-row: 1 / span 2; }
+  .claim-col .reclaim-wrap {
+    grid-column: 2; grid-row: 1 / span 2;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+    min-width: 0;
+  }
+  .claim-col .reclaim-wrap button { font-size: 12px; padding: 6px 12px; }
+  .claim-col .reclaim-wrap .note { margin: 0; line-height: 1.35; }
+  @media (max-width: 640px) {
+    .mor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .claim-col { grid-column: 1 / -1; }
+  }
 
   input, textarea, select {
     background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
@@ -233,8 +276,9 @@
   .secret-row code { font-size: 13px; }
   .pill {
     display: inline-block; padding: 2px 10px; border-radius: 999px;
-    font-size: 12px; font-weight: 600;
+    font-size: 12px; font-weight: 600; text-decoration: none;
   }
+  a.pill:hover { filter: brightness(1.08); }
   .pill.ok { background: rgba(32, 220, 142, 0.12); color: var(--ok); border: 1px solid rgba(32, 220, 142, 0.25); }
   .pill.bad { background: rgba(239, 68, 68, 0.12); color: var(--bad); border: 1px solid rgba(239, 68, 68, 0.25); }
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
@@ -541,13 +585,13 @@
   <div class="header-wash" aria-hidden="true"></div>
   <div class="header-inner">
     <div class="brand">
-      <img class="logo" src="favicon.svg" alt="Morpheus">
+      <img class="logo" src="favicon.svg?v=2" alt="Morpheus">
       <div class="brand-text">
         <h1>UPLINK <span>▲</span></h1>
         <div class="sub">your personal gateway to the Morpheus decentralized AI network</div>
         <div class="brand-chips">
-          <span class="chip inert" id="uplinkChip" title="Uplink version">uplink …</span>
-          <a class="chip" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node on GitHub">router …</a>
+          <span class="chip mor-avail inert" id="availMorChip" title="Liquid MOR in wallet">Available MOR: —</span>
+          <span class="chip gas inert" id="gasChip" title="ETH for gas">Gas: —</span>
         </div>
       </div>
     </div>
@@ -609,8 +653,8 @@
     <div class="panel active" id="tab-status">
       <section>
         <h2>Status</h2>
-        <div class="row" id="stats"></div>
-        <div class="row" id="morBuckets" style="margin-top:14px"></div>
+        <div class="status-health" id="stats"></div>
+        <div class="mor-grid" id="morBuckets"></div>
         <p class="note" id="morNote" style="margin-top:8px"></p>
         <div class="callout">
           <strong>Need more MOR?</strong>
@@ -859,6 +903,9 @@ let stakesSeq = 0;
 let curlDirty = false;
 let reclaimReady = false;
 let lastStatusSnapshot = null;
+let activeTab = 'status';
+let refreshInFlight = null;
+let lastRefreshAt = 0;
 /** Session ids we successfully closed; hide until chain index drops them. */
 const pendingClosed = new Set();
 /** Raw on-chain open ids from last status poll (before pendingClosed filter). */
@@ -893,9 +940,14 @@ function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta 
 }
 
 function showTab(id) {
+  activeTab = id || 'status';
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
+  // Status / Sessions show live wallet + chain state — refresh on every visit.
+  if ((id === 'status' || id === 'activity') && auth && !document.getElementById('app').classList.contains('hidden')) {
+    refresh({ force: true });
+  }
 }
 
 async function api(path, opts = {}) {
@@ -961,6 +1013,27 @@ function fmtMor(v) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function fmtMorFixed(v, digits) {
+  if (v === undefined || v === null || v === '') return '—';
+  const n = Number(v) / 1e18;
+  if (!Number.isFinite(n)) return '—';
+  return n.toFixed(digits);
+}
+
+function fmtEthFixed(v, digits) {
+  if (v === undefined || v === null || v === '') return '—';
+  const n = Number(v) / 1e18;
+  if (!Number.isFinite(n)) return '—';
+  return n.toFixed(digits);
+}
+
+function setHeaderBalances(liquidWeiVal, ethWei) {
+  const morEl = document.getElementById('availMorChip');
+  const gasEl = document.getElementById('gasChip');
+  if (morEl) morEl.textContent = 'Available MOR: ' + fmtMorFixed(liquidWeiVal, 2);
+  if (gasEl) gasEl.textContent = 'Gas: ' + fmtEthFixed(ethWei, 4);
+}
+
 function fmtEnds(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -968,15 +1041,32 @@ function fmtEnds(iso) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-async function refresh() {
+function loggedIn() {
+  return !!auth && !document.getElementById('app').classList.contains('hidden');
+}
+
+/** Refresh wallet/sessions/usage. force=true skips the short coalesce window. */
+function refresh(opts = {}) {
+  const force = !!(opts && opts.force);
+  if (!loggedIn()) return Promise.resolve();
+  if (refreshInFlight) {
+    return force ? refreshInFlight.then(() => refresh({ force: true })) : refreshInFlight;
+  }
+  if (!force && Date.now() - lastRefreshAt < 1500) return Promise.resolve();
+  refreshInFlight = doRefresh().finally(() => {
+    lastRefreshAt = Date.now();
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefresh() {
   try {
     const st = await api('/admin/status');
     const bal = st.balance || {};
     const mor = st.mor || {};
     lastStatusSnapshot = st;
-    document.getElementById('uplinkChip').textContent = 'uplink ' + (st.version || 'dev');
     const rv = st.router && (st.router.version || st.router.Version);
-    document.getElementById('routerChip').textContent = rv ? ('router ' + rv) : (st.routerError ? 'router down' : 'router …');
     if (st.sessionDurationSec || st.sessionDurationDefault) {
       defaultSessionDuration = Number(st.sessionDurationSec || st.sessionDurationDefault) || 600;
       const durInput = document.getElementById('pgDuration');
@@ -992,15 +1082,23 @@ async function refresh() {
       refreshModelStakes();
     }
     if (st.mor && st.mor.liquidWei != null) liquidWei = String(st.mor.liquidWei);
+    setHeaderBalances(mor.liquidWei ?? bal.mor, bal.eth);
     checkForUpdate(st.version || 'dev');
 
-    const stats = [
-      { k: 'Router', v: st.routerError ? 'down' : 'healthy', cls: st.routerError ? 'bad' : 'ok' },
-      { k: 'ETH (gas)', v: bal.eth !== undefined ? (Number(bal.eth) / 1e18).toFixed(5) : '?' },
-      { k: 'Open sessions', v: (st.sessions || []).length },
-    ];
-    document.getElementById('stats').innerHTML = stats.map(s =>
-      `<div class="stat"><div class="v">${s.cls ? `<span class="pill ${s.cls}">${s.v}</span>` : s.v}</div><div class="k">${s.k}</div></div>`).join('');
+    const uplinkVer = 'uplink ' + (st.version || 'dev');
+    const routerVer = rv ? ('router ' + rv) : 'router …';
+    const routerOk = !st.routerError;
+    const uplinkOk = true; // status response reached the GUI
+    document.getElementById('stats').innerHTML =
+      `<div class="health-stack">
+         <a class="pill ok" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node on GitHub">${escapeHtml(routerVer)}</a>
+         <span class="pill ${routerOk ? 'ok' : 'bad'}">${routerOk ? 'healthy' : 'unhealthy'}</span>
+       </div>` +
+      `<div class="health-stack">
+         <span class="pill ok" id="uplinkChip" title="Uplink version">${escapeHtml(uplinkVer)}</span>
+         <span class="pill ${uplinkOk ? 'ok' : 'bad'}">${uplinkOk ? 'healthy' : 'unhealthy'}</span>
+       </div>` +
+      `<div class="stat"><div class="v">${(st.sessions || []).length}</div><div class="k">Open sessions</div></div>`;
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
     const lockedWei = mor.onHoldLockedWei != null ? String(mor.onHoldLockedWei) : null;
@@ -1019,30 +1117,31 @@ async function refresh() {
 
     const claimVal = mor.onHoldClaimableWei != null ? fmtMor(mor.onHoldClaimableWei) + ' MOR' : '—';
     const lockedVal = lockedWei != null ? fmtMor(lockedWei) + ' MOR' : '—';
-    let hkMsg = '';
+    let hkMsg = 'Nothing to reclaim yet';
     if (canReclaim) {
       hkMsg = 'Past daylock — reclaim to wallet';
     } else if (hkLast.status === 'actioned' && hkLast.message) {
-      hkMsg = escapeHtml(hkLast.message);
+      hkMsg = hkLast.message;
     } else if (hkLast.status === 'error' && hkLast.message && /estimategas|execution reverted/i.test(hkLast.message)) {
-      // Stale "nothing to withdraw" from a prior click — don't scare the operator.
       hkMsg = 'Nothing claimable yet (on-hold unlocks at 00:00 UTC)';
     } else if (hkLast.status === 'skipped' && hkLast.message) {
-      hkMsg = escapeHtml(hkLast.message);
+      hkMsg = hkLast.message;
     } else if (hkLast.status === 'error' && hkLast.message) {
-      hkMsg = escapeHtml('error — ' + hkLast.message);
+      hkMsg = 'error — ' + hkLast.message;
     }
 
     document.getElementById('morBuckets').innerHTML =
       `<div class="stat"><div class="v">${fmtMor(mor.liquidWei ?? bal.mor)} MOR</div><div class="k">Wallet</div></div>` +
       `<div class="stat"><div class="v">${fmtMor(mor.activeWei)} MOR</div><div class="k">Active</div></div>` +
       `<div class="stat"><div class="v">${lockedVal}</div><div class="k">On hold</div></div>` +
-      `<div class="stat">
-         <div class="v">${claimVal}</div>
-         <div class="k">To claim</div>
+      `<div class="claim-col">
+         <div class="stat">
+           <div class="v">${claimVal}</div>
+           <div class="k">To claim</div>
+         </div>
          <div class="reclaim-wrap">
            <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" ${canReclaim ? '' : 'disabled'}>Reclaim</button>
-           <span class="note" id="hkNote" style="margin:0">${hkMsg}</span>
+           <span class="note" id="hkNote">${escapeHtml(hkMsg)}</span>
          </div>
        </div>`;
 
@@ -2119,11 +2218,37 @@ function startMatrixRain() {
 }
 
 function enterUiPreview() {
-  document.getElementById('uplinkChip').textContent = 'uplink preview';
-  document.getElementById('routerChip').textContent = 'router preview';
   setLoggedIn(true);
   document.getElementById('logoutBtn').classList.remove('hidden');
-  liquidWei = String(3n * 10n ** 18n); // 3 MOR fake liquid for grey-out demo
+  liquidWei = String(135864n * 10n ** 14n); // 13.5864 MOR
+  const ethWei = String(374n * 10n ** 13n); // 0.00374 ETH
+  setHeaderBalances(liquidWei, ethWei);
+  document.getElementById('stats').innerHTML =
+    `<div class="health-stack">
+       <a class="pill ok" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer">router preview</a>
+       <span class="pill ok">healthy</span>
+     </div>` +
+    `<div class="health-stack">
+       <span class="pill ok" id="uplinkChip">uplink preview</span>
+       <span class="pill ok">healthy</span>
+     </div>` +
+    `<div class="stat"><div class="v">0</div><div class="k">Open sessions</div></div>`;
+  document.getElementById('morBuckets').innerHTML =
+    `<div class="stat"><div class="v">13.5864 MOR</div><div class="k">Wallet</div></div>` +
+    `<div class="stat"><div class="v">0 MOR</div><div class="k">Active</div></div>` +
+    `<div class="stat"><div class="v">0.3636 MOR</div><div class="k">On hold</div></div>` +
+    `<div class="claim-col">
+       <div class="stat">
+         <div class="v">0 MOR</div>
+         <div class="k">To claim</div>
+       </div>
+       <div class="reclaim-wrap">
+         <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" disabled>Reclaim</button>
+         <span class="note" id="hkNote">Nothing to reclaim yet</span>
+       </div>
+     </div>`;
+  document.getElementById('morNote').textContent = 'On-hold unlocks after 00:00 UTC · next ≈ Tue, 11 Aug 2026 00:00:00 GMT';
+  document.getElementById('walletMasked').textContent = '0xf24e9…7897598';
   allModels = [
     { id: 'glm-5.2', tags: ['LLM', 'glm', 'size:l'], priceMorPerHour: 0.0959 },
     { id: 'glm-5.2:web', tags: ['LLM', 'glm', 'web'], priceMorPerHour: 0.1583 },
@@ -2171,15 +2296,22 @@ const previewMode = new URLSearchParams(location.search).has('preview')
   || location.protocol === 'file:';
 if (previewMode && !auth) {
   enterUiPreview();
-  showTab('playground');
+  showTab('status');
 } else {
-  setInterval(() => { if (!document.getElementById('app').classList.contains('hidden')) refresh(); }, 30000);
+  // Status/Sessions: poll often while visible; other tabs keep a slower heartbeat.
+  setInterval(() => {
+    if (!loggedIn() || document.hidden) return;
+    refresh({ force: activeTab === 'status' || activeTab === 'activity' });
+  }, 10000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && loggedIn()) refresh({ force: true });
+  });
   if (auth) {
     (async () => {
       try {
         await api('/admin/status');
         setLoggedIn(true);
-        refresh();
+        refresh({ force: true });
       } catch (e) { logout(); }
     })();
   }
