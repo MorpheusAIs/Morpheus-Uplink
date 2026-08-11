@@ -2,8 +2,17 @@
 
 **Your personal gateway to the Morpheus decentralized AI network.**
 
+**License:** [MIT](LICENSE) (ABSGrafx LLC) · **Disclaimer:** [DISCLAIMER.md](DISCLAIMER.md) · [NOTICE](NOTICE)
+
+**Agents / coding assistants:** start at [`AGENTS.md`](AGENTS.md)
+([`llms.txt`](llms.txt) index · [`llms-full.txt`](llms-full.txt) full corpus).
+
 **Operator guide (short chapters):**  
 [docs/README.md](docs/README.md) — prerequisites → bootstrap → GUI → apps → updates
+
+> Self-custodial and experimental: you hold the wallet keys; any Prompt key can
+> lock MOR on that wallet; prompts go to third-party providers. Read
+> [DISCLAIMER.md](DISCLAIMER.md) before you fund a box or share a key.
 
 The hosted API gateway is a party line — everyone on one wire. Uplink is
 your own line in: a single small Go service that turns a Morpheus

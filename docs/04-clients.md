@@ -12,6 +12,10 @@ Uplink speaks **OpenAI-compatible** HTTP. Almost every OpenAI client works with 
 
 Prefer **Prompt** or ephemeral keys in clients; keep **Master** off machines you do not trust.
 
+**Trust model:** every Prompt/ephemeral key can open sessions and lock MOR from
+this gateway’s wallet. Do not paste keys into untrusted agents or shared
+machines. See [DISCLAIMER.md](../DISCLAIMER.md).
+
 ---
 
 <details>

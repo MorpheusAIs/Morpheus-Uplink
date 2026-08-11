@@ -62,6 +62,7 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh;
+    display: flex; flex-direction: column;
     font-family: "IBM Plex Sans", system-ui, sans-serif;
     color: var(--text);
     background:
@@ -69,6 +70,7 @@
       radial-gradient(ellipse 40% 30% at 90% 80%, var(--body-glow-b), transparent 50%),
       var(--bg);
   }
+  #login-wrap, #app { flex: 1 0 auto; }
   a { color: var(--green); text-decoration: none; }
   a:hover { color: var(--green-light); }
   code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
@@ -173,7 +175,25 @@
     background: var(--surface);
   }
 
-  main { max-width: 1040px; margin: 0 auto; padding: 0 16px 48px; }
+  main { max-width: 1040px; margin: 0 auto; padding: 0 16px 28px; }
+  .site-footer {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    padding: 14px 20px 18px;
+  }
+  .site-footer-inner {
+    max-width: 1040px; margin: 0 auto;
+    display: flex; flex-wrap: wrap; gap: 8px 14px;
+    align-items: center;
+  }
+  .site-footer-links {
+    display: flex; flex-wrap: wrap; gap: 6px 4px; align-items: center;
+    font-size: 12px; font-weight: 500;
+  }
+  .site-footer-links a { color: var(--muted); }
+  .site-footer-links a:hover { color: var(--green-light); }
+  .site-footer-links .sep { color: var(--border); user-select: none; padding: 0 4px; }
   .panel { display: none; }
   .panel.active { display: grid; gap: 16px; padding-top: 4px; }
 
@@ -304,9 +324,8 @@
   }
 
   #login-wrap {
-    min-height: calc(100vh - 70px);
     display: grid; place-items: center;
-    padding: 28px 16px 48px;
+    padding: 28px 16px 32px;
   }
   #login {
     width: min(920px, 100%);
@@ -628,10 +647,10 @@
       <div class="eyebrow">Establish connection</div>
       <h2>Operator.<em>_</em></h2>
       <p>Dial into your personal Morpheus gateway. One password opens the console; API keys live behind it.</p>
-      <div class="row">
+      <form class="row" onsubmit="event.preventDefault(); login();">
         <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
-        <button onclick="login()">Connect</button>
-      </div>
+        <button type="submit">Connect</button>
+      </form>
       <div class="note" id="loginMsg"></div>
     </div>
     <div class="login-visual">
@@ -684,9 +703,7 @@
           <code>docker logs</code> or VPS log panel for deep diagnosis. The support bundle
           exports versions, health, sessions, and reclaim status (no private keys).
         </p>
-        <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a>
-          · Manual: <a href="https://github.com/absgrafx/Morpheus-Uplink/blob/main/docs/README.md" target="_blank" rel="noopener">operator guide</a>
-        </div>
+        <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a></div>
       </section>
     </div>
 
@@ -849,6 +866,22 @@
     </div>
   </main>
 </div>
+
+<footer class="site-footer">
+  <div class="site-footer-inner">
+    <nav class="site-footer-links" aria-label="Help and legal">
+      <a href="https://github.com/absgrafx/Morpheus-Uplink/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer">Guide</a>
+      <span class="sep" aria-hidden="true">·</span>
+      <a href="https://github.com/absgrafx/Morpheus-Uplink/blob/main/README.md" target="_blank" rel="noopener noreferrer">README</a>
+      <span class="sep" aria-hidden="true">·</span>
+      <a href="https://github.com/absgrafx/Morpheus-Uplink/blob/main/DISCLAIMER.md" target="_blank" rel="noopener noreferrer">Disclaimer</a>
+      <span class="sep" aria-hidden="true">·</span>
+      <a href="https://github.com/absgrafx/Morpheus-Uplink/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT</a>
+      <span class="sep" aria-hidden="true">·</span>
+      <a href="https://github.com/absgrafx/Morpheus-Uplink/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+    </nav>
+  </div>
+</footer>
 
 <!-- Import single ephemeral key -->
 <div id="importModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeImportModal()">

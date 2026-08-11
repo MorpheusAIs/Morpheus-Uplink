@@ -2,6 +2,10 @@
 
 **Uplink** is your personal gateway to the [Morpheus](https://mor.org) network: an OpenAI-compatible HTTPS endpoint backed by your own consumer proxy-router (C-Node) and wallet.
 
+AI agents: read root [`AGENTS.md`](../AGENTS.md) first (hard rules + [`llms-full.txt`](../llms-full.txt)).
+
+**Before you fund anything:** [DISCLAIMER.md](../DISCLAIMER.md) (self-custody, shared wallet, third-party inference). License: [MIT](../LICENSE).
+
 Developer / CI detail stays in the root [README](../README.md).
 
 ---
