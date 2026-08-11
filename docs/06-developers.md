@@ -81,12 +81,28 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## CI/CD and versioning
 
-- **PR → `main`:** vet + tests.
+- **PR → `main`:** vet + tests (only when material paths change — see below).
 - **Merge to `main`:** next `vX.Y.Z` (patch by default; `#minor` / `#major` in
   the merge commit message), multi-arch image to `ghcr.io/absgrafx/uplink`,
   GitHub release with digest-pinned compose + env examples.
 - **workflow_dispatch on a branch:** prerelease image `vX.Y.N-<branch>` only
-  (no release, no `latest`).
+  (no release, no `latest`). Always available even for doc-only trees.
+
+### What triggers CI
+
+| Path | Why |
+|------|-----|
+| `cmd/**`, `internal/**` | Binary + embedded GUI |
+| `go.mod`, `go.sum` | Module graph |
+| `Dockerfile` | Image build |
+| `deploy/**` | Image entrypoint + release compose/env assets |
+| `docker-compose.local.yml` | Local-stack / ASCII contract in CI |
+| `.github/workflows/build.yml` | Pipeline itself |
+
+**Skipped** (no test run, no version bump): `docs/**`, root markdown
+(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `scripts/**`,
+`.ai-docs/**`, `.env.example`, etc. A PR that mixes docs + `internal/` still
+runs — any matching path is enough.
 
 Keep the `uplink` GHCR package **public** so SecretVM can pull anonymously.
 Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).

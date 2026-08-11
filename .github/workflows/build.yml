@@ -21,11 +21,44 @@
 # package public in its settings so SecretVM can pull anonymously.
 name: CI/CD
 
+# Only material paths run the pipeline (vet/test, and on main: tag + image +
+# release). Doc / marketing / agent-corpus edits must not cut a new version.
+#
+# Triggers a build:
+#   cmd/ internal/     Go binary + embedded GUI
+#   go.mod go.sum      module graph
+#   Dockerfile         image layers
+#   deploy/            entrypoint in image + SecretVM/generic release assets
+#   docker-compose.local.yml   CI ASCII / local-stack contract
+#   this workflow      CI itself
+#
+# Does NOT trigger (examples): docs/**, README.md, AGENTS.md, DISCLAIMER.md,
+# LICENSE, NOTICE, llms*.txt, scripts/**, .ai-docs/**, .env.example
+#
+# workflow_dispatch always runs (manual prerelease / force publish).
 on:
   pull_request:
     branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "deploy/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "docker-compose.local.yml"
+      - ".github/workflows/build.yml"
   push:
     branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "deploy/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "docker-compose.local.yml"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 env:
