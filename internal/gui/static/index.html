@@ -141,6 +141,8 @@
   .brand h1 span { color: var(--green-light); }
   .sub { color: var(--muted); font-size: 12px; text-shadow: 0 0 12px rgba(0,0,0,0.9); }
   .brand-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  /* Balances are post-auth only — never show on the login screen. */
+  body:not(.authed) .brand-chips { display: none; }
   .header-spacer { flex: 1; min-width: 40px; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .chip {
@@ -1014,10 +1016,19 @@ async function copySecret(kind, btn) {
   } catch (e) { console.error(e); }
 }
 
+function clearHeaderBalances() {
+  const morEl = document.getElementById('availMorChip');
+  const gasEl = document.getElementById('gasChip');
+  if (morEl) morEl.textContent = 'Available MOR: —';
+  if (gasEl) gasEl.textContent = 'Gas: —';
+}
+
 function setLoggedIn(on) {
+  document.body.classList.toggle('authed', !!on);
   document.getElementById('app').classList.toggle('hidden', !on);
   document.getElementById('login-wrap').classList.toggle('hidden', on);
   document.getElementById('logoutBtn').classList.toggle('hidden', !on);
+  if (!on) clearHeaderBalances();
 }
 
 function logout() {
