@@ -1,6 +1,6 @@
 # 5. Updates & portability
 
-[← Apps](04-clients.md) · [Guide home](README.md)
+[← Apps](04-clients.md) · [Guide home](README.md) · [Next: Developers →](06-developers.md)
 
 ---
 
@@ -27,4 +27,4 @@ Avoid baking RPC or wallet keys into the image — inject at runtime. Nothing re
 
 ---
 
-[← Apps](04-clients.md) · [Guide home](README.md)
+[← Apps](04-clients.md) · [Guide home](README.md) · [Next: Developers →](06-developers.md)
