@@ -1,0 +1,27 @@
+# Uplink — documentation index for AI agents
+
+> Read AGENTS.md first. Full corpus: llms-full.txt
+> Repo: https://github.com/absgrafx/Morpheus-Uplink
+
+## Core
+
+- [AGENTS.md](AGENTS.md): Hard rules and navigation for agents
+- [README.md](README.md): Product overview, local dev, env vars
+- [DISCLAIMER.md](DISCLAIMER.md): Self-custody and operator risk notice
+- [LICENSE](LICENSE): MIT (ABSGrafx LLC)
+- [NOTICE](NOTICE): Third-party licenses (e.g. go-ethereum LGPL)
+- [llms-full.txt](llms-full.txt): Concatenated operator corpus
+
+## Operator guide
+
+- [Uplink operator guide](docs/README.md): Uplink is your personal gateway to the [Morpheus](https://mor.org) network: an OpenAI-compatible HTTPS endpoint backed by your own consumer proxy-router (C-Node
+- [1. Prerequisites](docs/01-prerequisites.md): What you need before compose. Skip anything you already have.
+- [2. Bootstrap](docs/02-bootstrap.md): First boot → funded wallet → GUI login. No git clone — download the published compose from the [latest release](https://github.com/absgrafx/Morpheus-Uplin
+- [3. GUI basics](docs/03-gui.md): One topic at a time. You do not need every section on day one.
+- [4. Apps & agents](docs/04-clients.md): Uplink speaks OpenAI-compatible HTTP. Almost every OpenAI client works with three fields.
+- [5. Updates & portability](docs/05-updates.md): 1. GUI header may show a new release chip when [GitHub Releases](https://github.com/absgrafx/Morpheus-Uplink/releases) is ahead of the running build (notify onl
+- [Uplink user guide](docs/USER_GUIDE.md): The operator guide is split into short chapters so you can open one topic at a time:
+
+## Design (optional)
+
+- [.ai-docs/UPLINK_CONCEPT.md](.ai-docs/UPLINK_CONCEPT.md): Architecture and product rationale

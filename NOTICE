@@ -1,0 +1,23 @@
+Uplink
+Copyright (c) 2026 ABSGrafx LLC
+
+This product is licensed under the MIT License — see LICENSE.
+
+-------------------------------------------------------------------------------
+Third-party notices
+
+go-ethereum (github.com/ethereum/go-ethereum)
+  Copyright The go-ethereum Authors
+  Licensed under the GNU Lesser General Public License v3.0 (LGPL-3.0).
+  Uplink links this library for optional on-chain reclaim / stake reads.
+  Source: https://github.com/ethereum/go-ethereum
+  License text: https://www.gnu.org/licenses/lgpl-3.0.html
+
+When you redistribute Uplink binaries that include go-ethereum, LGPL
+obligations may apply (including offering corresponding source or object
+files for the LGPL-covered portions as required by that license). The MIT
+terms still apply to Uplink's own source.
+
+Other transitive dependencies are listed in go.mod / go.sum; consult each
+module's license before redistribution.
+-------------------------------------------------------------------------------

@@ -4,6 +4,8 @@
 
 What you need before compose. Skip anything you already have.
 
+Read the short [DISCLAIMER](../DISCLAIMER.md) first — self-custody, experimental software, and the fact that **any inference key can escrow MOR** from this wallet.
+
 | Need | Why | Links |
 |------|-----|--------|
 | **Host that runs Docker Compose + HTTPS** | Runs Uplink + proxy-router + TLS | [SecretVM](https://docs.scrt.network/) (guided secrets), or any Docker VPS ([Hetzner](https://www.hetzner.com/), [DigitalOcean](https://www.digitalocean.com/), …). Pull the published compose from [releases](https://github.com/absgrafx/Morpheus-Uplink/releases/latest) — no git clone. TEE-adjacent: [Phala Cloud](https://cloud.phala.network) / [dstack](https://github.com/Dstack-TEE/dstack). |
