@@ -30,7 +30,8 @@ There is no separate docs host or MCP for Uplink.
 | GUI, keys, MOR buckets, Probe | [`docs/03-gui.md`](docs/03-gui.md) |
 | Clients / agents (`/v1`) | [`docs/04-clients.md`](docs/04-clients.md) |
 | Updates & portability | [`docs/05-updates.md`](docs/05-updates.md) |
-| Dev / env / layout | [`README.md`](README.md) |
+| Developers (local / CI / env / layout) | [`docs/06-developers.md`](docs/06-developers.md) |
+| Product + SecretVM CTA | [`README.md`](README.md) |
 
 ## Hard rules — never break these
 
@@ -107,7 +108,7 @@ There is no separate docs host or MCP for Uplink.
 | Where is my MOR? / daylock | [`docs/03-gui.md`](docs/03-gui.md#where-is-my-mor) |
 | How do I call from Cursor / SDK? | [`docs/04-clients.md`](docs/04-clients.md) |
 | How do I update? | [`docs/05-updates.md`](docs/05-updates.md) |
-| Env vars / local dev | [`README.md`](README.md) |
+| Env vars / local dev / CI | [`docs/06-developers.md`](docs/06-developers.md) |
 | Hosted API without my node? | [apidocs.mor.org](https://apidocs.mor.org) — **not this repo** |
 | Raw C-Node / sessions / TEE myths | [nodedocs.mor.org](https://nodedocs.mor.org) / Lumerin `AGENTS.md` |
 
@@ -117,8 +118,8 @@ There is no separate docs host or MCP for Uplink.
 AGENTS.md            ← you are here
 llms.txt             page index for agents
 llms-full.txt        full markdown corpus
-README.md            product overview + local/dev
-docs/                operator guide (01–05)
+README.md            product + SecretVM CTA + key notes
+docs/                operator guide (01–05) + developers (06)
 .ai-docs/            design concept (not required for ops)
 cmd/uplink/          Go entrypoint
 internal/            gateway packages (api, pool, router, keys, gui, …)

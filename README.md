@@ -1,161 +1,100 @@
-# Uplink
+<p align="center">
+  <img src="docs/assets/readme-hero.png" alt="Uplink — matrix green rotary phone, your own line into Morpheus" width="920">
+</p>
 
-**Your personal gateway to the Morpheus decentralized AI network.**
+<h1 align="center">Uplink</h1>
 
-**License:** [MIT](LICENSE) (ABSGrafx LLC) · **Disclaimer:** [DISCLAIMER.md](DISCLAIMER.md) · [NOTICE](NOTICE)
+<p align="center">
+  <strong>Your personal gateway to the Morpheus decentralized AI network.</strong>
+</p>
 
-**Agents / coding assistants:** start at [`AGENTS.md`](AGENTS.md)
-([`llms.txt`](llms.txt) index · [`llms-full.txt`](llms-full.txt) full corpus).
-
-**Operator guide (short chapters):**  
-[docs/README.md](docs/README.md) — prerequisites → bootstrap → GUI → apps → updates
+<p align="center">
+  <a href="LICENSE">MIT</a> ·
+  <a href="DISCLAIMER.md">Disclaimer</a> ·
+  <a href="NOTICE">NOTICE</a>
+  &nbsp;·&nbsp;
+  <a href="docs/README.md">Operator guide</a> ·
+  <a href="docs/04-clients.md">Clients</a> ·
+  <a href="docs/06-developers.md">Developers</a>
+  &nbsp;·&nbsp;
+  <a href="AGENTS.md">Agents</a>
+</p>
 
 > Self-custodial and experimental: you hold the wallet keys; any Prompt key can
 > lock MOR on that wallet; prompts go to third-party providers. Read
 > [DISCLAIMER.md](DISCLAIMER.md) before you fund a box or share a key.
 
-The hosted API gateway is a party line — everyone on one wire. Uplink is
-your own line in: a single small Go service that turns a Morpheus
-**consumer proxy-router (C-Node)** into a personal, OpenAI-compatible API
-gateway:
+## What it is
 
-- `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models` with
-  **Bearer `sk-…` keys** (any OpenAI SDK works as-is)
-- **Automatic session management** — resolves model name → blockchain id,
-  opens/reuses one session per model, retries once on a broken session
-- **Usage metering** per key / model / day (JSON file, SQLite later)
-- **Admin GUI** at `/gui` — balance, keys CRUD, open sessions, usage
-- **`/node/*` passthrough** to the raw router API (admin-gated, injects the
-  router's basic auth) — e.g. `/node/swagger/index.html`
+The hosted Morpheus API ([api.mor.org](https://api.mor.org)) is a **shared**
+gateway — many users, pooled sessions, credits billed by Morpheus.
 
-Concept doc: `../.ai-docs/UPLINK_CONCEPT.md` (+ architecture PNG).
+**Uplink is the opposite:** *your* OpenAI-compatible HTTPS front door on *your*
+machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 
-## Key model (two built-in keys + generated keys)
+- Same shape clients already know: `POST /v1/chat/completions`, embeddings,
+  `GET /v1/models`, Bearer `sk-…` keys
+- Sessions open and reuse automatically (model name → on-chain session)
+- Admin GUI at `/gui` — balances, keys, Probe, usage
+- You pay providers in MOR from the wallet you fund — no multi-tenant credits
 
-| Key | Derivation | Can prompt (`/v1/*`) | Can admin (`/admin/*`, `/node/*`) |
-|---|---|---|---|
-| **Master** `sk-uplink.…` | HMAC(seed, master label) | yes | yes (Bearer, same power as the admin password) |
-| **Prompt** `sk-prompt.…` | HMAC(seed, prompt label) | yes | no — safe default to paste into clients |
-| Generated `sk-…` | random, hash stored | yes | no |
+## Get running (SecretVM)
 
-The GUI itself logs in with the Basic-auth admin password; the master key
-exists so automation/IaC can hit the admin API without that password.
+**Fastest path:** [SecretVM](https://docs.scrt.network/) (Secret Labs) → paste
+the release compose → Encrypted Secrets → fund → Probe → point a client at
+`/v1`. Do **not** `git clone` for production — use the
+[latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
 
-The proxy-router underneath has its own per-method Basic-auth whitelists
-(`proxy.conf` / `/auth/users`); UPLINK currently uses one full-power router
-credential and enforces division at its own layer. Future hardening: give
-the gateway a router user whitelisted to only the methods it needs.
+| Step | Do this |
+|------|---------|
+| **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
+| **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest). |
+| **3. Secrets** | Fill Encrypted Secrets (block below). First boot may use `WEB_PUBLIC_URL=https://localhost`. |
+| **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
+| **5. Hostname** | Set `WEB_PUBLIC_URL=https://….vm.scrtlabs.com` to your public host, restart once. |
+| **6. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
+| **7. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
+| **8. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
 
-## Design invariants
-
-- **State is disposable.** Both built-in API keys are derived from
-  `API_KEY_SEED` (HMAC-SHA256), so they survive a full storage wipe:
-  redeploy with the same secrets block, same keys keep working. Sessions
-  and funds live on-chain and recover through the wallet key. Only
-  *generated* extra keys and usage history are lost on a wipe —
-  acceptable, and exactly why the derived keys exist. This is deliberate
-  armor against flaky VPS persistent storage.
-- **Only the gateway is exposed.** The router's `:8082` never faces the
-  internet; `/node/*` is the audited path to it. A consumer node needs **no
-  inbound `:3333`** — it dials out to providers.
-- **Zero external services.** No Postgres, no Redis, no cloud auth. Stdlib
-  Go, one JSON state file.
-
-## Local development
-
-Two ways to run:
-
-### Full stack (docker compose, needs a funded wallet)
+<details>
+<summary><strong>Encrypted Secrets (copy / paste)</strong></summary>
 
 ```bash
-cp .env.example .env    # wallet key, RPC, passwords, seed
-docker compose -f docker-compose.local.yml up --build
+WALLET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
+ADMIN_PASSWORD=YOUR_GUI_PASSWORD
+API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
+WEB_PUBLIC_URL=https://localhost
 ```
 
-- Gateway: http://localhost:8080 — GUI at `/gui`
-- Router (localhost only, debugging): http://localhost:8082
+`openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
+Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
-Then from any OpenAI client:
+</details>
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer $(uplink master key from /gui)" \
+curl -s https://YOUR_HOST/v1/chat/completions \
+  -H "Authorization: Bearer sk-prompt.…" \
   -H "Content-Type: application/json" \
-  -d '{"model":"llama-3.3-70b","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"Aion 3.0 Mini","messages":[{"role":"user","content":"hi"}],"max_tokens":64}'
 ```
 
-### Gateway only (against any reachable router)
+Exact model names from Probe / `GET /v1/models` / [active.mor.org](https://active.mor.org).
+More clients: [docs/04-clients.md](docs/04-clients.md).
 
-```bash
-export ROUTER_URL=http://localhost:8082 ROUTER_AUTH=admin:pass \
-       ADMIN_PASSWORD=devpass API_KEY_SEED=$(openssl rand -hex 32)
-go run ./cmd/uplink
-```
+## Things worth knowing
 
-### Tests
+- **Not the hosted APIGW.** No Morpheus credits account, no shared pool with
+  strangers. One wallet, one gateway, your ops.
+- **Any Prompt / ephemeral key can lock MOR** from that wallet. Treat keys like
+  spend authority; keep Master off shared machines.
+- **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
+  Generated (ephemeral) keys and local usage history do not — export them if
+  you care. Sessions and stake live on-chain with the wallet.
+- **Deploy from release assets**, not a git checkout. Images are digest-pinned
+  for SecretVM / compose.
+- **Only expose the gateway** (HTTPS). The router admin port stays private.
 
-`go test ./...` — includes an end-to-end test against a mock router
-(auth → session open → chat forward → usage record), no wallet needed.
-
-## Environment variables
-
-| Var | Required | Default | Purpose |
-|---|---|---|---|
-| `ROUTER_URL` | — | `http://proxy-router:8082` | C-Node admin API |
-| `ROUTER_AUTH` | yes | — | Router basic auth, `user:pass` (`COOKIE_CONTENT` accepted as fallback, so one secret feeds both containers) |
-| `ADMIN_PASSWORD` | yes | — | GUI/admin login (user `admin`) |
-| `API_KEY_SEED` | yes | — | Master-key derivation seed (`openssl rand -hex 32`) |
-| `UPLINK_LISTEN` | — | `:8080` | Listen address |
-| `DATA_DIR` | — | `./data` | JSON state file location |
-| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/active_models.json` | Model catalog |
-| `SESSION_DURATION_SECONDS` | — | `600` | Per-session duration (stake scales with this) |
-| `SESSION_FAILOVER` | — | `true` | Router-side provider failover at open |
-| `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment instead of stake |
-| `CLOSE_SESSIONS_ON_EXIT` | — | `true` | Close pooled sessions on shutdown |
-
-## CI/CD and versioning
-
-Semantic versioning mirrors Morpheus-Lumerin-Node's scheme, adapted to a
-single component:
-
-- **Feature branch → PR to `main`** runs vet + tests.
-- **Merge to `main`** computes the next tag from the last clean `vX.Y.Z`
-  tag (**patch** bump by default, `#minor` / `#major` in the merge commit
-  message to bump higher, floor pinned in `.github/workflows/build.yml`),
-  builds the multi-arch image, pushes `ghcr.io/absgrafx/uplink:{vX.Y.Z,latest}`,
-  and creates a GitHub release with **digest-pinned compose + env examples**
-  (`docker-compose.secretvm.deployed.yml`, `docker-compose.generic.deployed.yml`,
-  `env.*.example`) — download those assets; do not clone the repo to run.
-- **workflow_dispatch on a branch** publishes a prerelease image
-  `vX.Y.N-<branch>` (no release, no `latest`).
-
-Publishing uses the workflow `GITHUB_TOKEN`; no PAT required. One-time
-setup: after the first push, flip the `uplink` package to **public** in
-GHCR package settings so SecretVM can pull anonymously.
-
-## Deployment
-
-Step-by-step (wallet, RPC, secrets, DNS, Probe, clients): **[docs/README.md](docs/README.md)**.
-
-| Target | Compose (from [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest)) |
-|--------|---------|
-| **SecretVM** | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example`. Encrypted Secrets; Traefik + platform certs. |
-| **Any Docker VPS** | `docker-compose.generic.deployed.yml` + `env.generic.example`. Same images, `.env`, Caddy + Let’s Encrypt (`PUBLIC_HOST`). |
-| **TEE / compose clouds** | Same portable unit (compose + runtime secrets + TLS). Phala/dstack fit the generic pattern. |
-
-Base network config on SecretVM (chain ID, Blockscout, Diamond, MOR token) is a
-compose `configs` mount — **not** Encrypted Secrets.
-
-## Layout
-
-```
-cmd/uplink/          entrypoint
-internal/config/     env config
-internal/keys/       sk-… generation, deterministic master key
-internal/store/      JSON state (keys, usage), atomic writes
-internal/catalog/    active.mor.org model name → blockchain id
-internal/router/     proxy-router client (sessions, balance, forward)
-internal/pool/       one-session-per-model pool + invalidation
-internal/api/        HTTP: /v1/*, /admin/*, /node/*, health
-internal/gui/        embedded single-page admin UI
-```
+Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
+Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.

@@ -4,16 +4,21 @@
 
 First boot → funded wallet → GUI login. **No git clone** — download the published compose from the [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest) and pull images from `ghcr.io`.
 
+**Default path is SecretVM** ([Secret Labs](https://docs.scrt.network/)). Use
+generic VPS only if you already run your own Docker + TLS.
+
 ---
 
 ## Pick a compose path
 
 | Path | Best when | Release assets |
 |------|-----------|----------------|
-| **SecretVM** | Encrypted secrets UI + platform TLS | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
+| **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
 | **Any Docker VPS** | You already have a box / Phala / dstack | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 
 Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:latest`
+
+Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
 
 ---
 

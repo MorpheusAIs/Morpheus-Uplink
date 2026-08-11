@@ -8,7 +8,7 @@ Read the short [DISCLAIMER](../DISCLAIMER.md) first — self-custody, experiment
 
 | Need | Why | Links |
 |------|-----|--------|
-| **Host that runs Docker Compose + HTTPS** | Runs Uplink + proxy-router + TLS | [SecretVM](https://docs.scrt.network/) (guided secrets), or any Docker VPS ([Hetzner](https://www.hetzner.com/), [DigitalOcean](https://www.digitalocean.com/), …). Pull the published compose from [releases](https://github.com/absgrafx/Morpheus-Uplink/releases/latest) — no git clone. TEE-adjacent: [Phala Cloud](https://cloud.phala.network) / [dstack](https://github.com/Dstack-TEE/dstack). |
+| **Host that runs Docker Compose + HTTPS** | Runs Uplink + proxy-router + TLS | **Preferred:** [SecretVM](https://docs.scrt.network/) (Secret Labs — Encrypted Secrets + platform TLS). Alternate: any Docker VPS ([Hetzner](https://www.hetzner.com/), [DigitalOcean](https://www.digitalocean.com/), …) or [Phala](https://cloud.phala.network) / [dstack](https://github.com/Dstack-TEE/dstack). Pull compose from [releases](https://github.com/absgrafx/Morpheus-Uplink/releases/latest) — no git clone. |
 | **External wallet (Rabby / MetaMask)** | You fund the *consumer* address; Uplink is not custodial | [Rabby](https://rabby.io/), [MetaMask](https://metamask.io/) |
 | **ETH on Base** | Gas for open / close / reclaim | [Base](https://www.base.org/) |
 | **MOR on Base** | Escrowed when sessions open | Token `0x7431ada8a591c955a994a21710752ef9b882b8e3` — [Uniswap ETH→MOR](https://app.uniswap.org/swap?chain=base&inputCurrency=ETH&outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3) |

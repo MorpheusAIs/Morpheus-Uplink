@@ -16,7 +16,7 @@ FULL="$ROOT/llms-full.txt"
   echo "## Core"
   echo
   echo "- [AGENTS.md](AGENTS.md): Hard rules and navigation for agents"
-  echo "- [README.md](README.md): Product overview, local dev, env vars"
+  echo "- [README.md](README.md): Product overview + SecretVM get-running CTA"
   echo "- [DISCLAIMER.md](DISCLAIMER.md): Self-custody and operator risk notice"
   echo "- [LICENSE](LICENSE): MIT (ABSGrafx LLC)"
   echo "- [NOTICE](NOTICE): Third-party licenses (e.g. go-ethereum LGPL)"
@@ -37,7 +37,7 @@ FULL="$ROOT/llms-full.txt"
     ' "$f" | head -c 160)"
     echo "- [${title}](${rel}): ${desc}"
   done < <(printf '%s\n' docs/README.md docs/01-prerequisites.md docs/02-bootstrap.md \
-    docs/03-gui.md docs/04-clients.md docs/05-updates.md docs/USER_GUIDE.md)
+    docs/03-gui.md docs/04-clients.md docs/05-updates.md docs/06-developers.md docs/USER_GUIDE.md)
   echo
   echo "## Design (optional)"
   echo
@@ -62,7 +62,8 @@ FULL="$ROOT/llms-full.txt"
   cat README.md
   echo
   for f in docs/README.md docs/01-prerequisites.md docs/02-bootstrap.md \
-           docs/03-gui.md docs/04-clients.md docs/05-updates.md docs/USER_GUIDE.md; do
+           docs/03-gui.md docs/04-clients.md docs/05-updates.md docs/06-developers.md \
+           docs/USER_GUIDE.md; do
     echo
     echo "================================================================"
     echo
