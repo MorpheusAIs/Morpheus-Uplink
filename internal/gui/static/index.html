@@ -242,14 +242,22 @@
   button:disabled, button.ghost:disabled {
     opacity: 0.4; cursor: not-allowed; filter: none;
   }
-  .status-health {
-    display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap;
+  .sys-line {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 0;
+    font-size: 13px; color: var(--muted); line-height: 1.5;
+    padding-bottom: 14px; margin-bottom: 2px;
+    border-bottom: 1px solid var(--border);
   }
-  .status-health .stat { min-width: 0; }
-  .health-stack {
-    display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  .sys-line .ver {
+    color: var(--text); font-weight: 600;
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px;
   }
-  .health-stack .pill { width: fit-content; }
+  .sys-line a.ver { color: var(--text); text-decoration: none; }
+  .sys-line a.ver:hover { color: var(--green-light); }
+  .sys-line .ok { color: var(--ok); font-weight: 600; }
+  .sys-line .bad { color: var(--bad); font-weight: 600; }
+  .sys-line .sep { color: var(--border); padding: 0 10px; user-select: none; }
+  .sys-line .sessions { color: var(--text); font-variant-numeric: tabular-nums; }
   .mor-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(180px, 1.35fr);
@@ -317,6 +325,44 @@
   }
   .callout strong { color: var(--green-light); font-size: 14px; }
   .callout.warn strong { color: #fbbf24; }
+  .connect-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 16px 20px;
+    margin-top: 4px;
+  }
+  .connect-field label {
+    display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+  }
+  .connect-field .secret-row { margin-top: 0; width: 100%; }
+  .connect-field .secret-row select {
+    flex: 1; min-width: 0; width: auto;
+  }
+  /* Match select optical size — default <code> is 12px / tight padding. */
+  .connect-field .secret-row code {
+    flex: 1; min-width: 0;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 400;
+    line-height: 1.25;
+    padding: 9px 12px;
+    border-radius: var(--radius);
+  }
+  .connect-hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .connect-hint code { font-size: 11px; }
+  #tab-status .mor-grid { margin-top: 14px; }
+  #tab-status .fund-callout { margin-top: 16px; }
+  #tab-status .support-actions { margin-top: 4px; }
+  /* Keep model picker compact — full-bleed dropdowns get messy on desktop. */
+  .connect-model {
+    grid-column: 1;
+    max-width: 22rem;
+  }
+  @media (max-width: 720px) {
+    .connect-grid { grid-template-columns: 1fr; }
+    .connect-model { grid-column: 1; max-width: none; }
+  }
   .stack { display: grid; gap: 10px; }
   .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 720px) {
@@ -672,17 +718,56 @@
   <main>
     <!-- STATUS -->
     <div class="panel active" id="tab-status">
+      <section id="connectClient">
+        <h2>Connect a client</h2>
+        <p class="note" style="margin:0 0 14px">
+          Three things for Cursor, SDKs, or any OpenAI-compatible harness: base URL, key, model name.
+        </p>
+        <div class="connect-grid">
+          <div class="connect-field">
+            <label for="connectBaseUrl">Base URL</label>
+            <div class="secret-row">
+              <code id="connectBaseUrl">…</code>
+              <button type="button" class="icon" title="Copy base URL" onclick="copyConnectBaseUrl(this)" aria-label="Copy base URL">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="connect-field">
+            <label for="connectKeySelect">API key</label>
+            <div class="secret-row">
+              <select id="connectKeySelect" onchange="onConnectKeyChange()"></select>
+              <button type="button" class="icon" title="Copy API key" onclick="copyConnectKey(this)" aria-label="Copy API key">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="connect-field connect-model">
+            <label for="connectModelSelect">Model <span id="connectModelDurHint" style="font-weight:500;letter-spacing:0;text-transform:none;color:var(--muted)"></span></label>
+            <div class="secret-row">
+              <select id="connectModelSelect" title="Estimated lock uses deploy default session length">
+                <option value="">Loading catalog…</option>
+              </select>
+              <button type="button" class="icon" title="Copy model name" onclick="copyConnectModel(this)" aria-label="Copy model name">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <p class="connect-hint" id="connectKeyHint">
+          Prompt key is inference-only (recommended). Model list shows ~MOR lock for the deploy default session.
+        </p>
+      </section>
+
       <section>
-        <h2>Status</h2>
-        <div class="status-health" id="stats"></div>
+        <h2>Status &amp; wallet</h2>
+        <div class="sys-line" id="stats"></div>
         <div class="mor-grid" id="morBuckets"></div>
         <p class="note" id="morNote" style="margin-top:8px"></p>
-        <div class="callout">
+        <div class="callout fund-callout">
           <strong>Need more MOR?</strong>
           <p class="note" style="margin:4px 0 0">
-            Uplink is not a wallet — fund the consumer address from your own wallet
-            (MetaMask, Rabby, etc.). Swap <b>ETH → MOR</b> on Base, then send MOR
-            (and a little ETH for gas) here.
+            Fund this consumer address from MetaMask / Rabby on Base — swap ETH → MOR, then send MOR plus a little ETH for gas.
           </p>
           <div class="secret-row">
             <span class="note" style="margin:0">Wallet:</span>
@@ -696,16 +781,22 @@
                target="_blank" rel="noopener noreferrer">Get MOR on Uniswap</a>
           </div>
         </div>
-        <div class="row" style="margin-top:12px">
+      </section>
+
+      <section>
+        <h2>Support</h2>
+        <p class="note" style="margin:0 0 12px">
+          Bundle exports versions, health, sessions, and reclaim status — no private keys.
+          Container logs: host <code>docker logs</code> or your VPS log panel.
+        </p>
+        <div class="row support-actions">
           <button class="ghost" type="button" onclick="downloadSupportBundle()">Download support bundle</button>
           <span class="note" id="supportMsg" style="margin:0"></span>
         </div>
-        <p class="note" style="margin-top:10px">
-          Container / proxy-router logs are not streamed here yet — use your host’s
-          <code>docker logs</code> or VPS log panel for deep diagnosis. The support bundle
-          exports versions, health, sessions, and reclaim status (no private keys).
+        <p class="note" style="margin-top:12px">
+          Raw node API (Swagger):
+          <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a>
         </p>
-        <div class="note">Raw node API (Swagger): <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a></div>
       </section>
     </div>
 
@@ -934,6 +1025,7 @@ let keyLabels = {}; // usage keyId -> "Name (abcd1234)"
 let lastClaimableWei = '0';
 let liquidWei = '0';
 let modelStakes = {}; // model name -> { stakeWei, stakeMor }
+let modelStakesDurationSec = 0; // duration used when modelStakes was last filled
 let stakesSeq = 0;
 let curlDirty = false;
 let reclaimReady = false;
@@ -1029,6 +1121,7 @@ function setLoggedIn(on) {
   document.getElementById('login-wrap').classList.toggle('hidden', on);
   document.getElementById('logoutBtn').classList.toggle('hidden', !on);
   if (!on) clearHeaderBalances();
+  else refreshConnectBaseUrl();
 }
 
 function logout() {
@@ -1129,20 +1222,7 @@ async function doRefresh() {
     setHeaderBalances(mor.liquidWei ?? bal.mor, bal.eth);
     checkForUpdate(st.version || 'dev');
 
-    const uplinkVer = 'uplink ' + (st.version || 'dev');
-    const routerVer = rv ? ('router ' + rv) : 'router …';
-    const routerOk = !st.routerError;
-    const uplinkOk = true; // status response reached the GUI
-    document.getElementById('stats').innerHTML =
-      `<div class="health-stack">
-         <a class="pill ok" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node on GitHub">${escapeHtml(routerVer)}</a>
-         <span class="pill ${routerOk ? 'ok' : 'bad'}">${routerOk ? 'healthy' : 'unhealthy'}</span>
-       </div>` +
-      `<div class="health-stack">
-         <span class="pill ok" id="uplinkChip" title="Uplink version">${escapeHtml(uplinkVer)}</span>
-         <span class="pill ${uplinkOk ? 'ok' : 'bad'}">${uplinkOk ? 'healthy' : 'unhealthy'}</span>
-       </div>` +
-      `<div class="stat"><div class="v">${(st.sessions || []).length}</div><div class="k">Open sessions</div></div>`;
+    renderSysLine(st.version || 'dev', rv, !st.routerError, (st.sessions || []).length);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
     const lockedWei = mor.onHoldLockedWei != null ? String(mor.onHoldLockedWei) : null;
@@ -1210,10 +1290,30 @@ async function doRefresh() {
     renderSessions(visible, st.sessionsError || '');
 
     await refreshKeys();
+    if (!allModels.length) loadModels().catch(() => {});
 
     const us = await api('/admin/usage');
     renderUsage(us.usage || []);
   } catch (e) { console.error(e); }
+}
+
+function renderSysLine(uplinkVer, routerVer, routerOk, openSessions) {
+  const el = document.getElementById('stats');
+  if (!el) return;
+  const up = escapeHtml(String(uplinkVer).replace(/^v?/, 'v'));
+  const rt = routerVer ? escapeHtml(String(routerVer).replace(/^v?/, 'v')) : '—';
+  const health = routerOk
+    ? '<span class="ok">Healthy</span>'
+    : '<span class="bad">Router unhealthy</span>';
+  const n = Number(openSessions) || 0;
+  el.innerHTML =
+    `<span class="ver" id="uplinkChip" title="Uplink">Uplink ${up}</span>` +
+    `<span class="sep">·</span>` +
+    `<a class="ver" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node">Router ${rt}</a>` +
+    `<span class="sep">·</span>` +
+    health +
+    `<span class="sep">·</span>` +
+    `<span class="sessions">${n} open session${n === 1 ? '' : 's'}</span>`;
 }
 
 function setSessNote(msg) {
@@ -1254,7 +1354,133 @@ async function refreshKeys() {
   renderGeneratedKeys(ks.keys || []);
   rebuildKeyLabels(ks);
   populatePgKeys(ks);
+  populateConnectClient(ks);
   return ks;
+}
+
+function connectBaseUrl() {
+  return location.origin.replace(/\/$/, '') + '/v1';
+}
+
+function refreshConnectBaseUrl() {
+  const url = connectBaseUrl();
+  const el = document.getElementById('connectBaseUrl');
+  if (el) el.textContent = url;
+}
+
+function populateConnectClient(ks) {
+  refreshConnectBaseUrl();
+  const sel = document.getElementById('connectKeySelect');
+  if (!sel) return;
+  const prev = sel.value || 'prompt';
+  const opts = [
+    { id: 'prompt', label: formatKeyLabel('Prompt (recommended)', ks.promptKey || secrets.prompt, 'prompt') },
+  ];
+  for (const k of (ks.keys || [])) {
+    const secret = k.secret || generatedKeySecrets[k.id] || '';
+    opts.push({ id: k.id, label: formatKeyLabel(k.name || k.id, secret, k.id) });
+  }
+  sel.innerHTML = opts.map(o =>
+    `<option value="${escapeAttr(o.id)}">${escapeHtml(o.label)}</option>`
+  ).join('');
+  sel.value = opts.some(o => o.id === prev) ? prev : 'prompt';
+  onConnectKeyChange();
+}
+
+function connectKeySecret() {
+  const id = document.getElementById('connectKeySelect')?.value || 'prompt';
+  if (id === 'prompt') return secrets.prompt || '';
+  const fromGen = generatedKeySecrets[id];
+  if (fromGen) return fromGen;
+  const row = (window.__lastEphemeralKeys || []).find(k => k.id === id);
+  return (row && row.secret) || '';
+}
+
+function onConnectKeyChange() {
+  const id = document.getElementById('connectKeySelect')?.value || 'prompt';
+  const hint = document.getElementById('connectKeyHint');
+  if (!hint) return;
+  if (id === 'prompt') {
+    hint.textContent = 'Prompt key is inference-only (recommended). Ephemeral keys work the same — create more on the API Keys tab. Master stays on API Keys only.';
+  } else {
+    hint.textContent = 'Ephemeral key — inference only. Export it from API Keys if you need it after a redeploy.';
+  }
+}
+
+function flashIconCopied(btn) {
+  if (!btn) return;
+  btn.style.borderColor = 'var(--green-light)';
+  setTimeout(() => { btn.style.borderColor = ''; }, 1200);
+}
+
+async function copyConnectBaseUrl(btn) {
+  try {
+    await navigator.clipboard.writeText(connectBaseUrl());
+    flashIconCopied(btn);
+  } catch (e) { console.error(e); }
+}
+
+async function copyConnectKey(btn) {
+  const full = connectKeySecret();
+  if (!full) return;
+  try {
+    await navigator.clipboard.writeText(full);
+    flashIconCopied(btn);
+  } catch (e) { console.error(e); }
+}
+
+function connectDefaultDurationSec() {
+  return Math.max(MIN_SESSION_DURATION, Number(defaultSessionDuration) || 600);
+}
+
+/** Scale Probe-duration stake to deploy-default session length (stake ∝ duration). */
+function connectStakeMor(id) {
+  const st = modelStakes[id];
+  if (!st || !Number.isFinite(st.stakeMor) || st.stakeMor <= 0) return null;
+  const fromDur = modelStakesDurationSec || probeDurationSec();
+  const toDur = connectDefaultDurationSec();
+  if (!fromDur || fromDur === toDur) return st.stakeMor;
+  return st.stakeMor * (toDur / fromDur);
+}
+
+function connectModelOptionLabel(id) {
+  const stake = connectStakeMor(id);
+  // Duration/unit live in the field label — keep options to name + lock amount.
+  if (stake != null) {
+    return id + '\u2003\u2003~\u202f' + fmtMorRate(stake);
+  }
+  return id;
+}
+
+function populateConnectModels() {
+  const sel = document.getElementById('connectModelSelect');
+  if (!sel) return;
+  const hint = document.getElementById('connectModelDurHint');
+  const dur = connectDefaultDurationSec();
+  if (hint) hint.textContent = '(~MOR lock · ' + fmtDuration(dur) + ' default)';
+  const prev = sel.value || selectedModel || '';
+  if (!allModels.length) {
+    sel.innerHTML = '<option value="">Catalog unavailable — open Probe or retry</option>';
+    return;
+  }
+  const ids = allModels.map(m => m.id).sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = ids.map(id =>
+    `<option value="${escapeAttr(id)}">${escapeHtml(connectModelOptionLabel(id))}</option>`
+  ).join('');
+  if (prev && ids.includes(prev)) sel.value = prev;
+  else if (selectedModel && ids.includes(selectedModel)) sel.value = selectedModel;
+  else sel.selectedIndex = 0;
+}
+
+async function copyConnectModel(btn) {
+  const sel = document.getElementById('connectModelSelect');
+  const id = (sel && sel.value) || '';
+  if (!id) return;
+  try {
+    // Copy bare catalog id — not the stake annotation in the option label.
+    await navigator.clipboard.writeText(id);
+    flashIconCopied(btn);
+  } catch (e) { console.error(e); }
 }
 
 function keyFingerprint(secret) {
@@ -1804,6 +2030,7 @@ function refreshModelStakes() {
     if (!auth) {
       // Preview mode: fake stakes from MOR/h × hours (display only).
       modelStakes = {};
+      modelStakesDurationSec = dur;
       for (const m of allModels) {
         const rate = Number(m.priceMorPerHour) || 0;
         if (rate <= 0) continue;
@@ -1811,6 +2038,7 @@ function refreshModelStakes() {
         modelStakes[m.id] = { stakeWei: String(Math.round(stakeMor * 1e18)), stakeMor, preview: true };
       }
       filterModels();
+      populateConnectModels();
       return;
     }
     try {
@@ -1818,6 +2046,7 @@ function refreshModelStakes() {
       if (seq !== stakesSeq) return;
       if (data.liquidWei != null) liquidWei = String(data.liquidWei);
       modelStakes = {};
+      modelStakesDurationSec = Number(data.durationSec) || dur;
       for (const row of (data.models || [])) {
         modelStakes[row.model] = {
           stakeWei: String(row.stakeWei || '0'),
@@ -1826,10 +2055,12 @@ function refreshModelStakes() {
         };
       }
       filterModels();
+      populateConnectModels();
     } catch (e) {
       if (seq !== stakesSeq) return;
       console.warn('estimate-stakes failed', e);
       filterModels();
+      populateConnectModels();
     }
   }, 220);
 }
@@ -1984,8 +2215,10 @@ async function loadModels() {
     });
     filterModels();
     refreshModelStakes();
+    populateConnectModels();
   } catch (e) {
     box.innerHTML = `<div class="note" style="padding:12px">Catalog error: ${escapeHtml(e.message)}</div>`;
+    populateConnectModels();
   }
 }
 
@@ -2267,16 +2500,7 @@ function enterUiPreview() {
   liquidWei = String(135864n * 10n ** 14n); // 13.5864 MOR
   const ethWei = String(374n * 10n ** 13n); // 0.00374 ETH
   setHeaderBalances(liquidWei, ethWei);
-  document.getElementById('stats').innerHTML =
-    `<div class="health-stack">
-       <a class="pill ok" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer">router preview</a>
-       <span class="pill ok">healthy</span>
-     </div>` +
-    `<div class="health-stack">
-       <span class="pill ok" id="uplinkChip">uplink preview</span>
-       <span class="pill ok">healthy</span>
-     </div>` +
-    `<div class="stat"><div class="v">0</div><div class="k">Open sessions</div></div>`;
+  renderSysLine('preview', 'preview', true, 0);
   document.getElementById('morBuckets').innerHTML =
     `<div class="stat"><div class="v">13.5864 MOR</div><div class="k">Wallet</div></div>` +
     `<div class="stat"><div class="v">0 MOR</div><div class="k">Active</div></div>` +
@@ -2301,6 +2525,7 @@ function enterUiPreview() {
   selectedModel = 'glm-5.2';
   document.getElementById('selectedModel').textContent = selectedModel;
   keyLabels = { prompt: 'Prompt (abcd1234)', '26828ebd': 'test1 (5647d122)' };
+  populateConnectModels();
   refreshModelStakes();
   updateCurlPreview();
   console.info('Uplink UI preview mode — visual only. Live stake estimate needs /admin/estimate-stakes.');
