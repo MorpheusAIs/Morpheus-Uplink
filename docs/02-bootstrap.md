@@ -22,6 +22,19 @@ Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--
 
 ---
 
+## SecretVM disk hygiene
+
+Small SecretVM instances have about 20 GB of disk. The published compose files
+use Docker's `json-file` logging with rotation enabled by default at `20m` x 3
+files per service, limiting retained container logs while keeping a short
+history.
+
+This does **not** auto-wipe volumes. Do not schedule `docker system prune -a`
+as a cron job, and do not hand-delete `*-json.log` files; investigate storage
+and use the documented update path instead.
+
+---
+
 ## Secrets
 
 Generate a seed once: `openssl rand -hex 32`

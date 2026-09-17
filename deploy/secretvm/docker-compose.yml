@@ -12,6 +12,12 @@
 # Split for a clean secrets form:
 #   - Real secrets / user knobs: environment substitutions below (prompted)
 #   - Base network config: configs router_network_env (NOT prompted)
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   uplink:
     # Template only - for real deployments use the digest-pinned
@@ -19,6 +25,7 @@ services:
     # ROUTER_URL and DATA_DIR defaults are baked into the image.
     image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
@@ -45,6 +52,7 @@ services:
   proxy-router:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
@@ -66,6 +74,7 @@ services:
   traefik:
     image: traefik:v2.10
     restart: unless-stopped
+    logging: *default-logging
     command:
       - --api.insecure=false
       - --providers.docker=true
