@@ -6,10 +6,17 @@
 #
 # Gateway:  http://localhost:8080          (OpenAI-compatible /v1, GUI at /gui)
 # Router:   http://localhost:8082          (only bound to localhost for debugging)
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   proxy-router:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
@@ -31,6 +38,7 @@ services:
   uplink:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - proxy-router
     environment:
