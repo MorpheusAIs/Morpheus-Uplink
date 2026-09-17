@@ -48,6 +48,8 @@ type Config struct {
 	WalletPrivateKey string
 	EthNodeChainID   int64
 	Housekeeping     bool
+	// Retention for admin usage-history prune (POST /admin/disk/prune-usage).
+	UsagePruneDays int
 }
 
 func FromEnv() (*Config, error) {
@@ -68,7 +70,8 @@ func FromEnv() (*Config, error) {
 		WalletPrivateKey:    os.Getenv("WALLET_PRIVATE_KEY"),
 		EthNodeChainID:      int64(getenvInt("ETH_NODE_CHAIN_ID", 8453)),
 		// On when a wallet key is present unless explicitly disabled.
-		Housekeeping: getenvBool("HOUSEKEEPING", os.Getenv("WALLET_PRIVATE_KEY") != ""),
+		Housekeeping:   getenvBool("HOUSEKEEPING", os.Getenv("WALLET_PRIVATE_KEY") != ""),
+		UsagePruneDays: getenvInt("USAGE_PRUNE_DAYS", 30),
 	}
 
 	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.

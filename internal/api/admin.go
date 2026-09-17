@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -98,10 +99,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	status := map[string]any{
-		"version":               Version,
-		"sessions":              sessions, // on-chain opens (pooled flagged)
-		"poolSessions":          s.pool.Snapshot(),
-		"sessionDurationSec":    s.cfg.SessionDurationSec,
+		"version":                Version,
+		"sessions":               sessions, // on-chain opens (pooled flagged)
+		"poolSessions":           s.pool.Snapshot(),
+		"sessionDurationSec":     s.cfg.SessionDurationSec,
 		"sessionDurationDefault": s.cfg.SessionDurationSec,
 	}
 	if msg := s.pool.RehydrateError(); msg != "" {
@@ -123,12 +124,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	activeWei := s.pool.ActiveStakeWei()
 	mor := map[string]any{
-		"liquidWei":           bigStr(liquidWei),
-		"activeWei":           activeWei.String(),
-		"onHoldClaimableWei":  nil,
-		"onHoldLockedWei":     nil,
-		"nextUnlockUTC":       chain.NextUTCMidnight(time.Now()).Format(time.RFC3339),
-		"onHoldConfigured":    s.cfg.EthNodeAddress != "",
+		"liquidWei":          bigStr(liquidWei),
+		"activeWei":          activeWei.String(),
+		"onHoldClaimableWei": nil,
+		"onHoldLockedWei":    nil,
+		"nextUnlockUTC":      chain.NextUTCMidnight(time.Now()).Format(time.RFC3339),
+		"onHoldConfigured":   s.cfg.EthNodeAddress != "",
 	}
 	if s.cfg.EthNodeAddress != "" {
 		addr, err := s.router.WalletAddress()
@@ -149,6 +150,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"last":         s.housekeep.Last(),
 		}
 	}
+
+	// Free-space for / and DATA_DIR — never include wallet/cookie/Bearer material.
+	status["disk"] = collectDiskStatus("/", s.cfg.DataDir)
 
 	writeJSON(w, http.StatusOK, status)
 }
@@ -273,17 +277,17 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"model":              modelName,
-		"modelId":            modelID,
-		"durationSec":        durationSec,
-		"priceMorPerHour":    rate,
-		"pricePerSecondWei":  pps.String(),
-		"stakeWei":           stake.String(),
-		"sessionCostWei":     new(big.Int).Mul(pps, big.NewInt(int64(durationSec))).String(),
-		"supplyWei":          supply.String(),
-		"budgetWei":          budget.String(),
-		"minDurationSec":     600,
-		"explanation":        "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget — not MOR/h × hours.",
+		"model":             modelName,
+		"modelId":           modelID,
+		"durationSec":       durationSec,
+		"priceMorPerHour":   rate,
+		"pricePerSecondWei": pps.String(),
+		"stakeWei":          stake.String(),
+		"sessionCostWei":    new(big.Int).Mul(pps, big.NewInt(int64(durationSec))).String(),
+		"supplyWei":         supply.String(),
+		"budgetWei":         budget.String(),
+		"minDurationSec":    600,
+		"explanation":       "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget — not MOR/h × hours.",
 	})
 }
 
@@ -365,4 +369,41 @@ func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"closed": true, "sessionId": id})
+}
+
+// handlePruneUsage removes old usage-history rows under DATA_DIR.
+// Body must be {"confirm":"PRUNE_USAGE"}. Keys and open sessions are kept.
+func (s *Server) handlePruneUsage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Confirm != "PRUNE_USAGE" {
+		http.Error(w, `body must be {"confirm":"PRUNE_USAGE"}`, http.StatusBadRequest)
+		return
+	}
+	days := s.cfg.UsagePruneDays
+	if days <= 0 {
+		days = 30
+	}
+	path := s.store.Path()
+	bytesBefore := fileSizeBestEffort(path)
+	removed, err := s.store.PruneUsageOlderThan(days)
+	if err != nil {
+		http.Error(w, "prune usage: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	bytesAfter := fileSizeBestEffort(path)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"removedRows": removed,
+		"bytesBefore": bytesBefore,
+		"bytesAfter":  bytesAfter,
+	})
+}
+
+func fileSizeBestEffort(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
 }

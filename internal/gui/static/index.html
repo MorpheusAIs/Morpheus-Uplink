@@ -352,6 +352,77 @@
   .connect-hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
   .connect-hint code { font-size: 11px; }
   #tab-status .mor-grid { margin-top: 14px; }
+
+  .disk-card { margin-bottom: 0; }
+  .disk-banner {
+    display: none;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    background: rgba(251, 191, 36, 0.08);
+    color: #fbbf24;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .disk-banner.show { display: block; }
+  .disk-meters { display: grid; gap: 12px; margin: 0 0 12px; }
+  @media (min-width: 640px) {
+    .disk-meters { grid-template-columns: 1fr 1fr; }
+  }
+  .disk-meter {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    background: var(--surface-2);
+  }
+  .disk-meter.warn { border-color: rgba(239, 68, 68, 0.55); }
+  .disk-meter .path {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .disk-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .disk-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--green);
+    width: 0%;
+  }
+  .disk-meter.warn .disk-bar > span { background: var(--bad); }
+  .disk-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .disk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
+  .disk-host-hint {
+    display: none;
+    margin-top: 14px;
+  }
+  .disk-host-hint.show { display: block; }
+  .disk-host-hint pre {
+    margin: 8px 0 0;
+    padding: 12px;
+    overflow-x: auto;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+
   #tab-status .fund-callout { margin-top: 16px; }
   #tab-status .support-actions { margin-top: 4px; }
   /* Keep model picker compact — full-bleed dropdowns get messy on desktop. */
@@ -718,6 +789,30 @@
   <main>
     <!-- STATUS -->
     <div class="panel active" id="tab-status">
+      <section class="disk-card" id="diskStatusCard">
+        <h2>Disk</h2>
+        <div class="disk-banner" id="diskWarnBanner">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
+        <div class="disk-meters" id="diskMeters"></div>
+        <div class="disk-actions">
+          <button type="button" class="ghost" id="diskPruneBtn" onclick="pruneUsageHistory()">Clear older usage history</button>
+          <span class="note" id="diskPruneMsg" style="margin:0"></span>
+        </div>
+        <div class="disk-host-hint" id="diskHostHint">
+          <div class="callout warn">
+            <strong>Disk still full — reclaim Docker logs on host</strong>
+            <p class="note" style="margin:4px 0 0">
+              Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
+              <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
+            </p>
+            <pre id="diskHostCommands"># SecretVM
+docker compose -f docker-compose.secretvm.deployed.yml up -d --force-recreate --no-deps uplink proxy-router traefik
+
+# Generic
+docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --no-deps caddy uplink proxy-router</pre>
+          </div>
+        </div>
+      </section>
+
       <section id="connectClient">
         <h2>Connect a client</h2>
         <p class="note" style="margin:0 0 14px">
@@ -789,6 +884,26 @@
           Bundle exports versions, health, sessions, and reclaim status — no private keys.
           Container logs: host <code>docker logs</code> or your VPS log panel.
         </p>
+        <div class="disk-banner" id="diskWarnBannerSupport">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
+        <div class="disk-meters" id="diskMetersSupport"></div>
+        <div class="disk-actions" style="margin-bottom:12px">
+          <button type="button" class="ghost" onclick="pruneUsageHistory()">Clear older usage history</button>
+          <span class="note" id="diskPruneMsgSupport" style="margin:0"></span>
+        </div>
+        <div class="disk-host-hint" id="diskHostHintSupport">
+          <div class="callout warn">
+            <strong>Disk still full — reclaim Docker logs on host</strong>
+            <p class="note" style="margin:4px 0 0">
+              Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
+              <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
+            </p>
+            <pre># SecretVM
+docker compose -f docker-compose.secretvm.deployed.yml up -d --force-recreate --no-deps uplink proxy-router traefik
+
+# Generic
+docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --no-deps caddy uplink proxy-router</pre>
+          </div>
+        </div>
         <div class="row support-actions">
           <button class="ghost" type="button" onclick="downloadSupportBundle()">Download support bundle</button>
           <span class="note" id="supportMsg" style="margin:0"></span>
@@ -1223,6 +1338,7 @@ async function doRefresh() {
     checkForUpdate(st.version || 'dev');
 
     renderSysLine(st.version || 'dev', rv, !st.routerError, (st.sessions || []).length);
+    renderDiskStatus(st.disk || null);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
     const lockedWei = mor.onHoldLockedWei != null ? String(mor.onHoldLockedWei) : null;
@@ -1295,6 +1411,86 @@ async function doRefresh() {
     const us = await api('/admin/usage');
     renderUsage(us.usage || []);
   } catch (e) { console.error(e); }
+}
+
+
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let x = v;
+  let i = -1;
+  do { x /= 1024; i++; } while (x >= 1024 && i < units.length - 1);
+  return (x >= 10 || i === 0 ? x.toFixed(0) : x.toFixed(1)) + ' ' + units[i];
+}
+
+function diskMeterHTML(p) {
+  const total = Number(p.total) || 0;
+  const free = Number(p.free) || 0;
+  const used = Number(p.used) || 0;
+  const freePct = Number(p.freePct);
+  const usedPct = total > 0 ? Math.min(100, Math.max(0, (used / total) * 100)) : 0;
+  const warn = !!p.warn;
+  const pctLabel = Number.isFinite(freePct) ? freePct.toFixed(1) + '% free' : '—';
+  return `<div class="disk-meter${warn ? ' warn' : ''}">
+    <div class="path">${escapeHtml(String(p.path || ''))}${warn ? ' · warn' : ''}</div>
+    <div class="disk-bar" title="${pctLabel}"><span style="width:${usedPct.toFixed(1)}%"></span></div>
+    <div class="disk-meta">
+      <span>${fmtBytes(used)} used / ${fmtBytes(total)}</span>
+      <span>${fmtBytes(free)} free (${pctLabel})</span>
+    </div>
+  </div>`;
+}
+
+function renderDiskStatus(disk) {
+  const paths = (disk && Array.isArray(disk.paths)) ? disk.paths : [];
+  const warn = !!(disk && disk.warn);
+  const metersHTML = paths.length
+    ? paths.map(diskMeterHTML).join('')
+    : '<p class="note" style="margin:0">Disk metrics unavailable.</p>';
+  for (const id of ['diskMeters', 'diskMetersSupport']) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = metersHTML;
+  }
+  for (const id of ['diskWarnBanner', 'diskWarnBannerSupport']) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('show', warn);
+  }
+  for (const id of ['diskHostHint', 'diskHostHintSupport']) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('show', warn);
+  }
+}
+
+function setDiskPruneMsg(msg) {
+  for (const id of ['diskPruneMsg', 'diskPruneMsgSupport']) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = msg || '';
+  }
+}
+
+async function pruneUsageHistory() {
+  const typed = prompt('Type PRUNE_USAGE to clear older usage history (API keys are kept):');
+  if (typed === null) return;
+  if (typed !== 'PRUNE_USAGE') {
+    setDiskPruneMsg('Cancelled — confirmation did not match PRUNE_USAGE.');
+    return;
+  }
+  setDiskPruneMsg('Pruning older usage rows…');
+  try {
+    const res = await api('/admin/disk/prune-usage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'PRUNE_USAGE' }),
+    });
+    const removed = res.removedRows != null ? res.removedRows : 0;
+    const before = res.bytesBefore != null ? fmtBytes(res.bytesBefore) : '?';
+    const after = res.bytesAfter != null ? fmtBytes(res.bytesAfter) : '?';
+    setDiskPruneMsg('Removed ' + removed + ' row(s); state ' + before + ' → ' + after + '.');
+    await refresh({ force: true });
+  } catch (e) {
+    setDiskPruneMsg('Prune failed: ' + (e && e.message ? e.message : e));
+  }
 }
 
 function renderSysLine(uplinkVer, routerVer, routerOk, openSessions) {

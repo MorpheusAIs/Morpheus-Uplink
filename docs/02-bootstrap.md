@@ -29,6 +29,15 @@ use Docker's `json-file` logging with rotation enabled by default at `20m` x 3
 files per service, limiting retained container logs while keeping a short
 history.
 
+The Status tab (and Support section) shows free space for `/` and `DATA_DIR`
+from inside the uplink process. When free space is below **2 GiB** or **15%**,
+a warn banner appears. Admins can clear older usage-history rows via
+**Clear older usage history** (`POST /admin/disk/prune-usage`, typed confirm
+`PRUNE_USAGE`, retention default 30 days via `USAGE_PRUNE_DAYS`) — this never
+deletes API keys or Docker logs. Docker json-file logs stay rotation-bounded;
+if Status still warns after prune, the panel shows copy-paste host
+`docker compose … --force-recreate --no-deps` commands (no auto-run).
+
 This does **not** auto-wipe volumes. Do not schedule `docker system prune -a`
 as a cron job, and do not hand-delete `*-json.log` files; investigate storage
 and use the documented update path instead.
