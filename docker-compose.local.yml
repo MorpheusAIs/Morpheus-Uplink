@@ -38,7 +38,8 @@ services:
       - ROUTER_AUTH=${ROUTER_AUTH}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/active_models.json}
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
       - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
       - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}

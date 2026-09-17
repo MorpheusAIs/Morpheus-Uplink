@@ -40,7 +40,7 @@ func main() {
 	}
 
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	cat := catalog.New(cfg.ActiveModelsURL)
+	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover, cfg.DirectPayment)
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.

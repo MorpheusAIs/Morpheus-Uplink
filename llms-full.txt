@@ -435,7 +435,7 @@ generic VPS only if you already run your own Docker + TLS.
 | **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
 | **Any Docker VPS** | You already have a box / Phala / dstack | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 
-Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:latest`
+Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0` (digest-pinned in compose)
 
 Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
 
@@ -834,7 +834,8 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 | `API_KEY_SEED` | yes | — | Master/Prompt derivation (`openssl rand -hex 32`) |
 | `UPLINK_LISTEN` | — | `:8080` | Listen address |
 | `DATA_DIR` | — | `./data` | JSON state |
-| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/active_models.json` | Catalog |
+| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
+| `GATEWAY_BIDS_URL` | — | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | — | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | — | `true` | Provider failover at open |
 | `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment vs stake |
@@ -844,12 +845,28 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## CI/CD and versioning
 
-- **PR → `main`:** vet + tests.
+- **PR → `main`:** vet + tests (only when material paths change — see below).
 - **Merge to `main`:** next `vX.Y.Z` (patch by default; `#minor` / `#major` in
   the merge commit message), multi-arch image to `ghcr.io/absgrafx/uplink`,
   GitHub release with digest-pinned compose + env examples.
 - **workflow_dispatch on a branch:** prerelease image `vX.Y.N-<branch>` only
-  (no release, no `latest`).
+  (no release, no `latest`). Always available even for doc-only trees.
+
+### What triggers CI
+
+| Path | Why |
+|------|-----|
+| `cmd/**`, `internal/**` | Binary + embedded GUI |
+| `go.mod`, `go.sum` | Module graph |
+| `Dockerfile` | Image build |
+| `deploy/**` | Image entrypoint + release compose/env assets |
+| `docker-compose.local.yml` | Local-stack / ASCII contract in CI |
+| `.github/workflows/build.yml` | Pipeline itself |
+
+**Skipped** (no test run, no version bump): `docs/**`, root markdown
+(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `scripts/**`,
+`.ai-docs/**`, `.env.example`, etc. A PR that mixes docs + `internal/` still
+runs — any matching path is enough.
 
 Keep the `uplink` GHCR package **public** so SecretVM can pull anonymously.
 Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).
