@@ -8,7 +8,7 @@
 # Router:   http://localhost:8082          (only bound to localhost for debugging)
 services:
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1
     restart: unless-stopped
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
