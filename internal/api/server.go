@@ -28,14 +28,14 @@ import (
 )
 
 type Server struct {
-	cfg        *config.Config
-	store      *store.Store
-	catalog    *catalog.Catalog
-	pool       *pool.Pool
-	router     *router.Client
-	housekeep  *housekeep.Runner
-	masterKey  string
-	promptKey  string
+	cfg       *config.Config
+	store     *store.Store
+	catalog   *catalog.Catalog
+	pool      *pool.Pool
+	router    *router.Client
+	housekeep *housekeep.Runner
+	masterKey string
+	promptKey string
 }
 
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/housekeep", s.requireAdmin(s.handleHousekeep))
 	mux.HandleFunc("GET /admin/estimate-stake", s.requireAdmin(s.handleEstimateStake))
 	mux.HandleFunc("GET /admin/estimate-stakes", s.requireAdmin(s.handleEstimateStakes))
+	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 
 	// Raw router passthrough for power users (Swagger, MyGateway-style GUIs).
 	mux.Handle("/node/", s.requireAdminHandler(s.nodeProxy()))

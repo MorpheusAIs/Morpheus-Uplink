@@ -38,10 +38,10 @@ type OpenSessionMeta struct {
 }
 
 type state struct {
-	Keys            []keymaker.Record           `json:"keys"`
-	Usage           map[string]*UsageRow        `json:"usage"` // "day|keyId|model"
-	OpenSessions    map[string]OpenSessionMeta  `json:"openSessions,omitempty"`
-	SessionTimeMode string                      `json:"sessionTimeMode,omitempty"` // "actual" after migration
+	Keys            []keymaker.Record          `json:"keys"`
+	Usage           map[string]*UsageRow       `json:"usage"` // "day|keyId|model"
+	OpenSessions    map[string]OpenSessionMeta `json:"openSessions,omitempty"`
+	SessionTimeMode string                     `json:"sessionTimeMode,omitempty"` // "actual" after migration
 }
 
 type Store struct {
@@ -231,4 +231,31 @@ func (s *Store) Usage() []UsageRow {
 		return out[i].Requests > out[j].Requests
 	})
 	return out
+}
+
+// Path returns the absolute path of the state JSON file.
+func (s *Store) Path() string {
+	return s.path
+}
+
+// PruneUsageOlderThan removes Usage map rows whose Day is older than the
+// cutoff (UTC today minus days). Keys and OpenSessions are left untouched.
+// days <= 0 defaults to 30.
+func (s *Store) PruneUsageOlderThan(days int) (removed int, err error) {
+	if days <= 0 {
+		days = 30
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, row := range s.st.Usage {
+		if row == nil || row.Day < cutoff {
+			delete(s.st.Usage, id)
+			removed++
+		}
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	return removed, s.save()
 }
