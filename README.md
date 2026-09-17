@@ -77,11 +77,21 @@ Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstra
 curl -s https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer sk-prompt.…" \
   -H "Content-Type: application/json" \
-  -d '{"model":"Aion 3.0 Mini","messages":[{"role":"user","content":"hi"}],"max_tokens":64}'
+  -d '{"model":"REPLACE_WITH_PROBE_NAME","messages":[{"role":"user","content":"hi"}],"max_tokens":64}'
 ```
 
-Exact model names from Probe / `GET /v1/models` / [active.mor.org](https://active.mor.org).
-More clients: [docs/04-clients.md](docs/04-clients.md).
+Use an **exact** model name from Probe / `GET /v1/models` / the gateway
+catalog — do **not** hardcode a flashy name, and do **not** treat generic
+[active.mor.org](https://active.mor.org) or `active_models.json` / ALL feeds
+as the catalog. Defaults:
+
+| Env | Default |
+|-----|---------|
+| `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
+
+Release compose **digest-pins proxy-router (Lumerin) at v7.11.0** — not
+`:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
 ## Things worth knowing
 
@@ -93,7 +103,11 @@ More clients: [docs/04-clients.md](docs/04-clients.md).
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned
-  for SecretVM / compose.
+  for SecretVM / compose — including **proxy-router v7.11.0** (not `:latest`).
+- **Gateway catalog only:** `ACTIVE_MODELS_URL` →
+  `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
+  `https://active.mor.org/gateway_bids.json`. Never default to
+  `active_models.json` / ALL.
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  

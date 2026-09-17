@@ -71,7 +71,8 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 | `API_KEY_SEED` | yes | — | Master/Prompt derivation (`openssl rand -hex 32`) |
 | `UPLINK_LISTEN` | — | `:8080` | Listen address |
 | `DATA_DIR` | — | `./data` | JSON state |
-| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/active_models.json` | Catalog |
+| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
+| `GATEWAY_BIDS_URL` | — | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | — | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | — | `true` | Provider failover at open |
 | `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment vs stake |

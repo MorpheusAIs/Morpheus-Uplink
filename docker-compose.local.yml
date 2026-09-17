@@ -8,7 +8,7 @@
 # Router:   http://localhost:8082          (only bound to localhost for debugging)
 services:
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:latest
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1
     restart: unless-stopped
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
@@ -38,7 +38,8 @@ services:
       - ROUTER_AUTH=${ROUTER_AUTH}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/active_models.json}
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
       - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
       - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}

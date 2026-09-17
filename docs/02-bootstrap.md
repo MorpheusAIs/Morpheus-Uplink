@@ -16,7 +16,7 @@ generic VPS only if you already run your own Docker + TLS.
 | **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
 | **Any Docker VPS** | You already have a box / Phala / dstack | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 
-Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:latest`
+Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0` (digest-pinned in compose)
 
 Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
 

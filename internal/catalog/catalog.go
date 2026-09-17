@@ -1,5 +1,8 @@
 // Package catalog maps human model names to blockchain model IDs using the
-// active.mor.org catalog JSON (the same source the hosted APIGW uses).
+// active.mor.org gateway catalog JSON (gateway_models.json by default).
+// List/open pricing uses each model's bidDetail from that file (primary).
+// GATEWAY_BIDS_URL (gateway_bids.json) is the companion bid feed for
+// mirrors/ops; it is not merged into LowestBid (different schema).
 package catalog
 
 import (
@@ -84,8 +87,9 @@ type activeModelsFile struct {
 }
 
 type Catalog struct {
-	url    string
-	client *http.Client
+	url     string // ACTIVE_MODELS_URL / gateway_models (bidDetail primary for list/open)
+	bidsURL string // GATEWAY_BIDS_URL companion feed; not merged into LowestBid
+	client  *http.Client
 
 	mu        sync.Mutex
 	models    []Model
@@ -102,6 +106,16 @@ func New(url string) *Catalog {
 		ttl:    5 * time.Minute,
 	}
 }
+
+// WithBidsURL records the companion gateway_bids feed URL (GATEWAY_BIDS_URL).
+// Catalog refresh still uses model bidDetail only; see package comment.
+func (c *Catalog) WithBidsURL(bidsURL string) *Catalog {
+	c.bidsURL = bidsURL
+	return c
+}
+
+// GatewayBidsURL returns the companion bids feed URL, if set.
+func (c *Catalog) GatewayBidsURL() string { return c.bidsURL }
 
 func (c *Catalog) refresh() error {
 	resp, err := c.client.Get(c.url)

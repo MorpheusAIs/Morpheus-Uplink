@@ -110,7 +110,7 @@ One compose file, three containers, deployable on SecretVM (or any Docker VPS):
 
 1. `POST /v1/chat/completions`, `Authorization: Bearer sk-…`, `model: "llama-3.3-70b"`.
 2. Uplink verifies key (SHA-256 lookup), resolves model name → blockchain id
-   (catalog from `active.mor.org/active_models.json`, cached).
+   (catalog from `active.mor.org/gateway_models.json`, cached).
 3. Session pool: reuse an OPEN session for that model; else
    `POST /blockchain/models/{id}/session` (rating + failover live in the C-Node).
 4. Forward to C-Node `/v1/chat/completions` with `session_id`, stream back.

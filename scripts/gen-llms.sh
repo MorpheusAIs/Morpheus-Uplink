@@ -13,6 +13,14 @@ FULL="$ROOT/llms-full.txt"
   echo "> Read AGENTS.md first. Full corpus: llms-full.txt"
   echo "> Repo: https://github.com/absgrafx/Morpheus-Uplink"
   echo
+  echo "## Defaults agents must know"
+  echo
+  echo "- **Uplink ≠ api.mor.org.** Hosted multi-tenant API is api.mor.org / apidocs.mor.org; Uplink is your single-tenant gateway + wallet."
+  echo "- **Catalog / bids:** \`ACTIVE_MODELS_URL\` → https://active.mor.org/gateway_models.json ; \`GATEWAY_BIDS_URL\` → https://active.mor.org/gateway_bids.json . Never default to active_models.json / ALL."
+  echo "- **Proxy pin:** release compose digest-pins proxy-router (Lumerin) at **v7.11.0** — not \`:latest\`."
+  echo "- **Humans** → docs/README.md. **Agents** → AGENTS.md, then llms-full.txt."
+  echo "- **Never invent** live prices, catalog size, or contract addresses — cite gateway feeds + docs/01-prerequisites.md."
+  echo
   echo "## Core"
   echo
   echo "- [AGENTS.md](AGENTS.md): Hard rules and navigation for agents"

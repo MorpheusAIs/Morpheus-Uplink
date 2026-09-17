@@ -14,8 +14,11 @@ and hosted-gateway habits often get this product wrong.
 4. **Operator chapters** under [`docs/`](docs/README.md) — human-facing how-to.
 5. **Concept / design** (optional depth): [`.ai-docs/UPLINK_CONCEPT.md`](.ai-docs/UPLINK_CONCEPT.md).
 6. **Do not invent** live catalog size, bid prices, or contract addresses —
-   use [active.mor.org](https://active.mor.org) and the addresses in
-   [`docs/01-prerequisites.md`](docs/01-prerequisites.md).
+   use the **gateway** feeds
+   ([`gateway_models.json`](https://active.mor.org/gateway_models.json),
+   [`gateway_bids.json`](https://active.mor.org/gateway_bids.json)) and the
+   addresses in [`docs/01-prerequisites.md`](docs/01-prerequisites.md).
+   Never default to `active_models.json` / ALL.
 
 Published operator path: clone or browse this repo → `AGENTS.md` → `docs/`.
 There is no separate docs host or MCP for Uplink.
@@ -57,7 +60,9 @@ There is no separate docs host or MCP for Uplink.
    cite nodedocs networks page; do not guess.
 
 3. **Never invent live values** (active model count, bid prices, latency).  
-   Link [active.mor.org](https://active.mor.org).
+   Use [`gateway_models.json`](https://active.mor.org/gateway_models.json) /
+   [`gateway_bids.json`](https://active.mor.org/gateway_bids.json). Never
+   default to `active_models.json` / ALL as the Uplink catalog.
 
 4. **Never claim Morpheus “runs the inference.”** Independent providers do;
    Morpheus coordinates the marketplace on Base.
@@ -78,9 +83,15 @@ There is no separate docs host or MCP for Uplink.
    Digest-pinned compose: `docker-compose.secretvm.deployed.yml` or
    `docker-compose.generic.deployed.yml` from
    [releases/latest](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
+   Proxy-router (Lumerin) is **pinned to v7.11.0 by digest** — never advise
+   `:latest`.
 
 9. **Use exact model catalog names** from `GET /v1/models`, Probe, or
-   active.mor.org. Wrong strings fail resolve.
+   [`gateway_models.json`](https://active.mor.org/gateway_models.json)
+   (`ACTIVE_MODELS_URL` default; companion
+   `GATEWAY_BIDS_URL` → `https://active.mor.org/gateway_bids.json`).
+   Wrong strings fail resolve. Never invent a flashy name; never point
+   agents at `active_models.json` / ALL.
 
 10. **Key roles:** Master (`sk-uplink.…`) = inference + admin; Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =

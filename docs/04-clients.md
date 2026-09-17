@@ -8,7 +8,7 @@ Uplink speaks **OpenAI-compatible** HTTP. Almost every OpenAI client works with 
 |---------|--------|
 | Base URL | `https://<your-host>/v1` |
 | Auth | `Authorization: Bearer <Prompt or ephemeral sk-…>` |
-| Model | Exact name from `GET /v1/models` / Probe / [active.mor.org](https://active.mor.org) |
+| Model | Exact name from Probe / `GET /v1/models` / [`gateway_models.json`](https://active.mor.org/gateway_models.json) (not `active_models.json` / ALL) |
 
 Prefer **Prompt** or ephemeral keys in clients; keep **Master** off machines you do not trust.
 
@@ -26,7 +26,7 @@ curl -s https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer sk-prompt.…" \
   -H "Content-Type: application/json" \
   -d '{
-  "model": "Aion 3.0 Mini",
+  "model": "REPLACE_WITH_PROBE_NAME",
   "messages": [
     {"role": "user", "content": "In one sentence, what is Morpheus?"}
   ],
@@ -43,7 +43,7 @@ curl -s https://YOUR_HOST/v1/chat/completions \
 from openai import OpenAI
 client = OpenAI(base_url="https://YOUR_HOST/v1", api_key="sk-prompt.…")
 print(client.chat.completions.create(
-    model="Aion 3.0 Mini",
+    model="REPLACE_WITH_PROBE_NAME",
     messages=[{"role": "user", "content": "hi"}],
 ).choices[0].message.content)
 ```
@@ -55,7 +55,7 @@ print(client.chat.completions.create(
 
 1. Create an **ephemeral** key (or use Prompt) in the GUI; copy it.
 2. In the app: custom OpenAI base URL → `https://YOUR_HOST/v1`, paste the key.
-3. Model string = **exact** catalog name from Probe / `/v1/models` (wrong name → resolve fails).
+3. Model string = **exact** catalog name from Probe / `/v1/models` / `gateway_models.json` (wrong name → resolve fails; never invent a flashy name).
 4. After app updates, re-check base URL + key + model — Uplink’s contract stays OpenAI-shaped.
 
 </details>

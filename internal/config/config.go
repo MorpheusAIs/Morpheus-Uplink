@@ -25,8 +25,12 @@ type Config struct {
 	APIKeySeed string
 	// Directory for the JSON state file (keys, usage). May be ephemeral.
 	DataDir string
-	// URL of the on-chain model catalog JSON.
+	// URL of the gateway model catalog JSON (ACTIVE_MODELS_URL).
+	// Default is gateway_models.json (includes bidDetail for list/open).
 	ActiveModelsURL string
+	// Companion gateway bids feed (GATEWAY_BIDS_URL). Documented for
+	// mirrors/ops; catalog list/open uses bidDetail on ActiveModelsURL.
+	GatewayBidsURL string
 	// Session behavior.
 	SessionDurationSec int
 	SessionFailover    bool
@@ -53,7 +57,8 @@ func FromEnv() (*Config, error) {
 		AdminPassword:       os.Getenv("ADMIN_PASSWORD"),
 		APIKeySeed:          os.Getenv("API_KEY_SEED"),
 		DataDir:             getenv("DATA_DIR", "./data"),
-		ActiveModelsURL:     getenv("ACTIVE_MODELS_URL", "https://active.mor.org/active_models.json"),
+		ActiveModelsURL:     getenv("ACTIVE_MODELS_URL", "https://active.mor.org/gateway_models.json"),
+		GatewayBidsURL:      getenv("GATEWAY_BIDS_URL", "https://active.mor.org/gateway_bids.json"),
 		SessionDurationSec:  getenvInt("SESSION_DURATION_SECONDS", 600),
 		SessionFailover:     getenvBool("SESSION_FAILOVER", true),
 		DirectPayment:       getenvBool("SESSION_DIRECT_PAYMENT", false),

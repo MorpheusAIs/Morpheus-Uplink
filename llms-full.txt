@@ -20,8 +20,11 @@ and hosted-gateway habits often get this product wrong.
 4. **Operator chapters** under [`docs/`](docs/README.md) — human-facing how-to.
 5. **Concept / design** (optional depth): [`.ai-docs/UPLINK_CONCEPT.md`](.ai-docs/UPLINK_CONCEPT.md).
 6. **Do not invent** live catalog size, bid prices, or contract addresses —
-   use [active.mor.org](https://active.mor.org) and the addresses in
-   [`docs/01-prerequisites.md`](docs/01-prerequisites.md).
+   use the **gateway** feeds
+   ([`gateway_models.json`](https://active.mor.org/gateway_models.json),
+   [`gateway_bids.json`](https://active.mor.org/gateway_bids.json)) and the
+   addresses in [`docs/01-prerequisites.md`](docs/01-prerequisites.md).
+   Never default to `active_models.json` / ALL.
 
 Published operator path: clone or browse this repo → `AGENTS.md` → `docs/`.
 There is no separate docs host or MCP for Uplink.
@@ -63,7 +66,9 @@ There is no separate docs host or MCP for Uplink.
    cite nodedocs networks page; do not guess.
 
 3. **Never invent live values** (active model count, bid prices, latency).  
-   Link [active.mor.org](https://active.mor.org).
+   Use [`gateway_models.json`](https://active.mor.org/gateway_models.json) /
+   [`gateway_bids.json`](https://active.mor.org/gateway_bids.json). Never
+   default to `active_models.json` / ALL as the Uplink catalog.
 
 4. **Never claim Morpheus “runs the inference.”** Independent providers do;
    Morpheus coordinates the marketplace on Base.
@@ -84,9 +89,15 @@ There is no separate docs host or MCP for Uplink.
    Digest-pinned compose: `docker-compose.secretvm.deployed.yml` or
    `docker-compose.generic.deployed.yml` from
    [releases/latest](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
+   Proxy-router (Lumerin) is **pinned to v7.11.0 by digest** — never advise
+   `:latest`.
 
 9. **Use exact model catalog names** from `GET /v1/models`, Probe, or
-   active.mor.org. Wrong strings fail resolve.
+   [`gateway_models.json`](https://active.mor.org/gateway_models.json)
+   (`ACTIVE_MODELS_URL` default; companion
+   `GATEWAY_BIDS_URL` → `https://active.mor.org/gateway_bids.json`).
+   Wrong strings fail resolve. Never invent a flashy name; never point
+   agents at `active_models.json` / ALL.
 
 10. **Key roles:** Master (`sk-uplink.…`) = inference + admin; Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
@@ -307,11 +318,21 @@ Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstra
 curl -s https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer sk-prompt.…" \
   -H "Content-Type: application/json" \
-  -d '{"model":"Aion 3.0 Mini","messages":[{"role":"user","content":"hi"}],"max_tokens":64}'
+  -d '{"model":"REPLACE_WITH_PROBE_NAME","messages":[{"role":"user","content":"hi"}],"max_tokens":64}'
 ```
 
-Exact model names from Probe / `GET /v1/models` / [active.mor.org](https://active.mor.org).
-More clients: [docs/04-clients.md](docs/04-clients.md).
+Use an **exact** model name from Probe / `GET /v1/models` / the gateway
+catalog — do **not** hardcode a flashy name, and do **not** treat generic
+[active.mor.org](https://active.mor.org) or `active_models.json` / ALL feeds
+as the catalog. Defaults:
+
+| Env | Default |
+|-----|---------|
+| `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
+
+Release compose **digest-pins proxy-router (Lumerin) at v7.11.0** — not
+`:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
 ## Things worth knowing
 
@@ -323,7 +344,11 @@ More clients: [docs/04-clients.md](docs/04-clients.md).
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned
-  for SecretVM / compose.
+  for SecretVM / compose — including **proxy-router v7.11.0** (not `:latest`).
+- **Gateway catalog only:** `ACTIVE_MODELS_URL` →
+  `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
+  `https://active.mor.org/gateway_bids.json`. Never default to
+  `active_models.json` / ALL.
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
@@ -435,7 +460,7 @@ generic VPS only if you already run your own Docker + TLS.
 | **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
 | **Any Docker VPS** | You already have a box / Phala / dstack | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 
-Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:latest`
+Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0` (digest-pinned in compose)
 
 Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
 
@@ -664,7 +689,7 @@ Uplink speaks **OpenAI-compatible** HTTP. Almost every OpenAI client works with 
 |---------|--------|
 | Base URL | `https://<your-host>/v1` |
 | Auth | `Authorization: Bearer <Prompt or ephemeral sk-…>` |
-| Model | Exact name from `GET /v1/models` / Probe / [active.mor.org](https://active.mor.org) |
+| Model | Exact name from Probe / `GET /v1/models` / [`gateway_models.json`](https://active.mor.org/gateway_models.json) (not `active_models.json` / ALL) |
 
 Prefer **Prompt** or ephemeral keys in clients; keep **Master** off machines you do not trust.
 
@@ -682,7 +707,7 @@ curl -s https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer sk-prompt.…" \
   -H "Content-Type: application/json" \
   -d '{
-  "model": "Aion 3.0 Mini",
+  "model": "REPLACE_WITH_PROBE_NAME",
   "messages": [
     {"role": "user", "content": "In one sentence, what is Morpheus?"}
   ],
@@ -699,7 +724,7 @@ curl -s https://YOUR_HOST/v1/chat/completions \
 from openai import OpenAI
 client = OpenAI(base_url="https://YOUR_HOST/v1", api_key="sk-prompt.…")
 print(client.chat.completions.create(
-    model="Aion 3.0 Mini",
+    model="REPLACE_WITH_PROBE_NAME",
     messages=[{"role": "user", "content": "hi"}],
 ).choices[0].message.content)
 ```
@@ -711,7 +736,7 @@ print(client.chat.completions.create(
 
 1. Create an **ephemeral** key (or use Prompt) in the GUI; copy it.
 2. In the app: custom OpenAI base URL → `https://YOUR_HOST/v1`, paste the key.
-3. Model string = **exact** catalog name from Probe / `/v1/models` (wrong name → resolve fails).
+3. Model string = **exact** catalog name from Probe / `/v1/models` / `gateway_models.json` (wrong name → resolve fails; never invent a flashy name).
 4. After app updates, re-check base URL + key + model — Uplink’s contract stays OpenAI-shaped.
 
 </details>
@@ -834,7 +859,8 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 | `API_KEY_SEED` | yes | — | Master/Prompt derivation (`openssl rand -hex 32`) |
 | `UPLINK_LISTEN` | — | `:8080` | Listen address |
 | `DATA_DIR` | — | `./data` | JSON state |
-| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/active_models.json` | Catalog |
+| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
+| `GATEWAY_BIDS_URL` | — | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | — | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | — | `true` | Provider failover at open |
 | `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment vs stake |
@@ -844,12 +870,28 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## CI/CD and versioning
 
-- **PR → `main`:** vet + tests.
+- **PR → `main`:** vet + tests (only when material paths change — see below).
 - **Merge to `main`:** next `vX.Y.Z` (patch by default; `#minor` / `#major` in
   the merge commit message), multi-arch image to `ghcr.io/absgrafx/uplink`,
   GitHub release with digest-pinned compose + env examples.
 - **workflow_dispatch on a branch:** prerelease image `vX.Y.N-<branch>` only
-  (no release, no `latest`).
+  (no release, no `latest`). Always available even for doc-only trees.
+
+### What triggers CI
+
+| Path | Why |
+|------|-----|
+| `cmd/**`, `internal/**` | Binary + embedded GUI |
+| `go.mod`, `go.sum` | Module graph |
+| `Dockerfile` | Image build |
+| `deploy/**` | Image entrypoint + release compose/env assets |
+| `docker-compose.local.yml` | Local-stack / ASCII contract in CI |
+| `.github/workflows/build.yml` | Pipeline itself |
+
+**Skipped** (no test run, no version bump): `docs/**`, root markdown
+(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `scripts/**`,
+`.ai-docs/**`, `.env.example`, etc. A PR that mixes docs + `internal/` still
+runs — any matching path is enough.
 
 Keep the `uplink` GHCR package **public** so SecretVM can pull anonymously.
 Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).
