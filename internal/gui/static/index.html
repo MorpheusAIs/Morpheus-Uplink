@@ -1424,22 +1424,22 @@ function renderDiskStatus(disk) {
   const metersHTML = paths.length
     ? paths.map(diskMeterHTML).join('')
     : '<p class="note" style="margin:0">Disk metrics unavailable.</p>';
-  for (const id of ['diskMeters', 'diskMetersSupport']) {
+  for (const id of ['diskMetersSupport']) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = metersHTML;
   }
-  for (const id of ['diskWarnBanner', 'diskWarnBannerSupport']) {
+  for (const id of ['diskWarnBannerSupport']) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('show', warn);
   }
-  for (const id of ['diskHostHint', 'diskHostHintSupport']) {
+  for (const id of ['diskHostHintSupport']) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('show', warn);
   }
 }
 
 function setDiskPruneMsg(msg) {
-  for (const id of ['diskPruneMsg', 'diskPruneMsgSupport']) {
+  for (const id of ['diskPruneMsgSupport']) {
     const el = document.getElementById(id);
     if (el) el.textContent = msg || '';
   }
