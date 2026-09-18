@@ -13,13 +13,26 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
+
+// recordsForAdminJSON returns key records with secrets forced empty when revoked.
+func recordsForAdminJSON(recs []keymaker.Record) []keymaker.Record {
+	out := make([]keymaker.Record, len(recs))
+	copy(out, recs)
+	for i := range out {
+		if out[i].RevokedAt != nil {
+			out[i].Secret = ""
+		}
+	}
+	return out
+}
+
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		// Both derived keys are re-derivable from the seed, so showing them
 		// to the authenticated admin does not widen the secret surface.
 		"masterKey": s.masterKey, // full access: prompt + admin
 		"promptKey": s.promptKey, // inference only
-		"keys":      s.store.ListKeys(),
+		"keys":      recordsForAdminJSON(s.store.ListKeys()),
 	})
 }
 
@@ -37,7 +50,8 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.AddKey(rec); err != nil {
-		http.Error(w, "failed to persist key: "+err.Error(), http.StatusInternalServerError)
+		// id/hash collision (incl. tombstones) — same style as import
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -73,9 +87,15 @@ func (s *Server) handleImportKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
-	removed, err := s.store.RevokeKey(r.PathValue("id"))
+	id := r.PathValue("id")
+	if id == keymaker.MasterKeyID || id == keymaker.PromptKeyID {
+		http.Error(w, "cannot revoke "+id+" key", http.StatusBadRequest)
+		return
+	}
+	removed, err := s.store.RevokeKey(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Store also refuses master/prompt; surface as 400.
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if !removed {

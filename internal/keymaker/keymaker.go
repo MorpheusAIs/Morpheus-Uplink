@@ -50,12 +50,13 @@ func PromptKey(seed string) string {
 // Secret is kept in the ephemeral local store so the operator console can
 // re-copy keys; it is wiped with the box on redeploy.
 type Record struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Prefix    string    `json:"prefix"`           // first characters, for display
-	Hash      string    `json:"hash"`             // SHA-256 hex of the full key
-	Secret    string    `json:"secret,omitempty"` // full sk-… key (admin/local only)
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Prefix    string     `json:"prefix"`           // first characters, for display
+	Hash      string     `json:"hash"`             // SHA-256 hex of the full key
+	Secret    string     `json:"secret,omitempty"` // full sk-… key (admin/local only); cleared on revoke
+	CreatedAt time.Time  `json:"createdAt"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"` // UTC; nil = active
 }
 
 // NewKey generates a random API key. The full key is returned once and

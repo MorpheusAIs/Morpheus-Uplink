@@ -98,6 +98,8 @@ func (s *Store) save() error {
 	return os.Rename(tmp, s.path)
 }
 
+// AddKey appends a new key. Rejects id or hash collisions with any existing
+// record, including revoked tombstones — do not clear revokedAt to revive.
 func (s *Store) AddKey(rec keymaker.Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,14 +115,26 @@ func (s *Store) AddKey(rec keymaker.Record) error {
 	return s.save()
 }
 
+// RevokeKey soft-disables a key (tombstone): sets RevokedAt, clears Secret,
+// keeps id/name/prefix/hash/createdAt for usage labels. Idempotent if already
+// revoked. Returns false when id is missing. Refuses master/prompt synthetic ids.
 func (s *Store) RevokeKey(id string) (bool, error) {
+	if id == keymaker.MasterKeyID || id == keymaker.PromptKeyID {
+		return false, fmt.Errorf("cannot revoke %s key", id)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, k := range s.st.Keys {
-		if k.ID == id {
-			s.st.Keys = append(s.st.Keys[:i], s.st.Keys[i+1:]...)
-			return true, s.save()
+		if k.ID != id {
+			continue
 		}
+		if k.RevokedAt != nil {
+			return true, nil // already revoked — idempotent
+		}
+		now := time.Now().UTC()
+		s.st.Keys[i].RevokedAt = &now
+		s.st.Keys[i].Secret = ""
+		return true, s.save()
 	}
 	return false, nil
 }
@@ -133,13 +147,17 @@ func (s *Store) ListKeys() []keymaker.Record {
 	return out
 }
 
-// LookupKey returns the key ID for a presented full key, or "" if unknown.
+// LookupKey returns the key ID for a presented full key, or "" if unknown
+// or revoked (tombstone). Hash match alone is not enough when RevokedAt is set.
 func (s *Store) LookupKey(full string) string {
 	h := keymaker.Hash(full)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, k := range s.st.Keys {
 		if k.Hash == h {
+			if k.RevokedAt != nil {
+				return ""
+			}
 			return k.ID
 		}
 	}

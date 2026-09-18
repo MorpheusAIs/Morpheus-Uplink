@@ -19,6 +19,20 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 GUI login is Basic auth (`admin` + `ADMIN_PASSWORD`). The Master key exists so
 automation can hit admin APIs without that password.
 
+### Soft revoke (tombstone)
+
+`DELETE /admin/keys/{id}` **soft-disables** ephemeral keys: sets `revokedAt`
+(UTC), clears `secret`, and **keeps** `id` + `name` (+ prefix/hash) so Usage
+labels stay `Name (id)`. Auth via `LookupKey` treats revoked keys as unknown →
+**401**. Revoking `master` / `prompt` is refused (**400**). Create/Import that
+collides with a tombstone id or hash fails (**409**) — do not clear `revokedAt`
+to revive; mint a new key.
+
+**Orphan migration:** keys revoked **before** soft-revoke shipped were
+hard-removed from `keys[]`. Their usage rows may show a bare hex `keyId`
+forever — do **not** invent names. New revokes keep names. The Usage GUI
+**Active** filter (default) hides revoked + orphan ephemeral rows; **All** shows
+everything. Time range defaults to **7d** (UTC day buckets; no hourly precision).
 
 ### `GET /v1/usage` (self-scoped)
 
