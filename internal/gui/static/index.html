@@ -789,30 +789,6 @@
   <main>
     <!-- STATUS -->
     <div class="panel active" id="tab-status">
-      <section class="disk-card" id="diskStatusCard">
-        <h2>Disk</h2>
-        <div class="disk-banner" id="diskWarnBanner">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
-        <div class="disk-meters" id="diskMeters"></div>
-        <div class="disk-actions">
-          <button type="button" class="ghost" id="diskPruneBtn" onclick="pruneUsageHistory()">Clear older usage history</button>
-          <span class="note" id="diskPruneMsg" style="margin:0"></span>
-        </div>
-        <div class="disk-host-hint" id="diskHostHint">
-          <div class="callout warn">
-            <strong>Disk still full — reclaim Docker logs on host</strong>
-            <p class="note" style="margin:4px 0 0">
-              Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
-              <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
-            </p>
-            <pre id="diskHostCommands"># SecretVM
-docker compose -f docker-compose.secretvm.deployed.yml up -d --force-recreate --no-deps uplink proxy-router traefik
-
-# Generic
-docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --no-deps caddy uplink proxy-router</pre>
-          </div>
-        </div>
-      </section>
-
       <section id="connectClient">
         <h2>Connect a client</h2>
         <p class="note" style="margin:0 0 14px">
