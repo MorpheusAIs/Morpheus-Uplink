@@ -60,6 +60,27 @@ print(client.chat.completions.create(
 
 </details>
 
+
+---
+
+## Usage (`GET /v1/usage`)
+
+Poll per-key usage without the admin GUI. Same Bearer auth as other `/v1/*`
+routes (Prompt, Master, or ephemeral `sk-…`).
+
+```bash
+curl -sS -H "Authorization: Bearer sk-prompt.…"   https://YOUR_HOST/v1/usage
+```
+
+Response: `{"usage":[…]}` — rows with `day`, `keyId`, `model`, `requests`,
+`promptTokens`, `completionTokens`, and optional `sessionSeconds`.
+
+**WARN — scoping:** Prompt and generated keys see **only their own** rows
+(`keyId` matches the caller). Master Bearer returns the **full instance**
+(same table as `GET /admin/usage`). `keyId` is a public id (`master`,
+`prompt`, or generated id) — never an `sk-` secret. Admin Basic does **not**
+unlock `/v1/usage`.
+
 ---
 
 [← GUI](03-gui.md) · [Guide home](README.md) · [Next: Updates →](05-updates.md)

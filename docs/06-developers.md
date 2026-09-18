@@ -19,6 +19,21 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 GUI login is Basic auth (`admin` + `ADMIN_PASSWORD`). The Master key exists so
 automation can hit admin APIs without that password.
 
+
+### `GET /v1/usage` (self-scoped)
+
+Bearer API keys only (`requireAPIKey`). Response `{"usage":[ UsageRow… ]}`.
+
+| Caller | Scope |
+|--------|--------|
+| Prompt / generated | Rows where `keyId` equals the caller’s id |
+| Master | Full instance (intentional ops convenience) |
+
+**WARN:** Master is a full usage reader so automation can poll without admin
+Basic. Prompt/generated never see other keys’ rows. `keyId` is public — not
+`sk-`. Empty `X-Uplink-Key-Id` after auth fails closed (no unfiltered dump).
+Admin Basic on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
+
 The proxy-router still has its own Basic-auth surface (`COOKIE_CONTENT`).
 Uplink uses one full-power router credential and enforces Prompt vs Master at
 its own layer.
