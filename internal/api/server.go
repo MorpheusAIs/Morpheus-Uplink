@@ -58,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/chat/completions", s.requireAPIKey(s.handleInference("/v1/chat/completions")))
 	mux.HandleFunc("POST /v1/embeddings", s.requireAPIKey(s.handleInference("/v1/embeddings")))
 	mux.HandleFunc("GET /v1/models", s.requireAPIKey(s.handleModels))
+	mux.HandleFunc("GET /v1/usage", s.requireAPIKey(s.handleUsageV1))
 
 	// Admin surface.
 	mux.HandleFunc("GET /admin/keys", s.requireAdmin(s.handleListKeys))
@@ -113,6 +114,8 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
+		// Overwrite is intentional: any client-supplied X-Uplink-Key-Id is ignored
+		// so callers cannot forge another key's identity for scoped handlers.
 		r.Header.Set("X-Uplink-Key-Id", keyID)
 		next(w, r)
 	}

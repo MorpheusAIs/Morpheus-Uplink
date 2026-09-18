@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
+	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
 // maxRequestBody caps inference request bodies (large contexts are fine,
@@ -148,4 +151,31 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data":   data,
 	})
+}
+
+// handleUsageV1 returns usage rows for the calling API key.
+//
+// WARN: Master Bearer is an intentional full-instance usage reader (ops:
+// Seraph can poll without admin Basic). Prompt and generated keys never see
+// other keys' rows — filter is keyId == caller. keyId is a public identifier
+// (master / prompt / generated id), never an sk- secret.
+func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
+	caller := r.Header.Get("X-Uplink-Key-Id")
+	if caller == "" {
+		// Fail closed: never fall back to unfiltered store.Usage().
+		log.Printf("api: /v1/usage missing X-Uplink-Key-Id after auth")
+		writeOpenAIError(w, http.StatusUnauthorized, "missing key identity")
+		return
+	}
+	rows := s.store.Usage()
+	if caller != keymaker.MasterKeyID {
+		filtered := make([]store.UsageRow, 0, len(rows))
+		for _, row := range rows {
+			if row.KeyID == caller {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"usage": rows})
 }
