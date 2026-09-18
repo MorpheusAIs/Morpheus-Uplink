@@ -366,29 +366,14 @@ func TestImportKeyRestoresInference(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 
-	// Create, capture, revoke — then import the same full key back.
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"saved-in-1password"}`))
-	req.Header.Set("Authorization", "Bearer "+master)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	// Import restores a previously issued sk-… after a storage wipe (empty store).
+	// Soft-revoke tombstones do NOT allow revive — see TestRevokeTombstoneNoRevive.
+	full, rec, err := keymaker.NewKey("saved-in-1password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var created struct {
-		Key    string
-		Record keymaker.Record
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-
-	dReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+created.Record.ID, nil)
-	dReq.Header.Set("Authorization", "Bearer "+master)
-	dResp, _ := http.DefaultClient.Do(dReq)
-	dResp.Body.Close()
-
-	body := `{"name":"restored","key":"` + created.Key + `"}`
+	_ = rec
+	body := `{"name":"restored","key":"` + full + `"}`
 	iReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys/import", strings.NewReader(body))
 	iReq.Header.Set("Authorization", "Bearer "+master)
 	iReq.Header.Set("Content-Type", "application/json")
@@ -402,7 +387,7 @@ func TestImportKeyRestoresInference(t *testing.T) {
 	}
 
 	mReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/models", nil)
-	mReq.Header.Set("Authorization", "Bearer "+created.Key)
+	mReq.Header.Set("Authorization", "Bearer "+full)
 	mResp, err := http.DefaultClient.Do(mReq)
 	if err != nil {
 		t.Fatal(err)
@@ -410,6 +395,165 @@ func TestImportKeyRestoresInference(t *testing.T) {
 	mResp.Body.Close()
 	if mResp.StatusCode != http.StatusOK {
 		t.Fatalf("imported key on /v1/models: %d", mResp.StatusCode)
+	}
+}
+
+func TestRevokeTombstoneListAndAuth(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	master := keymaker.MasterKey(cfg.APIKeySeed)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"tomb-me"}`))
+	req.Header.Set("Authorization", "Bearer "+master)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		Key    string          `json:"key"`
+		Record keymaker.Record `json:"record"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d", resp.StatusCode)
+	}
+
+	del, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+created.Record.ID, nil)
+	del.Header.Set("Authorization", "Bearer "+master)
+	dResp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revokedBody map[string]any
+	_ = json.NewDecoder(dResp.Body).Decode(&revokedBody)
+	dResp.Body.Close()
+	if dResp.StatusCode != http.StatusOK || revokedBody["revoked"] != true {
+		t.Fatalf("revoke: status %d body %#v", dResp.StatusCode, revokedBody)
+	}
+
+	// Bearer of revoked key → 401
+	chatReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/models", nil)
+	chatReq.Header.Set("Authorization", "Bearer "+created.Key)
+	cResp, err := http.DefaultClient.Do(chatReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cResp.Body.Close()
+	if cResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked bearer: %d want 401", cResp.StatusCode)
+	}
+
+	// List shows tombstone; secret empty
+	listReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/keys", nil)
+	listReq.Header.Set("Authorization", "Bearer "+master)
+	lResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed struct {
+		Keys []keymaker.Record `json:"keys"`
+	}
+	if err := json.NewDecoder(lResp.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	lResp.Body.Close()
+	found := false
+	for _, k := range listed.Keys {
+		if k.ID != created.Record.ID {
+			continue
+		}
+		found = true
+		if k.RevokedAt == nil {
+			t.Fatal("list missing revokedAt")
+		}
+		if k.Secret != "" {
+			t.Fatalf("list leaked secret for revoked key: %q", k.Secret)
+		}
+		if k.Name != "tomb-me" {
+			t.Fatalf("name lost: %q", k.Name)
+		}
+	}
+	if !found {
+		t.Fatal("tombstone missing from list")
+	}
+
+	// Idempotent revoke
+	del2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+created.Record.ID, nil)
+	del2.Header.Set("Authorization", "Bearer "+master)
+	d2, _ := http.DefaultClient.Do(del2)
+	d2.Body.Close()
+	if d2.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent revoke: %d", d2.StatusCode)
+	}
+}
+
+func TestRevokeTombstoneNoRevive(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	master := keymaker.MasterKey(cfg.APIKeySeed)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"no-revive"}`))
+	req.Header.Set("Authorization", "Bearer "+master)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		Key    string          `json:"key"`
+		Record keymaker.Record `json:"record"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	del, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+created.Record.ID, nil)
+	del.Header.Set("Authorization", "Bearer "+master)
+	dResp, _ := http.DefaultClient.Do(del)
+	dResp.Body.Close()
+
+	body := `{"name":"restored","key":"` + created.Key + `"}`
+	iReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys/import", strings.NewReader(body))
+	iReq.Header.Set("Authorization", "Bearer "+master)
+	iReq.Header.Set("Content-Type", "application/json")
+	iResp, err := http.DefaultClient.Do(iReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iResp.Body.Close()
+	if iResp.StatusCode != http.StatusConflict {
+		t.Fatalf("import tombstone: status %d, want 409", iResp.StatusCode)
+	}
+}
+
+func TestRevokeMasterPromptRefused(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	master := keymaker.MasterKey(cfg.APIKeySeed)
+	for _, id := range []string{keymaker.MasterKeyID, keymaker.PromptKeyID} {
+		del, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+id, nil)
+		del.Header.Set("Authorization", "Bearer "+master)
+		resp, err := http.DefaultClient.Do(del)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("revoke %s: %d want 400", id, resp.StatusCode)
+		}
+	}
+	// Missing ephemeral → 404
+	del, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/nope1234", nil)
+	del.Header.Set("Authorization", "Bearer "+master)
+	resp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing revoke: %d want 404", resp.StatusCode)
 	}
 }
 

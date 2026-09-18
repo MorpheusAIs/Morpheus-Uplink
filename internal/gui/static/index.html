@@ -572,6 +572,42 @@
     color: #f87171; border-color: rgba(248, 113, 113, 0.45);
   }
   button.icon.danger:hover { background: rgba(248, 113, 113, 0.12); border-color: #f87171; color: #fecaca; }
+
+  .key-row.revoked {
+    opacity: 0.55;
+  }
+  .key-row .badge-revoked {
+    display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    background: rgba(165, 165, 165, 0.18); color: var(--muted);
+    border: 1px solid rgba(165, 165, 165, 0.35); vertical-align: middle;
+  }
+  .usage-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+    margin: 0 0 12px;
+  }
+  .usage-toolbar h2 { margin: 0; }
+  .usage-seg {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 999px;
+    overflow: hidden; background: var(--surface-2);
+  }
+  .usage-seg button {
+    border: 0; background: transparent; color: var(--muted);
+    padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: inherit;
+  }
+  .usage-seg button.active {
+    background: rgba(32, 220, 142, 0.16); color: var(--green-light);
+  }
+  .usage-seg button:hover:not(.active) { color: var(--text); }
+  .usage-custom {
+    display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  }
+  .usage-custom input[type="date"], .usage-custom input[type="text"] {
+    width: auto; min-width: 7.5rem; padding: 5px 8px; font-size: 12px;
+  }
+  .usage-honesty { margin: 0 0 10px; }
+
   .callout.warn.compact { margin-top: 0; margin-bottom: 10px; padding: 10px 12px; }
   .callout.warn.compact p { margin: 0; }
 
@@ -951,7 +987,28 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
       </section>
       <section>
-        <h2>Usage</h2>
+        <div class="usage-toolbar">
+          <h2>Usage</h2>
+          <div class="usage-seg" role="group" aria-label="Usage key filter">
+            <button type="button" id="usageFilterActive" class="active" onclick="setUsageFilter('active')">Active</button>
+            <button type="button" id="usageFilterAll" onclick="setUsageFilter('all')">All</button>
+          </div>
+          <div class="usage-seg" role="group" aria-label="Usage time range">
+            <button type="button" id="usageRange24h" onclick="setUsageRange('24h')">24h</button>
+            <button type="button" id="usageRange7d" class="active" onclick="setUsageRange('7d')">7d</button>
+            <button type="button" id="usageRange30d" onclick="setUsageRange('30d')">30d</button>
+            <button type="button" id="usageRangeAll" onclick="setUsageRange('all')">All</button>
+            <button type="button" id="usageRangeCustom" onclick="setUsageRange('custom')">Custom</button>
+          </div>
+          <div class="usage-custom hidden" id="usageCustomDates">
+            <input type="text" id="usageFrom" placeholder="from YYYY-MM-DD" maxlength="10" inputmode="numeric" autocomplete="off" />
+            <span class="note" style="margin:0">–</span>
+            <input type="text" id="usageTo" placeholder="to YYYY-MM-DD" maxlength="10" inputmode="numeric" autocomplete="off" />
+            <button type="button" class="ghost" onclick="applyUsageCustomDates()">Apply</button>
+          </div>
+        </div>
+        <p class="note usage-honesty">Usage is stored by UTC day (no hourly precision).</p>
+        <p class="note" id="usageFilterNote" style="margin-top:0"></p>
         <div class="charts">
           <div class="chart-card">
             <h3>Requests by day (stacked by key)</h3>
@@ -1140,19 +1197,21 @@ function shortSecret(s, n = 7) {
   return s.slice(0, n) + '…' + s.slice(-n);
 }
 
-function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta }) {
-  const masked = shortSecret(secret);
+function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta, revoked }) {
+  const masked = secret ? shortSecret(secret) : (revoked ? '(revoked)' : '…');
   const copyBtn = copyKind
     ? `<button type="button" class="icon" title="Copy full key" onclick="copySecret('${copyKind}', this)" aria-label="Copy">${copyIconSvg}</button>`
     : `<button type="button" class="icon" title="Copy full key" onclick="copyGeneratedKey('${escapeAttr(copyId)}', this)" aria-label="Copy" ${secret ? '' : 'disabled'}>${copyIconSvg}</button>`;
   const trashBtn = canDelete
-    ? `<button type="button" class="icon danger" title="Delete key" onclick="revoke('${escapeAttr(deleteId)}')" aria-label="Delete">${trashIconSvg}</button>`
+    ? `<button type="button" class="icon danger" title="Revoke key" onclick="revoke('${escapeAttr(deleteId)}')" aria-label="Revoke">${trashIconSvg}</button>`
     : '';
-  return `<div class="key-row">
+  const badge = revoked ? ' <span class="badge-revoked">revoked</span>' : '';
+  const rowClass = revoked ? 'key-row revoked' : 'key-row';
+  return `<div class="${rowClass}">
     <div class="icon-slot">${copyBtn}</div>
     <div class="icon-slot">${trashBtn}</div>
-    <div class="name" title="${escapeAttr(name)}">${escapeHtml(name)}</div>
-    <code title="Masked — use copy for full key">${escapeHtml(masked)}</code>
+    <div class="name" title="${escapeAttr(name)}">${escapeHtml(name)}${badge}</div>
+    <code title="${secret ? 'Masked — use copy for full key' : 'Secret cleared'}">${escapeHtml(masked)}</code>
     <div class="meta" title="${escapeAttr(meta)}">${escapeHtml(meta)}</div>
   </div>`;
 }
@@ -1385,7 +1444,8 @@ async function doRefresh() {
     if (!allModels.length) loadModels().catch(() => {});
 
     const us = await api('/admin/usage');
-    renderUsage(us.usage || []);
+    rawUsageRows = us.usage || [];
+    applyUsageView();
   } catch (e) { console.error(e); }
 }
 
@@ -1549,7 +1609,9 @@ function populateConnectClient(ks) {
     { id: 'prompt', label: formatKeyLabel('Prompt (recommended)', ks.promptKey || secrets.prompt, 'prompt') },
   ];
   for (const k of (ks.keys || [])) {
+    if (k.revokedAt) continue;
     const secret = k.secret || generatedKeySecrets[k.id] || '';
+    if (!secret) continue;
     opts.push({ id: k.id, label: formatKeyLabel(k.name || k.id, secret, k.id) });
   }
   sel.innerHTML = opts.map(o =>
@@ -1678,9 +1740,161 @@ function rebuildKeyLabels(ks) {
     prompt: formatKeyLabel('Prompt', ks.promptKey || secrets.prompt, 'prompt'),
   };
   for (const k of (ks.keys || [])) {
+    // Include revoked names for Usage All; use id fingerprint when secret cleared.
     const secret = k.secret || generatedKeySecrets[k.id] || '';
-    keyLabels[k.id] = formatKeyLabel(k.name || k.id, secret, k.id);
+    keyLabels[k.id] = formatKeyLabel(k.name || k.id, secret || k.id, k.id);
   }
+}
+
+
+let rawUsageRows = [];
+let usageKeyFilter = (sessionStorage.getItem('uplink_usage_filter') === 'all') ? 'all' : 'active';
+let usageRange = sessionStorage.getItem('uplink_usage_range') || '7d';
+if (!['24h', '7d', '30d', 'all', 'custom'].includes(usageRange)) usageRange = '7d';
+let usageCustomFrom = sessionStorage.getItem('uplink_usage_from') || '';
+let usageCustomTo = sessionStorage.getItem('uplink_usage_to') || '';
+
+function utcDayString(d) {
+  const x = (d instanceof Date) ? d : new Date(d);
+  return x.toISOString().slice(0, 10);
+}
+
+function todayUTC() {
+  return utcDayString(new Date());
+}
+
+/** Josh residual: custom dates must be YYYY-MM-DD UTC only; from <= to. */
+function isValidUTCDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+function usageDayWindow(range, fromStr, toStr) {
+  const today = todayUTC();
+  if (range === 'all') return null;
+  if (range === 'custom') {
+    if (!isValidUTCDate(fromStr) || !isValidUTCDate(toStr) || fromStr > toStr) {
+      return { error: 'Custom range needs YYYY-MM-DD UTC with from ≤ to.' };
+    }
+    return { from: fromStr, to: toStr };
+  }
+  const end = new Date(); // now UTC via toISOString days
+  if (range === '24h') {
+    // Days that intersect the last 24 hours → typically today + yesterday UTC
+    const y = new Date(Date.now() - 24 * 3600 * 1000);
+    return { from: utcDayString(y), to: today };
+  }
+  let days = 7;
+  if (range === '30d') days = 30;
+  // 7d = todayUTC-6 through today (7 calendar days)
+  const start = new Date(Date.UTC(
+    Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10))
+  ));
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return { from: utcDayString(start), to: today };
+}
+
+function ephemeralKeyIndex(keys) {
+  const map = {};
+  for (const k of (keys || [])) {
+    map[k.id] = k;
+  }
+  return map;
+}
+
+function filterUsageRows(rows, keyFilter, range, fromStr, toStr, keysList) {
+  const byId = ephemeralKeyIndex(keysList);
+  let out = rows.slice();
+  if (keyFilter !== 'all') {
+    out = out.filter(u => {
+      const kid = u.keyId || '';
+      if (kid === 'master' || kid === 'prompt') return true;
+      const rec = byId[kid];
+      if (!rec) return false; // orphan
+      if (rec.revokedAt) return false;
+      return true;
+    });
+  }
+  const win = usageDayWindow(range, fromStr, toStr);
+  if (win && win.error) return { rows: [], note: win.error };
+  if (win) {
+    out = out.filter(u => {
+      const d = u.day || '';
+      return d >= win.from && d <= win.to;
+    });
+  }
+  let note = '';
+  if (keyFilter === 'active') note = 'Active keys only (hides revoked + orphans).';
+  else note = 'All keys — revoked keep names; orphans show as bare id.';
+  if (win && !win.error) note += ' Days ' + win.from + ' → ' + win.to + ' UTC.';
+  else if (range === 'all') note += ' All time.';
+  return { rows: out, note };
+}
+
+function syncUsageToolbarUI() {
+  const setSeg = (ids, activeId) => {
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('active', id === activeId);
+    });
+  };
+  setSeg(['usageFilterActive', 'usageFilterAll'], usageKeyFilter === 'all' ? 'usageFilterAll' : 'usageFilterActive');
+  const rangeId = ({ '24h': 'usageRange24h', '7d': 'usageRange7d', '30d': 'usageRange30d', 'all': 'usageRangeAll', 'custom': 'usageRangeCustom' })[usageRange] || 'usageRange7d';
+  setSeg(['usageRange24h', 'usageRange7d', 'usageRange30d', 'usageRangeAll', 'usageRangeCustom'], rangeId);
+  const custom = document.getElementById('usageCustomDates');
+  if (custom) custom.classList.toggle('hidden', usageRange !== 'custom');
+  const fromEl = document.getElementById('usageFrom');
+  const toEl = document.getElementById('usageTo');
+  if (fromEl && usageCustomFrom) fromEl.value = usageCustomFrom;
+  if (toEl && usageCustomTo) toEl.value = usageCustomTo;
+}
+
+function setUsageFilter(mode) {
+  usageKeyFilter = (mode === 'all') ? 'all' : 'active';
+  sessionStorage.setItem('uplink_usage_filter', usageKeyFilter);
+  applyUsageView();
+}
+
+function setUsageRange(range) {
+  if (!['24h', '7d', '30d', 'all', 'custom'].includes(range)) range = '7d';
+  usageRange = range;
+  sessionStorage.setItem('uplink_usage_range', usageRange);
+  applyUsageView();
+}
+
+function applyUsageCustomDates() {
+  const fromStr = (document.getElementById('usageFrom')?.value || '').trim();
+  const toStr = (document.getElementById('usageTo')?.value || '').trim();
+  if (!isValidUTCDate(fromStr) || !isValidUTCDate(toStr)) {
+    const note = document.getElementById('usageFilterNote');
+    if (note) note.textContent = 'Custom range needs YYYY-MM-DD UTC with from ≤ to.';
+    return;
+  }
+  if (fromStr > toStr) {
+    const note = document.getElementById('usageFilterNote');
+    if (note) note.textContent = 'Custom range needs YYYY-MM-DD UTC with from ≤ to.';
+    return;
+  }
+  usageCustomFrom = fromStr;
+  usageCustomTo = toStr;
+  sessionStorage.setItem('uplink_usage_from', usageCustomFrom);
+  sessionStorage.setItem('uplink_usage_to', usageCustomTo);
+  usageRange = 'custom';
+  sessionStorage.setItem('uplink_usage_range', 'custom');
+  applyUsageView();
+}
+
+function applyUsageView() {
+  syncUsageToolbarUI();
+  const keysList = window.__lastEphemeralKeys || [];
+  const { rows, note } = filterUsageRows(
+    rawUsageRows, usageKeyFilter, usageRange, usageCustomFrom, usageCustomTo, keysList
+  );
+  const noteEl = document.getElementById('usageFilterNote');
+  if (noteEl) noteEl.textContent = note || '';
+  renderUsage(rows);
 }
 
 function renderUsage(rows) {
@@ -1862,14 +2076,22 @@ function renderGeneratedKeys(keys) {
     return;
   }
   box.innerHTML = keys.map(k => {
-    const full = k.secret || '';
+    const revoked = !!k.revokedAt;
+    const full = (!revoked && k.secret) ? k.secret : '';
     if (full) generatedKeySecrets[k.id] = full;
+    else delete generatedKeySecrets[k.id];
     const when = k.createdAt ? new Date(k.createdAt).toLocaleDateString() : '';
+    let meta = when ? ('Created ' + when) : '';
+    if (revoked && k.revokedAt) {
+      const ra = new Date(k.revokedAt);
+      meta = (meta ? meta + ' · ' : '') + 'Revoked ' + (isNaN(ra) ? String(k.revokedAt) : ra.toLocaleString());
+    }
     return keyRowHTML({
-      copyId: k.id, canDelete: true, deleteId: k.id,
+      copyId: k.id, canDelete: !revoked, deleteId: k.id,
       name: k.name || k.id,
-      secret: full || ((k.prefix || '') + 'xxxxxxxx'),
-      meta: when ? ('Created ' + when) : '',
+      secret: full,
+      meta,
+      revoked,
     });
   }).join('');
 }
@@ -2023,7 +2245,7 @@ async function importKeyList() {
 }
 
 async function revoke(id) {
-  if (!confirm('Delete this ephemeral key?')) return;
+  if (!confirm('Revoke this key? It will stop working; usage history keeps the name.')) return;
   await api('/admin/keys/' + id, { method: 'DELETE' });
   refresh();
 }

@@ -86,3 +86,105 @@ func TestPruneUsageOlderThanNoOp(t *testing.T) {
 		t.Fatalf("removed: got %d want 0", removed)
 	}
 }
+
+func TestRevokeKeyTombstone(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, rec, err := keymaker.NewKey("gary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddKey(rec); err != nil {
+		t.Fatal(err)
+	}
+	if id := s.LookupKey(full); id != rec.ID {
+		t.Fatalf("LookupKey before revoke: got %q want %q", id, rec.ID)
+	}
+
+	ok, err := s.RevokeKey(rec.ID)
+	if err != nil || !ok {
+		t.Fatalf("RevokeKey: ok=%v err=%v", ok, err)
+	}
+	keys := s.ListKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected tombstone retained, got %d keys", len(keys))
+	}
+	if keys[0].RevokedAt == nil {
+		t.Fatal("RevokedAt unset")
+	}
+	if keys[0].Secret != "" {
+		t.Fatalf("secret should be cleared, got %q", keys[0].Secret)
+	}
+	if keys[0].Name != "gary" || keys[0].ID != rec.ID || keys[0].Hash != rec.Hash {
+		t.Fatalf("tombstone fields mutated: %+v", keys[0])
+	}
+	if id := s.LookupKey(full); id != "" {
+		t.Fatalf("LookupKey after revoke: got %q want empty", id)
+	}
+
+	// Idempotent second revoke.
+	ok, err = s.RevokeKey(rec.ID)
+	if err != nil || !ok {
+		t.Fatalf("idempotent RevokeKey: ok=%v err=%v", ok, err)
+	}
+
+	// Missing id → false.
+	ok, err = s.RevokeKey("no-such-id")
+	if err != nil || ok {
+		t.Fatalf("missing: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRevokeKeyRefusesMasterPrompt(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{keymaker.MasterKeyID, keymaker.PromptKeyID} {
+		ok, err := s.RevokeKey(id)
+		if err == nil || ok {
+			t.Fatalf("revoke %s: ok=%v err=%v", id, ok, err)
+		}
+	}
+}
+
+func TestAddKeyRejectsTombstoneCollision(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rec, err := keymaker.NewKey("orig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddKey(rec); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.RevokeKey(rec.ID)
+	if err != nil || !ok {
+		t.Fatalf("revoke: ok=%v err=%v", ok, err)
+	}
+
+	// Same id + new hash
+	dupID := rec
+	dupID.Hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	dupID.Secret = "sk-revived.should-fail"
+	dupID.RevokedAt = nil
+	if err := s.AddKey(dupID); err == nil {
+		t.Fatal("expected id collision with tombstone")
+	}
+
+	// Same hash + new id
+	dupHash := rec
+	dupHash.ID = "deadbeef"
+	dupHash.Secret = "sk-deadbeef.should-fail"
+	dupHash.RevokedAt = nil
+	if err := s.AddKey(dupHash); err == nil {
+		t.Fatal("expected hash collision with tombstone")
+	}
+}
