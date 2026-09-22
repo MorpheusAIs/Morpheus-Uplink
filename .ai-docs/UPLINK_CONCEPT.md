@@ -6,7 +6,7 @@
 > **Naming note:** this design was drafted under the working name **PAPIGW**
 > ("Personal API Gateway"). The product is now **Uplink** — *your personal
 > gateway to the Morpheus decentralized AI network* — living in this repo
-> (`absgrafx/Morpheus-Uplink`, image `ghcr.io/absgrafx/uplink`). Vocabulary
+> (`MorpheusAIs/Morpheus-Uplink`, image `ghcr.io/morpheusais/uplink`). Vocabulary
 > that came with the rename: the GUI login greets with "Operator.", the keys
 > package is `keymaker`, and the hosted-APIGW contrast line is "stop sharing
 > a party line."
@@ -199,7 +199,7 @@ secrets block from a form (never storing them), one-click `secretvm-cli` command
   `go test ./...` green with a mock router covering auth, session open/reuse, key
   scopes and lifecycle, `/node/*` gating. Embedded dark-purple GUI. Full local mock
   stack (`cmd/mockrouter`) demoed end-to-end on macOS incl. streaming and metering.
-- **Next:** publish `ghcr.io/absgrafx/uplink` (public image), first SecretVM deploy,
+- **Next:** publish `ghcr.io/morpheusais/uplink` (public image), first SecretVM deploy,
   then real-wallet inference test.
 
 ## 7. Source material

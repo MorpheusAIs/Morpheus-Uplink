@@ -37,7 +37,7 @@ services:
     # Template only - for real deployments use the digest-pinned
     # docker-compose.secretvm.deployed.yml attached to each GitHub release.
     # ROUTER_URL and DATA_DIR defaults are baked into the image.
-    image: ghcr.io/absgrafx/uplink:latest
+    image: ghcr.io/morpheusais/uplink:latest
     restart: unless-stopped
     logging: *default-logging
     init: true

@@ -114,7 +114,7 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 - **PR → `main`:** vet + tests (only when material paths change — see below).
 - **Merge to `main`:** next `vX.Y.Z` (patch by default; `#minor` / `#major` in
-  the merge commit message), multi-arch image to `ghcr.io/absgrafx/uplink`,
+  the merge commit message), multi-arch image to `ghcr.io/morpheusais/uplink`,
   GitHub release with digest-pinned compose + env examples.
 - **workflow_dispatch on a branch:** prerelease image `vX.Y.N-<branch>` only
   (no release, no `latest`). Always available even for doc-only trees.

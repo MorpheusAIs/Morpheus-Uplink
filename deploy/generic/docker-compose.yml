@@ -48,7 +48,7 @@ services:
       - uplink
 
   uplink:
-    image: ghcr.io/absgrafx/uplink:latest
+    image: ghcr.io/morpheusais/uplink:latest
     restart: unless-stopped
     logging: *default-logging
     init: true
