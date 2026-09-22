@@ -17,8 +17,8 @@
 #   - otherwise                            → patch bump
 #
 # Publishing uses the workflow's GITHUB_TOKEN (packages: write) — no PAT.
-# NOTE (one-time): after the first push, make the ghcr.io/absgrafx/uplink
-# package public in its settings so SecretVM can pull anonymously.
+# NOTE (one-time): after the first push, make the ghcr.io/morpheusais/uplink
+# package public in the MorpheusAIs org package settings so SecretVM can pull anonymously.
 name: CI/CD
 
 # Only material paths run the pipeline (vet/test, and on main: tag + image +
@@ -62,7 +62,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: ghcr.io/absgrafx/uplink
+  IMAGE_NAME: ghcr.io/morpheusais/uplink
 
 jobs:
   test:
