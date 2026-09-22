@@ -27,7 +27,7 @@ Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
-Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
+Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm)**.
 
 ---
 
@@ -68,17 +68,14 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
-WEB_PUBLIC_URL=https://localhost
 ```
 
-Optional (leave commented / omit unless you need them):
-
-```bash
-#SESSION_DURATION_SECONDS=600
-#HOUSEKEEPING=true
-```
-
-Base network constants (chain ID, Diamond, MOR token) are baked into the compose — **not** Encrypted Secrets.
+**Only these five** belong in Encrypted Secrets. SecretVM scrapes **every**
+`environment:` key (literals too), so non-secrets stay in compose `configs:`
+(`router_network_env`): `WEB_PUBLIC_URL=https://localhost`, 
+`SESSION_DURATION_SECONDS=600`, `PROXY_*` / `LOG_LEVEL_*`, plus Base chain ID /
+Diamond / MOR. After first boot, edit `WEB_PUBLIC_URL` in that configs block to
+`https://<vm-host>` and redeploy — do **not** add it to Encrypted Secrets.
 
 </details>
 
@@ -131,7 +128,7 @@ Non-secret knobs may be plain Railway vars. Full checklist:
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
 | `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt. |
-| `WEB_PUBLIC_URL` | Router (SecretVM) | Public HTTPS origin; set after you know the VM hostname. |
+| `WEB_PUBLIC_URL` | Router (SecretVM) | Baked in compose `configs:` (`https://localhost`); edit + redeploy after you know the VM hostname — **not** Encrypted Secrets. |
 
 </details>
 
@@ -141,10 +138,10 @@ Non-secret knobs may be plain Railway vars. Full checklist:
 
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
-3. Fill Encrypted Secrets from the SecretVM block above (`WEB_PUBLIC_URL=https://localhost` is fine for first boot).
-4. Deploy. Wait for health (`uplink … listening`, router healthy).
+3. Fill Encrypted Secrets from the SecretVM block above (**five keys only**).
+4. Deploy. Wait for health (`uplink … listening`, router healthy). `WEB_PUBLIC_URL` is already baked as `https://localhost` in compose configs.
 5. Copy the public HTTPS hostname (e.g. `https://something.vm.scrtlabs.com`).
-6. Set `WEB_PUBLIC_URL=https://<that-host>` and restart once.
+6. Edit compose `configs.router_network_env` → `WEB_PUBLIC_URL=https://<that-host>` and redeploy once.
 7. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
 
 ---
