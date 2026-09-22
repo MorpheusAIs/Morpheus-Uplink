@@ -14,7 +14,7 @@ for the Lumerin node.
 | **Railway (this)** | Railway HTTPS in front of uplink `:8080` | Railway **secret** vars (H4) |
 
 Production path: download digest-pinned release assets from
-[GitHub Releases](https://github.com/absgrafx/Morpheus-Uplink/releases/latest)
+[GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
 (`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
 this scaffold when you cut a real deploy. Stock router pin today:
 
@@ -82,10 +82,14 @@ privacy on the stock v7.11.0 digest until verified.
 
 ## Operator checklist
 
-1. Create Railway project with two services (or compose plugin) sharing a
-   private network
-2. Set H4 vars as **Secrets**; set non-secrets as plain vars
-3. Pin uplink image to the release digest (not only `:latest`)
-4. Replicas = 1 for `proxy-router` (H3)
-5. Confirm only uplink is publicly reachable
-6. Open `https://<public>/gui` and fund the wallet per docs/01-prerequisites.md
+| Step | Done when |
+|------|-----------|
+| **1. Project** | Railway project has uplink + proxy-router on a private network (compose plugin or two services). |
+| **2. Secrets** | H4 vars are **Railway Secrets** only; non-secrets are plain vars. |
+| **3. Digests** | Images pinned to [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) digests (not bare `:latest`). |
+| **4. Replicas** | `proxy-router` replicas = **1** (H3). |
+| **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS → `:8080`). |
+| **6. GUI + fund** | `https://<public>/gui` works; wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |
+
+**Done** when GUI login works and Probe returns a completion. Bootstrap summary:
+[docs/02-bootstrap.md — First start — Railway](../../docs/02-bootstrap.md#first-start--railway).

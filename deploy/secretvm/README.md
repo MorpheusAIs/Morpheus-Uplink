@@ -5,7 +5,7 @@ certs; Encrypted Secrets supply wallet/admin/seed/cookie/RPC.
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:
-https://github.com/absgrafx/Morpheus-Uplink/releases/latest
+https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## H3 - single replica
 

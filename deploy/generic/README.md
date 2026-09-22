@@ -4,7 +4,7 @@ Caddy + Let's Encrypt; secrets via `.env` (never commit). Same GHCR image
 pair as [SecretVM](../secretvm/) and [Railway](../railway/).
 
 Prefer digest-pinned release assets:
-https://github.com/absgrafx/Morpheus-Uplink/releases/latest
+https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## H3 - single replica
 

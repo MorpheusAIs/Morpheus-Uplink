@@ -2,21 +2,28 @@
 
 [← Prerequisites](01-prerequisites.md) · [Guide home](README.md) · [Next: GUI →](03-gui.md)
 
-First boot → funded wallet → GUI login. **No git clone** — download the published compose from the [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest) and pull images from `ghcr.io`.
+First boot → funded wallet → GUI login. **No git clone** — download the published compose from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and pull images from `ghcr.io`.
 
 **Default path is SecretVM** ([Secret Labs](https://docs.scrt.network/)). Use
-generic VPS only if you already run your own Docker + TLS.
+generic VPS if you already run your own Docker + TLS. **Railway** is a
+scaffold overlay (same image pair; secrets in Railway Secrets only).
 
 ---
 
 ## Pick a compose path
 
-| Path | Best when | Release assets |
+Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
+proxy-router v7.11.0). Pick the skin that matches your host:
+
+| Path | Best when | Release / scaffold |
 |------|-----------|----------------|
-| **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
-| **Any Docker VPS** | You already have a box / Phala / dstack | `docker-compose.generic.deployed.yml` + `env.generic.example` |
+| **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS (Traefik) | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
+| **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
+| **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `deploy/railway/` + [operator checklist](../deploy/railway/README.md) |
 
 Images (already named in the YAML): `ghcr.io/absgrafx/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0` (digest-pinned in compose)
+
+Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
 Root README CTA: **[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
 
@@ -95,6 +102,23 @@ API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 </details>
 
 <details>
+<summary><strong>Railway — secrets only in Railway Secrets</strong></summary>
+
+Do **not** put wallet/admin/seed/cookie/RPC material in `railway.toml`, image
+labels, build args, or committed compose. Set these as **Railway Secrets**:
+
+- `WALLET_PRIVATE_KEY`
+- `ADMIN_PASSWORD`
+- `API_KEY_SEED`
+- `COOKIE_CONTENT`
+- RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+
+Non-secret knobs may be plain Railway vars. Full checklist:
+[deploy/railway/README.md](../deploy/railway/README.md).
+
+</details>
+
+<details>
 <summary><strong>What each required var does</strong></summary>
 
 | Var | Used by | Notes |
@@ -114,7 +138,7 @@ API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 ## First start — SecretVM
 
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
-2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
+2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (`WEB_PUBLIC_URL=https://localhost` is fine for first boot).
 4. Deploy. Wait for health (`uplink … listening`, router healthy).
 5. Copy the public HTTPS hostname (e.g. `https://something.vm.scrtlabs.com`).
@@ -130,8 +154,8 @@ DNS A/AAAA → this machine; ports **80** and **443** open. Then:
 ```bash
 mkdir -p uplink && cd uplink
 
-curl -fsSL -O https://github.com/absgrafx/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
-curl -fsSL -o .env https://github.com/absgrafx/Morpheus-Uplink/releases/latest/download/env.generic.example
+curl -fsSL -O https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
+curl -fsSL -o .env https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/env.generic.example
 
 # Edit .env — fill PUBLIC_HOST + the five required secrets (see Secrets above)
 nano .env   # or your editor
@@ -140,6 +164,23 @@ docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 ```
 
 Open `https://$PUBLIC_HOST/gui/`.
+
+---
+
+## First start — Railway
+
+Scaffold only — same digests as SecretVM/generic; pin images; single-replica
+proxy-router. Full step→done checklist:
+**[deploy/railway/README.md](../deploy/railway/README.md)**.
+
+1. Create a Railway project with uplink + proxy-router on a private network.
+2. Set secret-class vars as **Railway Secrets** only (see Secrets above).
+3. Pin uplink (and router) to release digests — not bare `:latest`.
+4. Replicas = **1** for wallet-bearing `proxy-router`.
+5. Confirm only uplink is public (`:8080` behind Railway HTTPS).
+6. Open `https://<public>/gui/` → fund wallet → Probe (same as other hosts).
+
+Done when GUI login works and Probe returns a completion.
 
 ---
 

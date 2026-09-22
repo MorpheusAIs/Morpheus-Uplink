@@ -57,7 +57,7 @@ its own layer.
 ## Other deploy targets
 
 Same images; different compose. Assets from the
-[latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
+[latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest).
 
 | Target | Compose | Notes |
 |--------|---------|--------|

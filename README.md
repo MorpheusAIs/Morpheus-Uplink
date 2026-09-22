@@ -43,12 +43,12 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 **Fastest path:** [SecretVM](https://docs.scrt.network/) (Secret Labs) → paste
 the release compose → Encrypted Secrets → fund → Probe → point a client at
 `/v1`. Do **not** `git clone` for production — use the
-[latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
+[latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest).
 
 | Step | Do this |
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
-| **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest). |
+| **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
 | **3. Secrets** | Fill Encrypted Secrets (block below). First boot may use `WEB_PUBLIC_URL=https://localhost`. |
 | **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
 | **5. Hostname** | Set `WEB_PUBLIC_URL=https://….vm.scrtlabs.com` to your public host, restart once. |
@@ -72,6 +72,8 @@ WEB_PUBLIC_URL=https://localhost
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
 </details>
+
+**Other hosts:** [Generic VPS](docs/02-bootstrap.md#first-start--generic-vps) (Caddy + LE) · [Railway scaffold](docs/02-bootstrap.md#first-start--railway) — same GHCR digests; see [docs/02-bootstrap.md](docs/02-bootstrap.md) and [deploy/](deploy/).
 
 ```bash
 curl -s https://YOUR_HOST/v1/chat/completions \
