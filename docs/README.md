@@ -4,7 +4,7 @@
 
 **Recommended host:** [SecretVM](https://docs.scrt.network/) (Secret Labs) —
 encrypted secrets + platform TLS. Root README has the fast CTA:
-**[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
+**[Get running on SecretVM](../README.md#get-running-secretvm)**.
 
 AI agents: read root [`AGENTS.md`](../AGENTS.md) first (hard rules + [`llms-full.txt`](../llms-full.txt)).
 
