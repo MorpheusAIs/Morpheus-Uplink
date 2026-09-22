@@ -1,13 +1,14 @@
 # Uplink — documentation index for AI agents
 
 > Read AGENTS.md first. Full corpus: llms-full.txt
-> Repo: https://github.com/absgrafx/Morpheus-Uplink
+> Repo: https://github.com/MorpheusAIs/Morpheus-Uplink
 
 ## Defaults agents must know
 
 - **Uplink ≠ api.mor.org.** Hosted multi-tenant API is api.mor.org / apidocs.mor.org; Uplink is your single-tenant gateway + wallet.
 - **Catalog / bids:** `ACTIVE_MODELS_URL` → https://active.mor.org/gateway_models.json ; `GATEWAY_BIDS_URL` → https://active.mor.org/gateway_bids.json . Never default to active_models.json / ALL.
-- **Proxy pin:** release compose digest-pins proxy-router (Lumerin) at **v7.11.0** — not `:latest`.
+- **Proxy pin:** release compose digest-pins proxy-router (Lumerin) at **v7.11.6-test** (release channel / #889 caps early access — not Base testnet) — not `:latest`.
+- **Deploy overlays:** SecretVM · generic VPS · Railway scaffold — same GHCR digests; see deploy/*/README.md.
 - **Humans** → docs/README.md. **Agents** → AGENTS.md, then llms-full.txt.
 - **Never invent** live prices, catalog size, or contract addresses — cite gateway feeds + docs/01-prerequisites.md.
 
@@ -24,12 +25,18 @@
 
 - [Uplink operator guide](docs/README.md): Uplink is your personal gateway to the [Morpheus](https://mor.org) network: an OpenAI-compatible HTTPS endpoint backed by your own consumer proxy-router (C-Node
 - [1. Prerequisites](docs/01-prerequisites.md): What you need before compose. Skip anything you already have.
-- [2. Bootstrap](docs/02-bootstrap.md): First boot → funded wallet → GUI login. No git clone — download the published compose from the [latest release](https://github.com/absgrafx/Morpheus-Uplin
+- [2. Bootstrap](docs/02-bootstrap.md): First boot → funded wallet → GUI login. No git clone — download the published compose from the [latest release](https://github.com/MorpheusAIs/Morpheus-Up
 - [3. GUI basics](docs/03-gui.md): One topic at a time. You do not need every section on day one.
 - [4. Apps & agents](docs/04-clients.md): Uplink speaks OpenAI-compatible HTTP. Almost every OpenAI client works with three fields.
-- [5. Updates & portability](docs/05-updates.md): 1. GUI header may show a new release chip when [GitHub Releases](https://github.com/absgrafx/Morpheus-Uplink/releases) is ahead of the running build (notify onl
+- [5. Updates & portability](docs/05-updates.md): 1. GUI header may show a new release chip when [GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases) is ahead of the running build (notify 
 - [6. Developers](docs/06-developers.md): How the sausage is made — local runs, env vars, CI, repo layout. Operators
 - [Uplink user guide](docs/USER_GUIDE.md): The operator guide is split into short chapters so you can open one topic at a time:
+
+## Deploy overlays
+
+- [SecretVM overlay](deploy/secretvm/README.md): Default production host for Uplink. Traefik terminates TLS with SecretVM
+- [Generic Docker / VPS overlay](deploy/generic/README.md): Caddy + Let's Encrypt; secrets via `.env` (never commit). Same GHCR image
+- [Railway overlay (scaffold)](deploy/railway/README.md): Peer host overlay for Uplink + stock Lumerin v7.11.6-test (release channel / #889 caps early access — not Base testnet). Same GHCR image
 
 ## Design (optional)
 

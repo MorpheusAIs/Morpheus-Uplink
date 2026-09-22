@@ -1,25 +1,18 @@
-# Uplink on any Docker host (VPS, Phala/dstack, home lab).
+# Railway overlay scaffold - same GHCR image pair as SecretVM/generic.
 #
-# Same stack as SecretVM, but secrets come from a normal .env file and
-# Caddy terminates TLS with Let's Encrypt (no SecretVM cert mount).
+# Images are stock digests only. Do NOT docker build the Lumerin node here.
+# Secret-class vars (H4) belong in Railway Secrets, never in this file or
+# railway.toml: WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED,
+# COOKIE_CONTENT, ETH_NODE_ADDRESS (RPC).
 #
-# Prefer the digest-pinned release asset (no git clone):
-#   curl -fsSL -O https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
-#   curl -fsSL -o .env https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/env.generic.example
-#   # edit .env (PUBLIC_HOST + secrets), then:
-#   docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
+# H3: single replica for wallet-bearing proxy-router (multi-replica unsupported).
+# H2 blast radius / operator notes: see deploy/railway/README.md.
 #
-# Gateway: https://${PUBLIC_HOST}/gui
-# Only :80 and :443 need to be public. Router :8082 stays internal.
-#
-# Privacy env (L1): PROXY_* and LOG_LEVEL_* are set and believed honored on
-# pinned v7.11.6-test; live acceptance pending. Do not market as TEE privacy.
+# Privacy (L1): set / believed honored on pinned v7.11.6-test; live acceptance pending.
 #
 # Lumerin pin note: tag v7.11.6-test is the Lumerin release channel (includes
 # #889 gateway caps early access), NOT Base testnet -- chain comes from env
 # (defaults Base mainnet 8453 / Diamond / MOR below).
-#
-# H2 blast radius / H3 single-replica: see deploy/generic/README.md.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -27,26 +20,6 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  caddy:
-    image: caddy:2.8-alpine
-    restart: unless-stopped
-    logging: *default-logging
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST to your DNS name}
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
-    configs:
-      - source: caddyfile
-        target: /etc/caddy/Caddyfile
-    networks:
-      - web
-    depends_on:
-      - uplink
-
   uplink:
     image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
@@ -63,20 +36,20 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    ports:
+      - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      # Same user:pass as the router (ROUTER_AUTH in .env.example works if you also set COOKIE_CONTENT=...).
-      - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
+      - COOKIE_CONTENT=${COOKIE_CONTENT}
       - ROUTER_URL=http://proxy-router:8082
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
-    networks:
-      - web
     depends_on:
       - proxy-router
 
@@ -96,6 +69,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    # No public port on router - only uplink reaches :8082 on the private network.
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
@@ -104,9 +78,8 @@ services:
       - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}
       - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
-      - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
-      - WEB_PUBLIC_URL=https://${PUBLIC_HOST}
-      # Privacy (L1: set / believed honored; live acceptance pending).
+      - COOKIE_CONTENT=${COOKIE_CONTENT}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}
       - PROXY_STORE_CHAT_CONTEXT=false
       - PROXY_FORWARD_CHAT_CONTEXT=false
       - LOG_LEVEL_APP=warn
@@ -114,25 +87,8 @@ services:
       - LOG_LEVEL_ETH_RPC=warn
     volumes:
       - router_data:/app/data
-    networks:
-      - web
-    # H3: single replica for this wallet-bearing proxy-router (multi-replica unsupported).
+    # H3: deploy with replicas=1 for this wallet-bearing service.
 
 volumes:
   uplink_data:
   router_data:
-  caddy_data:
-  caddy_config:
-
-networks:
-  web:
-    driver: bridge
-
-configs:
-  caddyfile:
-    content: |
-      {$PUBLIC_HOST} {
-        reverse_proxy uplink:8080 {
-          flush_interval -1
-        }
-      }

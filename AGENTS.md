@@ -29,7 +29,7 @@ There is no separate docs host or MCP for Uplink.
 |-------|------|
 | Operator guide index | [`docs/README.md`](docs/README.md) |
 | Prerequisites (wallet, MOR, RPC) | [`docs/01-prerequisites.md`](docs/01-prerequisites.md) |
-| Bootstrap (SecretVM / VPS) | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) |
+| Bootstrap (SecretVM / VPS / Railway) | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) |
 | GUI, keys, MOR buckets, Probe | [`docs/03-gui.md`](docs/03-gui.md) |
 | Clients / agents (`/v1`) | [`docs/04-clients.md`](docs/04-clients.md) |
 | Updates & portability | [`docs/05-updates.md`](docs/05-updates.md) |
@@ -80,11 +80,15 @@ There is no separate docs host or MCP for Uplink.
    Consumer nodes need **no inbound `:3333`** — they dial out to providers.
 
 8. **Deploy from GitHub Release assets, not `git clone`, for production.**  
-   Digest-pinned compose: `docker-compose.secretvm.deployed.yml` or
-   `docker-compose.generic.deployed.yml` from
-   [releases/latest](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
-   Proxy-router (Lumerin) is **pinned to v7.11.0 by digest** — never advise
-   `:latest`.
+   Three overlays, same GHCR digests: SecretVM
+   (`docker-compose.secretvm.deployed.yml`), generic VPS
+   (`docker-compose.generic.deployed.yml`), and Railway scaffold
+   (`deploy/railway/`). Prefer
+   [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
+   over forks. Proxy-router (Lumerin) is **pinned to v7.11.6-test by digest**
+   (Lumerin release channel / #889 gateway caps early access — **not** Base
+   testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
+   single-replica proxy-router.
 
 9. **Use exact model catalog names** from `GET /v1/models`, Probe, or
    [`gateway_models.json`](https://active.mor.org/gateway_models.json)
@@ -115,7 +119,8 @@ There is no separate docs host or MCP for Uplink.
 | User says | Go to |
 |-----------|--------|
 | How do I install / bootstrap? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) |
-| SecretVM vs VPS? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) + [`docs/05-updates.md`](docs/05-updates.md) |
+| SecretVM vs VPS vs Railway? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) + [`docs/05-updates.md`](docs/05-updates.md) |
+| Railway scaffold? | [`docs/02-bootstrap.md#first-start--railway`](docs/02-bootstrap.md#first-start--railway) · [`deploy/railway/README.md`](deploy/railway/README.md) |
 | Where is my MOR? / daylock | [`docs/03-gui.md`](docs/03-gui.md#where-is-my-mor) |
 | How do I call from Cursor / SDK? | [`docs/04-clients.md`](docs/04-clients.md) |
 | How do I update? | [`docs/05-updates.md`](docs/05-updates.md) |
@@ -134,7 +139,7 @@ docs/                operator guide (01–05) + developers (06)
 .ai-docs/            design concept (not required for ops)
 cmd/uplink/          Go entrypoint
 internal/            gateway packages (api, pool, router, keys, gui, …)
-deploy/              SecretVM + generic compose templates (CI pins digests)
+deploy/              secretvm + generic + railway overlays (CI pins digests)
 ```
 
 ## When writing code in this repo
@@ -153,4 +158,4 @@ After editing operator docs:
 ./scripts/gen-llms.sh
 ```
 
-That refreshes `llms.txt` and `llms-full.txt` from `docs/` + this file.
+That refreshes `llms.txt` and `llms-full.txt` from `docs/`, `deploy/*/README.md`, and this file.

@@ -43,12 +43,12 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 **Fastest path:** [SecretVM](https://docs.scrt.network/) (Secret Labs) → paste
 the release compose → Encrypted Secrets → fund → Probe → point a client at
 `/v1`. Do **not** `git clone` for production — use the
-[latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest).
+[latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest).
 
 | Step | Do this |
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
-| **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/absgrafx/Morpheus-Uplink/releases/latest). |
+| **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
 | **3. Secrets** | Fill Encrypted Secrets (block below). First boot may use `WEB_PUBLIC_URL=https://localhost`. |
 | **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
 | **5. Hostname** | Set `WEB_PUBLIC_URL=https://….vm.scrtlabs.com` to your public host, restart once. |
@@ -73,6 +73,8 @@ Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstra
 
 </details>
 
+**Other hosts:** [Generic VPS](docs/02-bootstrap.md#first-start--generic-vps) (Caddy + LE) · [Railway scaffold](docs/02-bootstrap.md#first-start--railway) — same GHCR digests; see [docs/02-bootstrap.md](docs/02-bootstrap.md) and [deploy/](deploy/).
+
 ```bash
 curl -s https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer sk-prompt.…" \
@@ -90,7 +92,8 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Release compose **digest-pins proxy-router (Lumerin) at v7.11.0** — not
+Release compose **digest-pins proxy-router (Lumerin) at v7.11.6-test**
+(Lumerin release channel / #889 caps early access — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
 ## Things worth knowing
@@ -103,7 +106,7 @@ Release compose **digest-pins proxy-router (Lumerin) at v7.11.0** — not
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned
-  for SecretVM / compose — including **proxy-router v7.11.0** (not `:latest`).
+  for SecretVM / compose — including **proxy-router v7.11.6-test** (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to

@@ -3,7 +3,7 @@
 # Flow (mirrors the Morpheus-Lumerin-Node semantic-versioning scheme,
 # adapted to a single-component repo):
 #
-#   - Pull requests to main        → tests only
+#   - Pull requests to main        → tests + govulncheck + image smoke (no push)
 #   - Merge/push to main           → tests → semver tag → multi-arch image
 #                                    push to GHCR → GitHub release with a
 #                                    digest-pinned SecretVM compose attached
@@ -82,6 +82,30 @@ jobs:
           fi
       - run: go vet ./...
       - run: go test ./...
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          set +e
+          out=$(govulncheck ./... 2>&1)
+          code=$?
+          printf '%s\n' "$out"
+          {
+            echo "### govulncheck"
+            echo '```'
+            printf '%s\n' "$out" | tail -n 80
+            echo '```'
+            if [ "$code" -ne 0 ]; then
+              echo ""
+              echo "Findings present (commonly transitive via go-ethereum / stdlib)."
+              echo "Advisory for this workflow: does not fail the job until a dep-bump policy lands."
+            else
+              echo ""
+              echo "No findings."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Keep the gate visible in logs; do not block stock-7.11 hardening PRs on
+          # pre-existing geth call-graph findings.
+          exit 0
       - name: Deploy files must be ASCII (SecretVM btoa chokes on Latin1+)
         run: |
           if LC_ALL=C grep -rnP '[^\x00-\x7F]' deploy/ docker-compose.local.yml .env.example; then
@@ -120,6 +144,33 @@ jobs:
             fi
           done
           echo "✅ SecretVM compose prompts for secrets only; network config stays in configs:"
+
+  pr-image-smoke:
+    name: PR image smoke
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (no registry push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: uplink:pr-smoke
+          build-args: |
+            VERSION=pr-smoke
+      - name: Assert non-root runtime drop
+        run: |
+          # Entrypoint chowns the volume as root then su-exec to uid 10001 (uplink).
+          docker run --rm --entrypoint /bin/sh uplink:pr-smoke -c '
+            set -e
+            id -u uplink | grep -qx 10001
+            grep -q "su-exec uplink" /docker-entrypoint.sh
+            test ! -u /usr/local/bin/uplink
+          '
+          echo "+ Non-root drop (uplink uid 10001) asserted - no GHCR push on PR"
 
   generate-tag:
     name: Generate Tag
@@ -277,7 +328,7 @@ jobs:
             echo "- SecretVM: \`docker-compose.secretvm.deployed.yml\` + \`env.secretvm.example\`"
             echo "- Any Docker VPS: \`docker-compose.generic.deployed.yml\` + \`env.generic.example\`"
             echo ""
-            echo "Operator guide: https://github.com/absgrafx/Morpheus-Uplink/blob/main/docs/README.md"
+            echo "Operator guide: https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/README.md"
           } > release-notes.md
           gh release create "${VTAG}" \
             docker-compose.secretvm.deployed.yml \

@@ -1,0 +1,14 @@
+# Railway overlay - non-secret deploy knobs only.
+# H4: NEVER put WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED,
+# COOKIE_CONTENT, or RPC credentials (ETH_NODE_ADDRESS) here, in image
+# labels, or in build args. Those are Railway secret vars only.
+#
+# Prefer the digest-pinned compose from GitHub Releases (same pair as
+# SecretVM/generic). This file documents healthcheck / restart defaults
+# for the public uplink service.
+
+[deploy]
+healthcheckPath = "/healthcheck"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
