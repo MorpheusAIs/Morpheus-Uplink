@@ -92,7 +92,8 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Release compose **digest-pins proxy-router (Lumerin) at v7.11.0** — not
+Release compose **digest-pins proxy-router (Lumerin) at v7.11.6-test**
+(Lumerin release channel / #889 caps early access — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
 ## Things worth knowing
@@ -105,7 +106,7 @@ Release compose **digest-pins proxy-router (Lumerin) at v7.11.0** — not
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned
-  for SecretVM / compose — including **proxy-router v7.11.0** (not `:latest`).
+  for SecretVM / compose — including **proxy-router v7.11.6-test** (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to

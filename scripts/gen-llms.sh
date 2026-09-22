@@ -49,7 +49,7 @@ index_entry() {
   echo
   echo "- **Uplink ≠ api.mor.org.** Hosted multi-tenant API is api.mor.org / apidocs.mor.org; Uplink is your single-tenant gateway + wallet."
   echo "- **Catalog / bids:** \`ACTIVE_MODELS_URL\` → https://active.mor.org/gateway_models.json ; \`GATEWAY_BIDS_URL\` → https://active.mor.org/gateway_bids.json . Never default to active_models.json / ALL."
-  echo "- **Proxy pin:** release compose digest-pins proxy-router (Lumerin) at **v7.11.0** — not \`:latest\`."
+  echo "- **Proxy pin:** release compose digest-pins proxy-router (Lumerin) at **v7.11.6-test** (release channel / #889 caps early access — not Base testnet) — not \`:latest\`."
   echo "- **Deploy overlays:** SecretVM · generic VPS · Railway scaffold — same GHCR digests; see deploy/*/README.md."
   echo "- **Humans** → docs/README.md. **Agents** → AGENTS.md, then llms-full.txt."
   echo "- **Never invent** live prices, catalog size, or contract addresses — cite gateway feeds + docs/01-prerequisites.md."

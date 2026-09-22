@@ -14,12 +14,13 @@ unsupported on stock 7.11 (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Stock **v7.11.0** has no operation-journal managed cleanup. Do not assume
-`operation-journal-v1` / `stake-limit-v1` (M2). If a future digest enables
-managed mode without a companion gateway or lease, sessions may not clean up
-as expected and collateral can stay locked until native expiry or manual
-admin close. Until the digest bumps, rely on native router expiry + Uplink
-housekeeping.
+Pinned **v7.11.6-test** (Lumerin release channel; #889 gateway caps early
+access — not Base testnet) still has no operation-journal managed cleanup.
+Do not assume `operation-journal-v1` / `stake-limit-v1` (M2). If a future
+digest enables managed mode without a companion gateway or lease, sessions
+may not clean up as expected and collateral can stay locked until native
+expiry or manual admin close. Until the digest bumps again, rely on native
+router expiry + Uplink housekeeping.
 
 ## L1 - privacy env
 

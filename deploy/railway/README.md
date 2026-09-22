@@ -1,6 +1,6 @@
 # Railway overlay (scaffold)
 
-Peer host overlay for Uplink + stock Lumerin **v7.11.0**. Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access — not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -18,7 +18,7 @@ Production path: download digest-pinned release assets from
 (`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
 this scaffold when you cut a real deploy. Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f`
 
 ## Services
 
@@ -48,9 +48,10 @@ cross-replica wallet lock on stock 7.11).
 
 ## H2 - managed-mode blast radius
 
-Stock **v7.11.0** has **no** `operation-journal-v1` / managed-gateway cleanup
-contract. Uplink on this digest must not assume journal headers or
-stake-limit capabilities (M2).
+Pinned **v7.11.6-test** has **no** `operation-journal-v1` / managed-gateway
+cleanup contract. Uplink on this digest must not assume journal headers or
+stake-limit capabilities (M2). Tag is Lumerin release channel (#889 gateway
+caps early access), **not** Base testnet — chain defaults remain mainnet.
 
 If a future digest enables gateway-managed session cleanup:
 
@@ -72,7 +73,7 @@ Compose sets on `proxy-router`:
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the stock v7.11.0 digest until verified.
+privacy on the pinned v7.11.6-test digest until verified.
 
 ## M1 / keep list
 

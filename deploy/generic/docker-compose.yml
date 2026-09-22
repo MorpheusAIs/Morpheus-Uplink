@@ -13,7 +13,11 @@
 # Only :80 and :443 need to be public. Router :8082 stays internal.
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* are set and believed honored on
-# stock v7.11.0; live acceptance pending. Do not market as TEE privacy.
+# pinned v7.11.6-test; live acceptance pending. Do not market as TEE privacy.
+#
+# Lumerin pin note: tag v7.11.6-test is the Lumerin release channel (includes
+# #889 gateway caps early access), NOT Base testnet — chain comes from env
+# (defaults Base mainnet 8453 / Diamond / MOR below).
 #
 # H2 blast radius / H3 single-replica: see deploy/generic/README.md.
 x-logging: &default-logging
@@ -77,7 +81,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f
     restart: unless-stopped
     logging: *default-logging
     init: true
