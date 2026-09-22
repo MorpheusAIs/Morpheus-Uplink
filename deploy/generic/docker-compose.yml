@@ -71,7 +71,13 @@ services:
       - ROUTER_URL=http://proxy-router:8082
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Behavior bake (change via compose/code only -- not .env forms).
+      - SESSION_DURATION_SECONDS=600
+      - SESSION_FAILOVER=true
+      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
+      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
+      - HOUSEKEEPING=true
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
@@ -105,7 +111,7 @@ services:
       - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
-      - WEB_PUBLIC_URL=https://${PUBLIC_HOST}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
       # Privacy (L1: set / believed honored; live acceptance pending).
       - PROXY_STORE_CHAT_CONTEXT=false
       - PROXY_FORWARD_CHAT_CONTEXT=false

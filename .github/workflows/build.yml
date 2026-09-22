@@ -115,16 +115,28 @@ jobs:
           echo "✅ Deploy files are pure ASCII"
       - name: SecretVM compose prompts only for real secrets
         run: |
-          # SecretVM scrapes environment: / substitutions into Encrypted
-          # Secrets. Allowlisted keys may use substitutions (so the form
-          # prompts). Non-secrets must stay in configs: only.
-          ALLOWED='ADMIN_PASSWORD|API_KEY_SEED|COOKIE_CONTENT|WALLET_PRIVATE_KEY|ETH_NODE_ADDRESS|WEB_PUBLIC_URL|SESSION_DURATION_SECONDS'
-          FORBIDDEN='ETH_NODE_CHAIN_ID|ETH_NODE_USE_SUBSCRIPTIONS|BLOCKSCOUT_API_URL|DIAMOND_CONTRACT_ADDRESS|MOR_TOKEN_ADDRESS'
-          # Any forbidden key appearing as an environment assignment/sub.
+          # SecretVM scrapes ALL environment: keys (literals too), not only
+          # dollar-brace substitutions. Allowlist is the six operator
+          # fillables only. Behavior bake (SESSION_*/ACTIVE_*/GATEWAY_*/
+          # HOUSEKEEPING/PROXY_*/LOG_LEVEL_*) and chain/Diamond/MOR must
+          # live in configs: only.
+          ALLOWED='ADMIN_PASSWORD|API_KEY_SEED|COOKIE_CONTENT|WALLET_PRIVATE_KEY|ETH_NODE_ADDRESS|WEB_PUBLIC_URL'
+          FORBIDDEN='ETH_NODE_CHAIN_ID|ETH_NODE_USE_SUBSCRIPTIONS|BLOCKSCOUT_API_URL|DIAMOND_CONTRACT_ADDRESS|MOR_TOKEN_ADDRESS|SESSION_DURATION_SECONDS|SESSION_FAILOVER|ACTIVE_MODELS_URL|GATEWAY_BIDS_URL|HOUSEKEEPING|PROXY_STORE_CHAT_CONTEXT|PROXY_FORWARD_CHAT_CONTEXT|LOG_LEVEL_APP|LOG_LEVEL_TCP|LOG_LEVEL_ETH_RPC'
+          # Any forbidden key appearing as an environment assignment (literal or sub).
           if grep -nE "^\s+- (${FORBIDDEN})=" deploy/secretvm/docker-compose.yml; then
-            echo "❌ Non-secret network config must not be in environment: (use configs:)"
+            echo "❌ Non-secret config must not be in environment: (use configs:)"
             exit 1
           fi
+          # Every environment: assignment must be one of the six fillables.
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            key=$(echo "$line" | sed -nE 's/^[[:space:]]*-[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p')
+            [ -z "$key" ] && continue
+            if ! echo "$key" | grep -qE "^(${ALLOWED})$"; then
+              echo "❌ environment: key not in six-secret allowlist: $line"
+              exit 1
+            fi
+          done < <(grep -nE '^[[:space:]]+-[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
           # Every substitution must be allowlisted (ignore comment lines).
           while IFS= read -r line; do
             [ -z "$line" ] && continue
@@ -135,15 +147,15 @@ jobs:
               exit 1
             fi
           done < <(grep -nF '${' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
-          # Required secrets must be prompted.
-          for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS; do
+          # Required fillables must be prompted.
+          for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS WEB_PUBLIC_URL; do
             needle='${'"${req}"'}'
             if ! grep -qF "$needle" deploy/secretvm/docker-compose.yml; then
               echo "❌ Missing required secret prompt: $req"
               exit 1
             fi
           done
-          echo "✅ SecretVM compose prompts for secrets only; network config stays in configs:"
+          echo "✅ SecretVM compose prompts for six secrets only; non-secrets stay in configs:"
 
   pr-image-smoke:
     name: PR image smoke

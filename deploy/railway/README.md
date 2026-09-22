@@ -1,5 +1,7 @@
 # Railway overlay (scaffold)
 
+Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
+
 Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
@@ -27,18 +29,20 @@ this scaffold when you cut a real deploy. Stock router pin today:
 
 See `docker-compose.yml` and `railway.toml` (non-secret knobs only).
 
-## H4 - secret-class vars (Railway Secrets only)
+## H4 - operator fillables (Railway Secrets / vars)
 
 Never put these in `railway.toml`, image labels, build args, or committed
-compose values:
+compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+- `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-No wallet material in logs or (future) journals.
+Session / catalog / housekeeping / PROXY_* / LOG_LEVEL_* are baked in
+compose (change via code only). No wallet material in logs or (future) journals.
 
 ## H3 - single replica (wallet-bearing proxy-router)
 

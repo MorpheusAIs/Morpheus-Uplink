@@ -1,7 +1,10 @@
 # SecretVM overlay
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
-certs; Encrypted Secrets supply wallet/admin/seed/cookie/RPC.
+certs; Encrypted Secrets supply only the six operator fillables (wallet /
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). Session, catalog,
+housekeeping, PROXY_*/LOG_LEVEL_*, and chain pins live in compose
+`configs:` so the SecretVM form stays clean.
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:
@@ -24,7 +27,7 @@ router expiry + Uplink housekeeping.
 
 ## L1 - privacy env
 
-Router privacy/log env is set in `docker-compose.yml` (**set / believed
+Router privacy/log env is set in compose `configs:` (`router_network_env`) (**set / believed
 honored; live acceptance pending**). Do not market as TEE privacy until
 verified on the pinned digest.
 

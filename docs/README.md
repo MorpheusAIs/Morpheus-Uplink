@@ -4,7 +4,7 @@
 
 **Recommended host:** [SecretVM](https://docs.scrt.network/) (Secret Labs) —
 encrypted secrets + platform TLS. Root README has the fast CTA:
-**[Get running on SecretVM](../README.md#get-running-secretvm--recommended)**.
+**[Get running on SecretVM](../README.md#get-running-secretvm)**.
 
 AI agents: read root [`AGENTS.md`](../AGENTS.md) first (hard rules + [`llms-full.txt`](../llms-full.txt)).
 
@@ -46,8 +46,7 @@ build / CI / env tables: [Developers](06-developers.md).
 ## Quick checklist
 
 - [ ] Compose from **[latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)** (no git clone) — or Railway scaffold under `deploy/railway/`
-- [ ] SecretVM Encrypted Secrets set (or generic `.env` + `PUBLIC_HOST`, or Railway Secrets)
-- [ ] `WEB_PUBLIC_URL` matches your `https://….vm.scrtlabs.com` host (SecretVM)
+- [ ] Six operator fillables set (SecretVM Encrypted Secrets / generic `.env` + `PUBLIC_HOST` / Railway Secrets) including `WEB_PUBLIC_URL`
 - [ ] `/gui` login works
 - [ ] Wallet funded (ETH + MOR on Base)
 - [ ] Probe returns a completion

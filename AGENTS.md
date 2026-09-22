@@ -120,6 +120,7 @@ There is no separate docs host or MCP for Uplink.
 |-----------|--------|
 | How do I install / bootstrap? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) |
 | SecretVM vs VPS vs Railway? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) + [`docs/05-updates.md`](docs/05-updates.md) |
+| Third-party consumer-gateway Railway? | **Unsupported.** Use SecretVM / generic / `deploy/railway/` only (six fillables; no DOMAIN/PUBLIC_ORIGIN). |
 | Railway scaffold? | [`docs/02-bootstrap.md#first-start--railway`](docs/02-bootstrap.md#first-start--railway) · [`deploy/railway/README.md`](deploy/railway/README.md) |
 | Where is my MOR? / daylock | [`docs/03-gui.md`](docs/03-gui.md#where-is-my-mor) |
 | How do I call from Cursor / SDK? | [`docs/04-clients.md`](docs/04-clients.md) |

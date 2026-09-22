@@ -66,8 +66,10 @@ Same images; different compose. Assets from the
 | **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
-Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants on
-SecretVM are a compose `configs` mount — not Encrypted Secrets.
+Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants and
+behavior bake (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
+on SecretVM are compose `configs:` mounts — not Encrypted Secrets. Operator
+fillables are the same six everywhere (`WEB_PUBLIC_URL` included).
 
 ---
 
