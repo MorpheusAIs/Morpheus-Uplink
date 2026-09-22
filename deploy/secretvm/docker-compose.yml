@@ -12,6 +12,16 @@
 # Split for a clean secrets form:
 #   - Real secrets / user knobs: environment substitutions below (prompted)
 #   - Base network config: configs router_network_env (NOT prompted)
+#
+# Privacy env (L1): PROXY_* and LOG_LEVEL_* below are set and believed
+# honored on stock v7.11.0; live acceptance pending. Do not market as TEE
+# privacy until verified on the pinned digest.
+#
+# Traefik SSE buffering: do not invent Traefik flags that break TEE TLS.
+# Prefer documented middleware only after Josh/ops confirm. Generic overlay
+# uses Caddy flush_interval -1; SecretVM Traefik buffering check is pending.
+#
+# H2 blast radius / H3 single-replica: see deploy/secretvm/README.md.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -26,6 +36,18 @@ services:
     image: ghcr.io/absgrafx/uplink:latest
     restart: unless-stopped
     logging: *default-logging
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
@@ -53,12 +75,30 @@ services:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.0@sha256:3b2b1dea272124ce3c71ab35132f5f8a6dad54bb1e59614a50401a76c062a2b1
     restart: unless-stopped
     logging: *default-logging
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/healthcheck || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       # Optional: public URL + /node so swagger "Try it out" links are right.
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://localhost}
+      # Privacy (L1: set / believed honored; live acceptance pending).
+      - PROXY_STORE_CHAT_CONTEXT=false
+      - PROXY_FORWARD_CHAT_CONTEXT=false
+      - LOG_LEVEL_APP=warn
+      - LOG_LEVEL_TCP=warn
+      - LOG_LEVEL_ETH_RPC=warn
     # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
     env_file:
       - usr/.env
@@ -70,6 +110,7 @@ services:
     networks:
       - web
     # Intentionally no ports: only uplink (and traefik) can reach :8082.
+    # H3: single replica for this wallet-bearing proxy-router (multi-replica unsupported).
 
   traefik:
     image: traefik:v2.10
@@ -86,6 +127,8 @@ services:
     ports:
       - 443:443
     volumes:
+      # Keep :ro docker.sock and cert mounts - do not harden Traefik in a way
+      # that removes these (SecretVM edge requires them).
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /mnt/secure/cert:/certs:ro
     networks:

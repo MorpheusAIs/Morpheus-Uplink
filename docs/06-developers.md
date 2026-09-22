@@ -63,6 +63,7 @@ Same images; different compose. Assets from the
 |--------|---------|--------|
 | **SecretVM (default)** | `docker-compose.secretvm.deployed.yml` | Encrypted Secrets; platform TLS |
 | **Any Docker VPS** | `docker-compose.generic.deployed.yml` | `.env` + Caddy / Let’s Encrypt (`PUBLIC_HOST`) |
+| **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
 Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants on
@@ -151,7 +152,7 @@ internal/router/     proxy-router client (sessions, balance, forward)
 internal/pool/       one-session-per-model pool + invalidation
 internal/api/        HTTP: /v1/*, /admin/*, /node/*, health
 internal/gui/        embedded single-page admin UI
-deploy/              SecretVM + generic compose templates (CI pins digests)
+deploy/              SecretVM + generic + Railway overlays (CI pins digests)
 ```
 
 Concept sketch (optional): [`.ai-docs/UPLINK_CONCEPT.md`](../.ai-docs/UPLINK_CONCEPT.md).

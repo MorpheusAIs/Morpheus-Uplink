@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -16,6 +17,54 @@ import (
 // abuse is not).
 const maxRequestBody = 16 << 20
 
+// injectedRoutingFields are client-supplied keys that must never influence
+// session open / routing. Uplink owns session_id via the pool; these would
+// only confuse or attempt to hijack the path to the router.
+var injectedRoutingFields = []string{
+	"session_id",
+	"model_id",
+	"chat_id",
+	"provider_url",
+	"node_url",
+}
+
+// validateInferenceBody checks the JSON body before any session open.
+// requireMessages is true for /v1/chat/completions (non-empty messages[]).
+// Unknown provider extras (venice_parameters, thinking, tools, …) are left
+// in the body and forwarded unchanged.
+func validateInferenceBody(body []byte, requireMessages bool) (model string, errMsg string) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" || trimmed[0] != '{' {
+		return "", "request must be a JSON object"
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "", "request must be a JSON object"
+	}
+	for _, f := range injectedRoutingFields {
+		if _, ok := raw[f]; ok {
+			return "", fmt.Sprintf("injected routing field %q is not allowed", f)
+		}
+	}
+	if m, ok := raw["model"]; ok {
+		_ = json.Unmarshal(m, &model)
+	}
+	if model == "" {
+		return "", "request must be JSON with a \"model\" field"
+	}
+	if requireMessages {
+		msgRaw, ok := raw["messages"]
+		if !ok {
+			return "", "request must include a non-empty \"messages\" array"
+		}
+		var messages []json.RawMessage
+		if err := json.Unmarshal(msgRaw, &messages); err != nil || len(messages) == 0 {
+			return "", "request must include a non-empty \"messages\" array"
+		}
+	}
+	return model, ""
+}
+
 // handleInference proxies an OpenAI-style POST (chat completions or
 // embeddings) through the session pool to the router.
 func (s *Server) handleInference(routerPath string) http.HandlerFunc {
@@ -26,15 +75,14 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			writeOpenAIError(w, http.StatusBadRequest, "failed to read request body")
 			return
 		}
-		var req struct {
-			Model string `json:"model"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil || req.Model == "" {
-			writeOpenAIError(w, http.StatusBadRequest, "request must be JSON with a \"model\" field")
+		requireMessages := routerPath == "/v1/chat/completions"
+		reqModel, errMsg := validateInferenceBody(body, requireMessages)
+		if errMsg != "" {
+			writeOpenAIError(w, http.StatusBadRequest, errMsg)
 			return
 		}
 
-		modelID, err := s.catalog.Resolve(req.Model)
+		modelID, err := s.catalog.Resolve(reqModel)
 		if err != nil {
 			writeOpenAIError(w, http.StatusNotFound, err.Error())
 			return
@@ -52,12 +100,12 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		}
 		ensured, err := s.pool.EnsureDuration(modelID, durationSec)
 		if err != nil {
-			log.Printf("api: open session for %s (%s): %v", req.Model, modelID, err)
+			log.Printf("api: open session for %s (%s): %v", reqModel, modelID, err)
 			writeOpenAIError(w, http.StatusBadGateway, "failed to open session: "+err.Error())
 			return
 		}
 		if ensured.Opened {
-			s.store.TrackSessionOpen(ensured.SessionID, keyID, req.Model)
+			s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
 		}
 		sessionID := ensured.SessionID
 
@@ -66,7 +114,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		// another stake while a usable session is still open on-chain.
 		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
 		if err != nil {
-			log.Printf("api: forward attempt 1 (model %s, session %s): %v", req.Model, sessionID, err)
+			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, sessionID, err)
 			if !isSessionDeadError(err) {
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
@@ -78,17 +126,17 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				return
 			}
 			if ensured.Opened {
-				s.store.TrackSessionOpen(ensured.SessionID, keyID, req.Model)
+				s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
 			}
 			sessionID = ensured.SessionID
 			res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
 			if err != nil {
-				log.Printf("api: forward attempt 2 (model %s, session %s): %v", req.Model, sessionID, err)
+				log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, sessionID, err)
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
 			}
 		}
-		s.store.RecordUsage(keyID, req.Model, res.PromptTokens, res.CompletionTokens)
+		s.store.RecordUsage(keyID, reqModel, res.PromptTokens, res.CompletionTokens)
 	}
 }
 
@@ -138,11 +186,11 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			"object":   "model",
 			"owned_by": "morpheus",
 			"morpheus": map[string]any{
-				"blockchainId":      m.ID,
-				"tags":              m.Tags,
-				"modelType":         m.ModelType,
-				"priceMorPerHour":   m.LowestMorPerHour(),
-				"pricePerSecondWei": bid.PricePerSecond,
+				"blockchainId":       m.ID,
+				"tags":               m.Tags,
+				"modelType":          m.ModelType,
+				"priceMorPerHour":    m.LowestMorPerHour(),
+				"pricePerSecondWei":  bid.PricePerSecond,
 				"sessionDurationSec": defaultDur,
 			},
 		})
