@@ -1,6 +1,6 @@
 # Railway overlay (scaffold)
 
-Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access — not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -51,7 +51,7 @@ cross-replica wallet lock on stock 7.11).
 Pinned **v7.11.6-test** has **no** `operation-journal-v1` / managed-gateway
 cleanup contract. Uplink on this digest must not assume journal headers or
 stake-limit capabilities (M2). Tag is Lumerin release channel (#889 gateway
-caps early access), **not** Base testnet — chain defaults remain mainnet.
+caps early access), **not** Base testnet -- chain defaults remain mainnet.
 
 If a future digest enables gateway-managed session cleanup:
 
@@ -89,8 +89,8 @@ privacy on the pinned v7.11.6-test digest until verified.
 | **2. Secrets** | H4 vars are **Railway Secrets** only; non-secrets are plain vars. |
 | **3. Digests** | Images pinned to [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) digests (not bare `:latest`). |
 | **4. Replicas** | `proxy-router` replicas = **1** (H3). |
-| **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS → `:8080`). |
+| **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS -> `:8080`). |
 | **6. GUI + fund** | `https://<public>/gui` works; wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |
 
 **Done** when GUI login works and Probe returns a completion. Bootstrap summary:
-[docs/02-bootstrap.md — First start — Railway](../../docs/02-bootstrap.md#first-start--railway).
+[docs/02-bootstrap.md -- First start -- Railway](../../docs/02-bootstrap.md#first-start--railway).

@@ -16,7 +16,7 @@
 # pinned v7.11.6-test; live acceptance pending. Do not market as TEE privacy.
 #
 # Lumerin pin note: tag v7.11.6-test is the Lumerin release channel (includes
-# #889 gateway caps early access), NOT Base testnet — chain comes from env
+# #889 gateway caps early access), NOT Base testnet -- chain comes from env
 # (defaults Base mainnet 8453 / Diamond / MOR below).
 #
 # H2 blast radius / H3 single-replica: see deploy/generic/README.md.

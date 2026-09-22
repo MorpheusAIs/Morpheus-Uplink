@@ -15,7 +15,7 @@ unsupported on stock 7.11 (no cross-replica wallet lock).
 ## H2 - managed-mode blast radius
 
 Pinned **v7.11.6-test** (Lumerin release channel; #889 gateway caps early
-access — not Base testnet) still has no operation-journal managed cleanup.
+access -- not Base testnet) still has no operation-journal managed cleanup.
 Do not assume `operation-journal-v1` / `stake-limit-v1` (M2). If a future
 digest enables managed mode without a companion gateway or lease, sessions
 may not clean up as expected and collateral can stay locked until native
