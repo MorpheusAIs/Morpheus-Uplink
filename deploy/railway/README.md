@@ -1,5 +1,7 @@
 # Railway overlay (scaffold)
 
+Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
+
 Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile

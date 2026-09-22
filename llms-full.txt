@@ -126,6 +126,7 @@ There is no separate docs host or MCP for Uplink.
 |-----------|--------|
 | How do I install / bootstrap? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) |
 | SecretVM vs VPS vs Railway? | [`docs/02-bootstrap.md`](docs/02-bootstrap.md) + [`docs/05-updates.md`](docs/05-updates.md) |
+| Third-party consumer-gateway Railway? | **Unsupported.** Use SecretVM / generic / `deploy/railway/` only (six fillables; no DOMAIN/PUBLIC_ORIGIN). |
 | Railway scaffold? | [`docs/02-bootstrap.md#first-start--railway`](docs/02-bootstrap.md#first-start--railway) · [`deploy/railway/README.md`](deploy/railway/README.md) |
 | Where is my MOR? / daylock | [`docs/03-gui.md`](docs/03-gui.md#where-is-my-mor) |
 | How do I call from Cursor / SDK? | [`docs/04-clients.md`](docs/04-clients.md) |
@@ -337,6 +338,8 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 
 ### Railway scaffold
 
+Supported Uplink hosts are **SecretVM**, **generic VPS**, and **this in-repo Railway scaffold** only. Do not follow third-party consumer-gateway Railway stacks (different images/vars such as DOMAIN / PUBLIC_ORIGIN).
+
 Same image pair; **no** Railway-specific release compose yet — use the in-repo scaffold [`deploy/railway/`](deploy/railway/) and pin digests from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) (SecretVM/generic assets). Checklist: [docs/02-bootstrap.md#first-start--railway](docs/02-bootstrap.md#first-start--railway) · [deploy/railway/README.md](deploy/railway/README.md).
 
 | Step | Do this |
@@ -491,6 +494,8 @@ First boot → funded wallet → GUI login. **No git clone** — download the pu
 **Default path is SecretVM** ([Secret Labs](https://docs.scrt.network/)). Use
 generic VPS if you already run your own Docker + TLS. **Railway** is a
 scaffold overlay (same image pair; secrets in Railway Secrets only).
+Supported hosts: SecretVM, generic VPS, and this scaffold only -- not third-party
+consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 
 ---
 
@@ -1180,6 +1185,8 @@ Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
 <!-- source: deploy/railway/README.md -->
 
 # Railway overlay (scaffold)
+
+Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
 Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and

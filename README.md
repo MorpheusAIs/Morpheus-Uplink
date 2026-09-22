@@ -91,6 +91,8 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 
 ### Railway scaffold
 
+Supported Uplink hosts are **SecretVM**, **generic VPS**, and **this in-repo Railway scaffold** only. Do not follow third-party consumer-gateway Railway stacks (different images/vars such as DOMAIN / PUBLIC_ORIGIN).
+
 Same image pair; **no** Railway-specific release compose yet — use the in-repo scaffold [`deploy/railway/`](deploy/railway/) and pin digests from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) (SecretVM/generic assets). Checklist: [docs/02-bootstrap.md#first-start--railway](docs/02-bootstrap.md#first-start--railway) · [deploy/railway/README.md](deploy/railway/README.md).
 
 | Step | Do this |

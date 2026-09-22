@@ -7,6 +7,8 @@ First boot → funded wallet → GUI login. **No git clone** — download the pu
 **Default path is SecretVM** ([Secret Labs](https://docs.scrt.network/)). Use
 generic VPS if you already run your own Docker + TLS. **Railway** is a
 scaffold overlay (same image pair; secrets in Railway Secrets only).
+Supported hosts: SecretVM, generic VPS, and this scaffold only -- not third-party
+consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 
 ---
 
