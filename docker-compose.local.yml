@@ -69,6 +69,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # su-exec needs these after cap_drop ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
