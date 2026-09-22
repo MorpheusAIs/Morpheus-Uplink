@@ -83,13 +83,16 @@ services:
       - ROUTER_AUTH=${ROUTER_AUTH}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
-      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
-      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      - WEB_PUBLIC_URL=http://localhost:8080
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
+      # Behavior bake (change via compose/code only).
+      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
+      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
+      - SESSION_DURATION_SECONDS=600
+      - SESSION_FAILOVER=true
+      - HOUSEKEEPING=true
       - DATA_DIR=/data
     ports:
       - "8080:8080"

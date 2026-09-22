@@ -295,12 +295,11 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill Encrypted Secrets (block below) — **five keys only** (wallet / RPC / cookie / admin / seed). |
+| **3. Secrets** | Fill Encrypted Secrets (block below) — **six keys only** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
 | **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
-| **5. Hostname** | Edit compose `configs.router_network_env` → `WEB_PUBLIC_URL=https://….vm.scrtlabs.com`, redeploy once (baked default is `https://localhost`). |
-| **6. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
-| **7. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
-| **8. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
+| **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
+| **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
+| **7. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
 
 <details>
 <summary><strong>Encrypted Secrets (copy / paste)</strong></summary>
@@ -311,10 +310,11 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
+WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
-`WEB_PUBLIC_URL` defaults to `https://localhost` in compose `configs:` (not Encrypted Secrets — SecretVM scrapes every `environment:` key). After first boot, set the real host there and redeploy.
+Session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*` and Base chain pins are **baked** in compose (change via code only — not Encrypted Secrets).
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
 </details>
@@ -329,7 +329,7 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 |------|---------|
 | **1. DNS / ports** | Point A/AAAA at the box; open **80** and **443**. |
 | **2. Compose** | Download **`docker-compose.generic.deployed.yml`** (+ `env.generic.example` → `.env`) from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + wallet / RPC / cookie / admin / seed (never commit). |
+| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the six fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
 | **4. Deploy** | `docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d` (Caddy + LE). |
 | **5. GUI → fund → Probe** | Open `https://$PUBLIC_HOST/gui/` → fund ETH+MOR on Base → Probe → Prompt key at `/v1`. |
 
@@ -343,7 +343,7 @@ Same image pair; **no** Railway-specific release compose yet — use the in-repo
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Pin `ghcr.io/morpheusais/uplink` (+ Lumerin) to release digests — not bare `:latest`. |
-| **3. Secrets** | Set wallet / admin / seed / cookie / RPC as **Railway Secrets** only. |
+| **3. Secrets** | Set the six fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
 | **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
 
@@ -361,8 +361,8 @@ catalog — do **not** hardcode a flashy name, and do **not** treat generic
 [active.mor.org](https://active.mor.org) or `active_models.json` / ALL feeds
 as the catalog. Defaults:
 
-| Env | Default |
-|-----|---------|
+| Env (baked) | Default |
+|-------------|---------|
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
@@ -443,8 +443,7 @@ build / CI / env tables: [Developers](06-developers.md).
 ## Quick checklist
 
 - [ ] Compose from **[latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)** (no git clone) — or Railway scaffold under `deploy/railway/`
-- [ ] SecretVM Encrypted Secrets set (or generic `.env` + `PUBLIC_HOST`, or Railway Secrets)
-- [ ] `WEB_PUBLIC_URL` matches your `https://….vm.scrtlabs.com` host (SecretVM)
+- [ ] Six operator fillables set (SecretVM Encrypted Secrets / generic `.env` + `PUBLIC_HOST` / Railway Secrets) including `WEB_PUBLIC_URL`
 - [ ] `/gui` login works
 - [ ] Wallet funded (ETH + MOR on Base)
 - [ ] Probe returns a completion
@@ -553,14 +552,15 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
+WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
-**Only these five** belong in Encrypted Secrets. SecretVM scrapes **every**
-`environment:` key (literals too), so non-secrets stay in compose `configs:`
-(`router_network_env`): `WEB_PUBLIC_URL=https://localhost`, 
-`SESSION_DURATION_SECONDS=600`, `PROXY_*` / `LOG_LEVEL_*`, plus Base chain ID /
-Diamond / MOR. After first boot, edit `WEB_PUBLIC_URL` in that configs block to
-`https://<vm-host>` and redeploy — do **not** add it to Encrypted Secrets.
+**Only these six** belong in Encrypted Secrets. SecretVM scrapes **every**
+`environment:` key (literals too), so behavior bake stays in compose
+`configs:`: `SESSION_DURATION_SECONDS=600`, `SESSION_FAILOVER=true`,
+`ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`, `HOUSEKEEPING=true`, `PROXY_*` /
+`LOG_LEVEL_*`, plus Base chain ID / Diamond / MOR. Change those via code /
+compose only — not operator forms.
 
 </details>
 
@@ -577,27 +577,29 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
-
-#SESSION_DURATION_SECONDS=600
-#HOUSEKEEPING=true
-#SESSION_FAILOVER=true
+WEB_PUBLIC_URL=https://uplink.yourdomain.com
 ```
+
+Behavior knobs (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
+are baked in compose — change via code only.
 
 </details>
 
 <details>
 <summary><strong>Railway — secrets only in Railway Secrets</strong></summary>
 
-Do **not** put wallet/admin/seed/cookie/RPC material in `railway.toml`, image
-labels, build args, or committed compose. Set these as **Railway Secrets**:
+Do **not** put wallet/admin/seed/cookie/RPC/`WEB_PUBLIC_URL` material in
+`railway.toml`, image labels, build args, or committed compose. Set these
+six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+- `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Non-secret knobs may be plain Railway vars. Full checklist:
+Behavior knobs are baked in compose. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -612,8 +614,8 @@ Non-secret knobs may be plain Railway vars. Full checklist:
 | `COOKIE_CONTENT` | Router + Uplink | `user:password` Basic auth for the router API. Same value in both containers. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
-| `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt. |
-| `WEB_PUBLIC_URL` | Router (SecretVM) | Baked in compose `configs:` (`https://localhost`); edit + redeploy after you know the VM hostname — **not** Encrypted Secrets. |
+| `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
+| `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt (platform-specific; not one of the six). |
 
 </details>
 
@@ -623,11 +625,9 @@ Non-secret knobs may be plain Railway vars. Full checklist:
 
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
-3. Fill Encrypted Secrets from the SecretVM block above (**five keys only**).
-4. Deploy. Wait for health (`uplink … listening`, router healthy). `WEB_PUBLIC_URL` is already baked as `https://localhost` in compose configs.
-5. Copy the public HTTPS hostname (e.g. `https://something.vm.scrtlabs.com`).
-6. Edit compose `configs.router_network_env` → `WEB_PUBLIC_URL=https://<that-host>` and redeploy once.
-7. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
+3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
+4. Deploy. Wait for health (`uplink … listening`, router healthy).
+5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
 
 ---
 
@@ -641,7 +641,7 @@ mkdir -p uplink && cd uplink
 curl -fsSL -O https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
 curl -fsSL -o .env https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/env.generic.example
 
-# Edit .env — fill PUBLIC_HOST + the five required secrets (see Secrets above)
+# Edit .env — fill PUBLIC_HOST + the six required fillables (see Secrets above)
 nano .env   # or your editor
 
 docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
@@ -979,8 +979,10 @@ Same images; different compose. Assets from the
 | **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
-Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants on
-SecretVM are a compose `configs` mount — not Encrypted Secrets.
+Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants and
+behavior bake (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
+on SecretVM are compose `configs:` mounts — not Encrypted Secrets. Operator
+fillables are the same six everywhere (`WEB_PUBLIC_URL` included).
 
 ---
 
@@ -1101,9 +1103,10 @@ The operator guide is split into short chapters so you can open one topic at a t
 # SecretVM overlay
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
-certs; Encrypted Secrets supply only the five secrets (wallet/admin/seed/cookie/RPC).
-`WEB_PUBLIC_URL`, session duration, PROXY_*/LOG_LEVEL_*, and chain pins live in
-compose `configs:` so the SecretVM form stays clean.
+certs; Encrypted Secrets supply only the six operator fillables (wallet /
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). Session, catalog,
+housekeeping, PROXY_*/LOG_LEVEL_*, and chain pins live in compose
+`configs:` so the SecretVM form stays clean.
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:
@@ -1205,18 +1208,20 @@ this scaffold when you cut a real deploy. Stock router pin today:
 
 See `docker-compose.yml` and `railway.toml` (non-secret knobs only).
 
-## H4 - secret-class vars (Railway Secrets only)
+## H4 - operator fillables (Railway Secrets / vars)
 
 Never put these in `railway.toml`, image labels, build args, or committed
-compose values:
+compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+- `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-No wallet material in logs or (future) journals.
+Session / catalog / housekeeping / PROXY_* / LOG_LEVEL_* are baked in
+compose (change via code only). No wallet material in logs or (future) journals.
 
 ## H3 - single replica (wallet-bearing proxy-router)
 

@@ -1,9 +1,10 @@
 # SecretVM overlay
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
-certs; Encrypted Secrets supply only the five secrets (wallet/admin/seed/cookie/RPC).
-`WEB_PUBLIC_URL`, session duration, PROXY_*/LOG_LEVEL_*, and chain pins live in
-compose `configs:` so the SecretVM form stays clean.
+certs; Encrypted Secrets supply only the six operator fillables (wallet /
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). Session, catalog,
+housekeeping, PROXY_*/LOG_LEVEL_*, and chain pins live in compose
+`configs:` so the SecretVM form stays clean.
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:

@@ -68,14 +68,15 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
+WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
-**Only these five** belong in Encrypted Secrets. SecretVM scrapes **every**
-`environment:` key (literals too), so non-secrets stay in compose `configs:`
-(`router_network_env`): `WEB_PUBLIC_URL=https://localhost`, 
-`SESSION_DURATION_SECONDS=600`, `PROXY_*` / `LOG_LEVEL_*`, plus Base chain ID /
-Diamond / MOR. After first boot, edit `WEB_PUBLIC_URL` in that configs block to
-`https://<vm-host>` and redeploy — do **not** add it to Encrypted Secrets.
+**Only these six** belong in Encrypted Secrets. SecretVM scrapes **every**
+`environment:` key (literals too), so behavior bake stays in compose
+`configs:`: `SESSION_DURATION_SECONDS=600`, `SESSION_FAILOVER=true`,
+`ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`, `HOUSEKEEPING=true`, `PROXY_*` /
+`LOG_LEVEL_*`, plus Base chain ID / Diamond / MOR. Change those via code /
+compose only — not operator forms.
 
 </details>
 
@@ -92,27 +93,29 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
-
-#SESSION_DURATION_SECONDS=600
-#HOUSEKEEPING=true
-#SESSION_FAILOVER=true
+WEB_PUBLIC_URL=https://uplink.yourdomain.com
 ```
+
+Behavior knobs (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
+are baked in compose — change via code only.
 
 </details>
 
 <details>
 <summary><strong>Railway — secrets only in Railway Secrets</strong></summary>
 
-Do **not** put wallet/admin/seed/cookie/RPC material in `railway.toml`, image
-labels, build args, or committed compose. Set these as **Railway Secrets**:
+Do **not** put wallet/admin/seed/cookie/RPC/`WEB_PUBLIC_URL` material in
+`railway.toml`, image labels, build args, or committed compose. Set these
+six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+- `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Non-secret knobs may be plain Railway vars. Full checklist:
+Behavior knobs are baked in compose. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -127,8 +130,8 @@ Non-secret knobs may be plain Railway vars. Full checklist:
 | `COOKIE_CONTENT` | Router + Uplink | `user:password` Basic auth for the router API. Same value in both containers. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
-| `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt. |
-| `WEB_PUBLIC_URL` | Router (SecretVM) | Baked in compose `configs:` (`https://localhost`); edit + redeploy after you know the VM hostname — **not** Encrypted Secrets. |
+| `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
+| `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt (platform-specific; not one of the six). |
 
 </details>
 
@@ -138,11 +141,9 @@ Non-secret knobs may be plain Railway vars. Full checklist:
 
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
-3. Fill Encrypted Secrets from the SecretVM block above (**five keys only**).
-4. Deploy. Wait for health (`uplink … listening`, router healthy). `WEB_PUBLIC_URL` is already baked as `https://localhost` in compose configs.
-5. Copy the public HTTPS hostname (e.g. `https://something.vm.scrtlabs.com`).
-6. Edit compose `configs.router_network_env` → `WEB_PUBLIC_URL=https://<that-host>` and redeploy once.
-7. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
+3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
+4. Deploy. Wait for health (`uplink … listening`, router healthy).
+5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
 
 ---
 
@@ -156,7 +157,7 @@ mkdir -p uplink && cd uplink
 curl -fsSL -O https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
 curl -fsSL -o .env https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/env.generic.example
 
-# Edit .env — fill PUBLIC_HOST + the five required secrets (see Secrets above)
+# Edit .env — fill PUBLIC_HOST + the six required fillables (see Secrets above)
 nano .env   # or your editor
 
 docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d

@@ -1,9 +1,9 @@
 # Railway overlay scaffold - same GHCR image pair as SecretVM/generic.
 #
 # Images are stock digests only. Do NOT docker build the Lumerin node here.
-# Secret-class vars (H4) belong in Railway Secrets, never in this file or
-# railway.toml: WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED,
-# COOKIE_CONTENT, ETH_NODE_ADDRESS (RPC).
+# Operator fillables (H4) belong in Railway Secrets / vars, never in this
+# file or railway.toml: WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED,
+# COOKIE_CONTENT, ETH_NODE_ADDRESS (RPC), WEB_PUBLIC_URL.
 #
 # H3: single replica for wallet-bearing proxy-router (multi-replica unsupported).
 # H2 blast radius / operator notes: see deploy/railway/README.md.
@@ -45,8 +45,13 @@ services:
       - ROUTER_URL=http://proxy-router:8082
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
-      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Behavior bake (change via compose/code only -- not Railway vars forms).
+      - SESSION_DURATION_SECONDS=600
+      - SESSION_FAILOVER=true
+      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
+      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
+      - HOUSEKEEPING=true
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
@@ -79,7 +84,7 @@ services:
       - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
-      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
       - PROXY_STORE_CHAT_CONTEXT=false
       - PROXY_FORWARD_CHAT_CONTEXT=false
       - LOG_LEVEL_APP=warn

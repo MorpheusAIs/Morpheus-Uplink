@@ -49,12 +49,11 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill Encrypted Secrets (block below) — **five keys only** (wallet / RPC / cookie / admin / seed). |
+| **3. Secrets** | Fill Encrypted Secrets (block below) — **six keys only** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
 | **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
-| **5. Hostname** | Edit compose `configs.router_network_env` → `WEB_PUBLIC_URL=https://….vm.scrtlabs.com`, redeploy once (baked default is `https://localhost`). |
-| **6. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
-| **7. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
-| **8. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
+| **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
+| **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
+| **7. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
 
 <details>
 <summary><strong>Encrypted Secrets (copy / paste)</strong></summary>
@@ -65,10 +64,11 @@ ETH_NODE_ADDRESS=https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
+WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
-`WEB_PUBLIC_URL` defaults to `https://localhost` in compose `configs:` (not Encrypted Secrets — SecretVM scrapes every `environment:` key). After first boot, set the real host there and redeploy.
+Session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*` and Base chain pins are **baked** in compose (change via code only — not Encrypted Secrets).
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
 </details>
@@ -83,7 +83,7 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 |------|---------|
 | **1. DNS / ports** | Point A/AAAA at the box; open **80** and **443**. |
 | **2. Compose** | Download **`docker-compose.generic.deployed.yml`** (+ `env.generic.example` → `.env`) from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + wallet / RPC / cookie / admin / seed (never commit). |
+| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the six fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
 | **4. Deploy** | `docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d` (Caddy + LE). |
 | **5. GUI → fund → Probe** | Open `https://$PUBLIC_HOST/gui/` → fund ETH+MOR on Base → Probe → Prompt key at `/v1`. |
 
@@ -97,7 +97,7 @@ Same image pair; **no** Railway-specific release compose yet — use the in-repo
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Pin `ghcr.io/morpheusais/uplink` (+ Lumerin) to release digests — not bare `:latest`. |
-| **3. Secrets** | Set wallet / admin / seed / cookie / RPC as **Railway Secrets** only. |
+| **3. Secrets** | Set the six fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
 | **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
 
@@ -115,8 +115,8 @@ catalog — do **not** hardcode a flashy name, and do **not** treat generic
 [active.mor.org](https://active.mor.org) or `active_models.json` / ALL feeds
 as the catalog. Defaults:
 
-| Env | Default |
-|-----|---------|
+| Env (baked) | Default |
+|-------------|---------|
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 

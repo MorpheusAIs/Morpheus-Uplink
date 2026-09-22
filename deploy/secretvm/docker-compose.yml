@@ -11,9 +11,9 @@
 #
 # Split for a clean secrets form (SecretVM scrapes ALL environment: keys,
 # literals included -- not only dollar-brace substitutions):
-#   - Real secrets only: the five dollar-brace substitutions below (form prompts)
-#   - Everything else: configs router_network_env (NOT prompted) -- Base
-#     network, WEB_PUBLIC_URL default, SESSION_DURATION, PROXY_*, LOG_LEVEL_*
+#   - Operator fillables (6): the dollar-brace substitutions below
+#   - Behavior bake + Base network: configs (NOT prompted) -- session /
+#     catalog / housekeeping / PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* live in configs and are believed
 # honored on pinned v7.11.6-test; live acceptance pending. Do not market as TEE
@@ -55,7 +55,7 @@ services:
       retries: 3
       start_period: 60s
     environment:
-      # Encrypted Secrets form scrapes every environment: key -- keep ONLY the five required secrets.
+      # Encrypted Secrets form scrapes every environment: key -- keep ONLY the six operator fillables.
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
       # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
@@ -63,8 +63,13 @@ services:
       # Same Base RPC + wallet as the router - daylocked MOR reads + post-midnight reclaim.
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
+      # Public HTTPS origin (GUI / swagger). Fill with https://<vm-host>.
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
     env_file:
       - usr/.env
+    configs:
+      - source: uplink_bake_env
+        target: /etc/uplink/bake.env
     volumes:
       - uplink_data:/data
     networks:
@@ -93,10 +98,11 @@ services:
       retries: 3
       start_period: 60s
     environment:
-      # Encrypted Secrets form scrapes every environment: key -- keep ONLY secrets.
+      # Encrypted Secrets form scrapes every environment: key -- keep ONLY operator fillables.
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
+      - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
     # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
     env_file:
       - usr/.env
@@ -144,12 +150,19 @@ networks:
     driver: bridge
 
 configs:
+  # Uplink non-secret behavior bake (entrypoint sources /etc/uplink/bake.env).
+  # Kept out of environment: so SecretVM does not put these in Encrypted Secrets.
+  # Change later via code / compose only -- not operator forms.
+  uplink_bake_env:
+    content: |-
+      SESSION_DURATION_SECONDS=600
+      SESSION_FAILOVER=true
+      ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
+      GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
+      HOUSEKEEPING=true
   # Non-secret runtime + Base mainnet config (Morpheus-Lumerin-Node main.env).
   # Kept out of environment: so SecretVM does not put these in Encrypted Secrets.
   # Loaded by the router's godotenv.Load(".env"); process env wins over this file.
-  # WEB_PUBLIC_URL defaults to https://localhost; after first boot edit this
-  # value to https://<vm-host> (or https://<vm-host>/node for swagger) and redeploy.
-  # SESSION_DURATION_SECONDS default 600 (stake scales with duration).
   # Privacy (L1: set / believed honored; live acceptance pending).
   router_network_env:
     content: |-
@@ -158,8 +171,6 @@ configs:
       BLOCKSCOUT_API_URL=https://base.blockscout.com/api/v2
       DIAMOND_CONTRACT_ADDRESS=0x6aBE1d282f72B474E54527D93b979A4f64d3030a
       MOR_TOKEN_ADDRESS=0x7431ada8a591c955a994a21710752ef9b882b8e3
-      WEB_PUBLIC_URL=https://localhost
-      SESSION_DURATION_SECONDS=600
       PROXY_STORE_CHAT_CONTEXT=false
       PROXY_FORWARD_CHAT_CONTEXT=false
       LOG_LEVEL_APP=warn
