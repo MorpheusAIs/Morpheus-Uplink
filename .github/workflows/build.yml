@@ -328,7 +328,7 @@ jobs:
             echo "- SecretVM: \`docker-compose.secretvm.deployed.yml\` + \`env.secretvm.example\`"
             echo "- Any Docker VPS: \`docker-compose.generic.deployed.yml\` + \`env.generic.example\`"
             echo ""
-            echo "Operator guide: https://github.com/absgrafx/Morpheus-Uplink/blob/main/docs/README.md"
+            echo "Operator guide: https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/README.md"
           } > release-notes.md
           gh release create "${VTAG}" \
             docker-compose.secretvm.deployed.yml \

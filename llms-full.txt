@@ -235,7 +235,7 @@ commercially.
 
 | For | Reach |
 |-----|--------|
-| Bugs / features | [GitHub Issues](https://github.com/absgrafx/Morpheus-Uplink/issues) |
+| Bugs / features | [GitHub Issues](https://github.com/MorpheusAIs/Morpheus-Uplink/issues) |
 | Security disclosure / license | Use a private channel to the maintainer (ABSGrafx) |
 
 By running Uplink, you acknowledge self-custody, third-party inference, and

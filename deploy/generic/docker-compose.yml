@@ -4,8 +4,8 @@
 # Caddy terminates TLS with Let's Encrypt (no SecretVM cert mount).
 #
 # Prefer the digest-pinned release asset (no git clone):
-#   curl -fsSL -O https://github.com/absgrafx/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
-#   curl -fsSL -o .env https://github.com/absgrafx/Morpheus-Uplink/releases/latest/download/env.generic.example
+#   curl -fsSL -O https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/docker-compose.generic.deployed.yml
+#   curl -fsSL -o .env https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest/download/env.generic.example
 #   # edit .env (PUBLIC_HOST + secrets), then:
 #   docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 #
