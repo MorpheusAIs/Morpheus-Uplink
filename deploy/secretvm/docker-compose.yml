@@ -12,12 +12,13 @@
 # Split for a clean secrets form (SecretVM scrapes ALL environment: keys,
 # literals included -- not only dollar-brace substitutions):
 #   - Operator fillables (6): the dollar-brace substitutions below
-#   - Behavior bake + Base network: configs (NOT prompted) -- session /
-#     catalog / housekeeping / PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR
+#   - Uplink bake (uplink_bake_env): session / catalog / housekeeping
+#   - Router bake (router_network_env): PROXY_* / LOG_LEVEL_* / chain /
+#     Diamond / MOR / Blockscout (NOT prompted; never mix into uplink bake)
 #
-# Privacy env (L1): PROXY_* and LOG_LEVEL_* live in configs and are believed
-# honored on pinned v7.11.6-test; live acceptance pending. Do not market as TEE
-# privacy until verified on the pinned digest.
+# Privacy env (L1): PROXY_* and LOG_LEVEL_* live in router_network_env and are
+# believed honored on pinned v7.11.6-test; live acceptance pending. Do not
+# market as TEE privacy until verified on the pinned digest.
 #
 # Lumerin pin note: tag v7.11.6-test is the Lumerin release channel (includes
 # #889 gateway caps early access), NOT Base testnet -- chain comes from env

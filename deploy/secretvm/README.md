@@ -2,9 +2,20 @@
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
 certs; Encrypted Secrets supply only the six operator fillables (wallet /
-RPC / cookie / admin / seed / WEB_PUBLIC_URL). Session, catalog,
-housekeeping, PROXY_*/LOG_LEVEL_*, and chain pins live in compose
-`configs:` so the SecretVM form stays clean.
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). Form stays six; tunables
+change via compose/code, not Encrypted Secrets:
+
+- **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
+  ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
+  UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
+  SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT). Diamond / ETH_NODE_CHAIN_ID
+  are not Uplink operator knobs.
+- **Router** (`router_network_env`; godotenv -- process env wins):
+  PROXY_STORE_CHAT_CONTEXT, PROXY_FORWARD_CHAT_CONTEXT,
+  LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID, ETH_NODE_USE_SUBSCRIPTIONS,
+  BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS, MOR_TOKEN_ADDRESS.
+
+Never put router PROXY_*/LOG_LEVEL_* into uplink bake docs.
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:

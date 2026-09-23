@@ -66,10 +66,11 @@ Same images; different compose. Assets from the
 | **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
-Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants and
-behavior bake (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
-on SecretVM are compose `configs:` mounts — not Encrypted Secrets. Operator
-fillables are the same six everywhere (`WEB_PUBLIC_URL` included).
+Step-by-step: [02-bootstrap.md](02-bootstrap.md). On SecretVM, Uplink bake
+(`uplink_bake_env`) and router bake (`router_network_env`) are compose
+`configs:` mounts -- not Encrypted Secrets. Keep them separate: never put
+router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake. Operator fillables are the
+same six everywhere (`WEB_PUBLIC_URL` included).
 
 ---
 
@@ -95,20 +96,55 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## Environment variables
 
-| Var | Required | Default | Purpose |
-|---|---|---|---|
-| `ROUTER_URL` | — | `http://proxy-router:8082` | C-Node admin API |
-| `ROUTER_AUTH` | yes | — | Router basic auth `user:pass` (`COOKIE_CONTENT` fallback) |
-| `ADMIN_PASSWORD` | yes | — | GUI/admin login (`admin`) |
-| `API_KEY_SEED` | yes | — | Master/Prompt derivation (`openssl rand -hex 32`) |
-| `UPLINK_LISTEN` | — | `:8080` | Listen address |
-| `DATA_DIR` | — | `./data` | JSON state |
-| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
-| `GATEWAY_BIDS_URL` | — | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
-| `SESSION_DURATION_SECONDS` | — | `600` | Session length (stake scales) |
-| `SESSION_FAILOVER` | — | `true` | Provider failover at open |
-| `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment vs stake |
-| `CLOSE_SESSIONS_ON_EXIT` | — | `true` | Close pooled sessions on shutdown |
+Product rule: **form stays six**; tunables change via compose/code, not
+Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
+`uplink_bake_env` / `router_network_env`.
+
+### 1. Minimum to run (six operator fillables)
+
+| Var | Required | Purpose |
+|---|---|---|
+| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet (router + Uplink reclaim) |
+| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
+| `COOKIE_CONTENT` | yes | Router basic auth `user:pass` (`ROUTER_AUTH` fallback locally) |
+| `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
+| `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
+| `WEB_PUBLIC_URL` | yes (deploy) | Public HTTPS origin |
+
+### 2. Uplink tunable / additional (Uplink process only)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
+| `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
+| `SESSION_FAILOVER` | `true` | Provider failover at open |
+| `HOUSEKEEPING` | on when wallet key present | Post-midnight stake reclaim |
+| `UPLINK_LISTEN` | `:8080` | Listen address |
+| `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
+| `DATA_DIR` | `./data` | JSON state |
+| `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
+| `SESSION_DIRECT_PAYMENT` | `false` | Direct payment vs stake |
+| `CLOSE_SESSIONS_ON_EXIT` | `true` | Close pooled sessions on shutdown |
+
+Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are
+**not** Uplink operator knobs.
+
+### 3. Router tunable / additional (proxy-router only)
+
+Loaded via `router_network_env` / process env (godotenv -- process env wins).
+Never document these as Uplink knobs or put them in `uplink_bake_env`:
+
+| Var | Role |
+|---|---|
+| `PROXY_STORE_CHAT_CONTEXT` | Privacy: store chat context |
+| `PROXY_FORWARD_CHAT_CONTEXT` | Privacy: forward chat context |
+| `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC` | Router log levels |
+| `ETH_NODE_CHAIN_ID` | Chain id (Base mainnet `8453`) |
+| `ETH_NODE_USE_SUBSCRIPTIONS` | WS subscriptions toggle |
+| `BLOCKSCOUT_API_URL` | Block explorer API |
+| `DIAMOND_CONTRACT_ADDRESS` | Inference diamond |
+| `MOR_TOKEN_ADDRESS` | MOR ERC-20 |
 
 ---
 

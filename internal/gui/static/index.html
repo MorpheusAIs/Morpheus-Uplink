@@ -1951,24 +1951,39 @@ function svgBars(series, valueKey, color) {
 }
 
 function svgStackedTokens(series) {
+  // Stack bottom->top: prompt then completion. Legend LEFT of chart; order
+  // top->bottom matches visual stack (same convention as Requests-by-day).
   if (!series.length) return '<div class="chart-empty">No data yet</div>';
   const w = 360, h = 140, padL = 28, padR = 8, padT = 10, padB = 28;
   const max = Math.max(...series.map(d => d.prompt + d.completion), 1);
   const bw = (w - padL - padR) / series.length;
+  // series order bottom->top for paint; legend reverses for visual top->bottom.
+  const tokenSeries = [
+    { key: 'prompt', color: '#20DC8E', label: 'prompt' },
+    { key: 'completion', color: '#00FF85', label: 'completion' },
+  ];
   const bars = series.map((d, i) => {
-    const totalH = ((d.prompt + d.completion) / max) * (h - padT - padB);
-    const promptH = ((d.prompt / max) * (h - padT - padB));
-    const x = padL + i * bw + bw * 0.15;
-    const y = h - padB - totalH;
+    let y = h - padB;
+    const stack = tokenSeries.map((s) => {
+      const v = Number(d[s.key]) || 0;
+      const bh = (v / max) * (h - padT - padB);
+      y -= bh;
+      return `<rect x="${padL + i * bw + bw * 0.15}" y="${y}" width="${bw * 0.7}" height="${Math.max(bh, v ? 1 : 0)}" fill="${s.color}"/>`;
+    }).join('');
     const label = (d.day || '').slice(5) || d.day;
-    return `<rect x="${x}" y="${y}" width="${bw * 0.7}" height="${Math.max(totalH - promptH, 0)}" rx="2" fill="#00FF85"/>
-      <rect x="${x}" y="${y + Math.max(totalH - promptH, 0)}" width="${bw * 0.7}" height="${Math.max(promptH, d.prompt ? 1 : 0)}" fill="#20DC8E"/>
-      <text x="${x + bw * 0.35}" y="${h - 10}" text-anchor="middle" fill="#A5A5A5" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>`;
+    return stack + `<text x="${padL + i * bw + bw * 0.35}" y="${h - 10}" text-anchor="middle" fill="#A5A5A5" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>`;
   }).join('');
-  return `<svg viewBox="0 0 ${w} ${h}" role="img">${bars}
-    <text x="${padL}" y="12" fill="#20DC8E" font-size="10">prompt</text>
-    <text x="${padL + 52}" y="12" fill="#00FF85" font-size="10">completion</text>
-  </svg>`;
+  const svg = `<svg viewBox="0 0 ${w} ${h}" role="img" style="flex:1;min-width:0;max-width:100%">${bars}</svg>`;
+  const legendItems = tokenSeries.slice().reverse().map((s) =>
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">` +
+      `<span style="width:10px;height:10px;border-radius:2px;background:${s.color};flex-shrink:0"></span>` +
+      `<span style="font-size:11px;color:#EBEBEB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px" title="${escapeAttr(s.label)}">${escapeHtml(s.label)}</span>` +
+      `</div>`
+  ).join('');
+  return `<div style="display:flex;align-items:flex-start;gap:12px;width:100%">` +
+    `<div class="chart-legend" style="min-width:96px;max-width:130px;padding-top:2px;flex-shrink:0">${legendItems}</div>` +
+    svg +
+    `</div>`;
 }
 
 function svgDonut(slices) {

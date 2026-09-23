@@ -41,8 +41,17 @@ compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Session / catalog / housekeeping / PROXY_* / LOG_LEVEL_* are baked in
-compose (change via code only). No wallet material in logs or (future) journals.
+Tunables are baked in compose (change via code only; not Railway Secrets).
+Keep ownership separate:
+
+- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
+  SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
+  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **Router**: PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR (see L1 below).
+  Never put router PROXY_*/LOG_LEVEL_* into Uplink bake docs.
+
+No wallet material in logs or (future) journals.
 
 ## H3 - single replica (wallet-bearing proxy-router)
 
