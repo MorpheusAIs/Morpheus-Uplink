@@ -315,7 +315,9 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
-Session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*` and Base chain pins are **baked** in compose (change via code only — not Encrypted Secrets).
+Form stays **six** fillables. Tunables change via compose/code, **not** Encrypted Secrets:
+- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+- **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
 </details>
@@ -561,11 +563,21 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 **Only these six** belong in Encrypted Secrets. SecretVM scrapes **every**
-`environment:` key (literals too), so behavior bake stays in compose
-`configs:`: `SESSION_DURATION_SECONDS=600`, `SESSION_FAILOVER=true`,
-`ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`, `HOUSEKEEPING=true`, `PROXY_*` /
-`LOG_LEVEL_*`, plus Base chain ID / Diamond / MOR. Change those via code /
-compose only — not operator forms.
+`environment:` key (literals too), so tunables stay in compose `configs:`
+(change via code / compose only -- not operator forms):
+
+- **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
+  `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
+  `HOUSEKEEPING=true`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
+  `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`,
+  `CLOSE_SESSIONS_ON_EXIT`) are Uplink process env too. Diamond /
+  `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+- **Router** (`router_network_env`; godotenv -- process env wins):
+  `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`,
+  `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
+  `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
+  `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router
+  `PROXY_*` / `LOG_LEVEL_*` into Uplink bake.
 
 </details>
 
@@ -585,8 +597,10 @@ API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 WEB_PUBLIC_URL=https://uplink.yourdomain.com
 ```
 
-Behavior knobs (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
-are baked in compose — change via code only.
+Tunables are baked in compose (change via code only). Keep ownership separate:
+**Uplink** session/catalog/housekeeping (+ wiring defaults);
+**Router** `PROXY_*` / `LOG_LEVEL_*` / chain / Diamond / MOR. Never describe
+router `PROXY_*` / `LOG_LEVEL_*` as Uplink knobs.
 
 </details>
 
@@ -604,8 +618,24 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Behavior knobs are baked in compose. Full checklist:
+Tunables are baked in compose (Uplink vs router ownership stays separate;
+see SecretVM block above). Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
+
+</details>
+
+<details>
+<summary><strong>Var ownership (Uplink vs router)</strong></summary>
+
+Product rule: **form stays six**; tunables change via compose/code, not Encrypted Secrets.
+
+| Bucket | Where | Vars |
+|--------|-------|------|
+| **Minimum to run** | Operator fillables everywhere | `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, `WEB_PUBLIC_URL` |
+| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT` |
+| **Router tunable / additional** | proxy-router only (`router_network_env`; godotenv -- process env wins) | `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `TCP` / `ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` |
+
+Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not** Uplink operator knobs. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 
 </details>
 
@@ -984,10 +1014,11 @@ Same images; different compose. Assets from the
 | **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
-Step-by-step: [02-bootstrap.md](02-bootstrap.md). Base chain constants and
-behavior bake (session / catalog / housekeeping / `PROXY_*` / `LOG_LEVEL_*`)
-on SecretVM are compose `configs:` mounts — not Encrypted Secrets. Operator
-fillables are the same six everywhere (`WEB_PUBLIC_URL` included).
+Step-by-step: [02-bootstrap.md](02-bootstrap.md). On SecretVM, Uplink bake
+(`uplink_bake_env`) and router bake (`router_network_env`) are compose
+`configs:` mounts -- not Encrypted Secrets. Keep them separate: never put
+router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake. Operator fillables are the
+same six everywhere (`WEB_PUBLIC_URL` included).
 
 ---
 
@@ -1013,20 +1044,55 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## Environment variables
 
-| Var | Required | Default | Purpose |
-|---|---|---|---|
-| `ROUTER_URL` | — | `http://proxy-router:8082` | C-Node admin API |
-| `ROUTER_AUTH` | yes | — | Router basic auth `user:pass` (`COOKIE_CONTENT` fallback) |
-| `ADMIN_PASSWORD` | yes | — | GUI/admin login (`admin`) |
-| `API_KEY_SEED` | yes | — | Master/Prompt derivation (`openssl rand -hex 32`) |
-| `UPLINK_LISTEN` | — | `:8080` | Listen address |
-| `DATA_DIR` | — | `./data` | JSON state |
-| `ACTIVE_MODELS_URL` | — | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
-| `GATEWAY_BIDS_URL` | — | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
-| `SESSION_DURATION_SECONDS` | — | `600` | Session length (stake scales) |
-| `SESSION_FAILOVER` | — | `true` | Provider failover at open |
-| `SESSION_DIRECT_PAYMENT` | — | `false` | Direct payment vs stake |
-| `CLOSE_SESSIONS_ON_EXIT` | — | `true` | Close pooled sessions on shutdown |
+Product rule: **form stays six**; tunables change via compose/code, not
+Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
+`uplink_bake_env` / `router_network_env`.
+
+### 1. Minimum to run (six operator fillables)
+
+| Var | Required | Purpose |
+|---|---|---|
+| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet (router + Uplink reclaim) |
+| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
+| `COOKIE_CONTENT` | yes | Router basic auth `user:pass` (`ROUTER_AUTH` fallback locally) |
+| `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
+| `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
+| `WEB_PUBLIC_URL` | yes (deploy) | Public HTTPS origin |
+
+### 2. Uplink tunable / additional (Uplink process only)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
+| `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
+| `SESSION_FAILOVER` | `true` | Provider failover at open |
+| `HOUSEKEEPING` | on when wallet key present | Post-midnight stake reclaim |
+| `UPLINK_LISTEN` | `:8080` | Listen address |
+| `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
+| `DATA_DIR` | `./data` | JSON state |
+| `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
+| `SESSION_DIRECT_PAYMENT` | `false` | Direct payment vs stake |
+| `CLOSE_SESSIONS_ON_EXIT` | `true` | Close pooled sessions on shutdown |
+
+Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are
+**not** Uplink operator knobs.
+
+### 3. Router tunable / additional (proxy-router only)
+
+Loaded via `router_network_env` / process env (godotenv -- process env wins).
+Never document these as Uplink knobs or put them in `uplink_bake_env`:
+
+| Var | Role |
+|---|---|
+| `PROXY_STORE_CHAT_CONTEXT` | Privacy: store chat context |
+| `PROXY_FORWARD_CHAT_CONTEXT` | Privacy: forward chat context |
+| `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC` | Router log levels |
+| `ETH_NODE_CHAIN_ID` | Chain id (Base mainnet `8453`) |
+| `ETH_NODE_USE_SUBSCRIPTIONS` | WS subscriptions toggle |
+| `BLOCKSCOUT_API_URL` | Block explorer API |
+| `DIAMOND_CONTRACT_ADDRESS` | Inference diamond |
+| `MOR_TOKEN_ADDRESS` | MOR ERC-20 |
 
 ---
 
@@ -1109,9 +1175,20 @@ The operator guide is split into short chapters so you can open one topic at a t
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
 certs; Encrypted Secrets supply only the six operator fillables (wallet /
-RPC / cookie / admin / seed / WEB_PUBLIC_URL). Session, catalog,
-housekeeping, PROXY_*/LOG_LEVEL_*, and chain pins live in compose
-`configs:` so the SecretVM form stays clean.
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). Form stays six; tunables
+change via compose/code, not Encrypted Secrets:
+
+- **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
+  ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
+  UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
+  SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT). Diamond / ETH_NODE_CHAIN_ID
+  are not Uplink operator knobs.
+- **Router** (`router_network_env`; godotenv -- process env wins):
+  PROXY_STORE_CHAT_CONTEXT, PROXY_FORWARD_CHAT_CONTEXT,
+  LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID, ETH_NODE_USE_SUBSCRIPTIONS,
+  BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS, MOR_TOKEN_ADDRESS.
+
+Never put router PROXY_*/LOG_LEVEL_* into uplink bake docs.
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:
@@ -1156,6 +1233,20 @@ pair as [SecretVM](../secretvm/) and [Railway](../railway/).
 
 Prefer digest-pinned release assets:
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
+
+## Var ownership
+
+Form/`.env` stays the six operator fillables (+ `PUBLIC_HOST` for Caddy).
+Tunables change via compose/code:
+
+- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
+  SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
+  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **Router** (proxy-router process env): PROXY_STORE_CHAT_CONTEXT,
+  PROXY_FORWARD_CHAT_CONTEXT, LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID,
+  ETH_NODE_USE_SUBSCRIPTIONS, BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS,
+  MOR_TOKEN_ADDRESS. Never describe router PROXY_*/LOG_LEVEL_* as Uplink knobs.
 
 ## H3 - single replica
 
@@ -1227,8 +1318,17 @@ compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Session / catalog / housekeeping / PROXY_* / LOG_LEVEL_* are baked in
-compose (change via code only). No wallet material in logs or (future) journals.
+Tunables are baked in compose (change via code only; not Railway Secrets).
+Keep ownership separate:
+
+- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
+  SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
+  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **Router**: PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR (see L1 below).
+  Never put router PROXY_*/LOG_LEVEL_* into Uplink bake docs.
+
+No wallet material in logs or (future) journals.
 
 ## H3 - single replica (wallet-bearing proxy-router)
 
