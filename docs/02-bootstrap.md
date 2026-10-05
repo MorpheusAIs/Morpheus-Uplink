@@ -15,7 +15,7 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.11.6-test**). Pick the skin that matches your host:
+proxy-router **v7.14.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
@@ -23,9 +23,9 @@ proxy-router **v7.11.6-test**). Pick the skin that matches your host:
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 | **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `deploy/railway/` + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f` (digest-pinned in compose)
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556` (digest-pinned in compose)
 
-**Pin note:** tag `v7.11.6-test` is the **Lumerin release channel** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps early access) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.14.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
