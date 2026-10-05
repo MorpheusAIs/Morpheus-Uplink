@@ -91,8 +91,8 @@ There is no separate docs host or MCP for Uplink.
    (`docker-compose.generic.deployed.yml`), and Railway scaffold
    (`deploy/railway/`). Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.11.6-test by digest**
-   (Lumerin release channel / #889 gateway caps early access — **not** Base
+   over forks. Proxy-router (Lumerin) is **pinned to v7.14.0 by digest**
+   (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
 
@@ -371,8 +371,8 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins proxy-router (Lumerin) at v7.11.6-test**
-(Lumerin release channel / #889 caps early access — **not** Base testnet) — not
+Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins proxy-router (Lumerin) at v7.14.0**
+(Lumerin `main` / #889 caps — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
 ## Things worth knowing
@@ -385,7 +385,7 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned
-  for SecretVM / compose — including **proxy-router v7.11.6-test** (not `:latest`).
+  for SecretVM / compose — including **proxy-router v7.14.0** (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
@@ -504,7 +504,7 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.11.6-test**). Pick the skin that matches your host:
+proxy-router **v7.14.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
@@ -512,9 +512,9 @@ proxy-router **v7.11.6-test**). Pick the skin that matches your host:
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 | **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `deploy/railway/` + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f` (digest-pinned in compose)
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556` (digest-pinned in compose)
 
-**Pin note:** tag `v7.11.6-test` is the **Lumerin release channel** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps early access) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.14.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
@@ -1201,13 +1201,11 @@ unsupported on stock 7.11 (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.11.6-test** (Lumerin release channel; #889 gateway caps early
-access -- not Base testnet) still has no operation-journal managed cleanup.
-Do not assume `operation-journal-v1` / `stake-limit-v1` (M2). If a future
-digest enables managed mode without a companion gateway or lease, sessions
-may not clean up as expected and collateral can stay locked until native
-expiry or manual admin close. Until the digest bumps again, rely on native
-router expiry + Uplink housekeeping.
+Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
+Uplink does not drive managed-gateway cleanup or send journal/lease headers.
+Rely on native router expiry + Uplink housekeeping. Sessions can stay locked
+until native expiry or a manual admin close.
 
 ## L1 - privacy env
 
@@ -1255,11 +1253,11 @@ unsupported on stock 7.11.
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.11.6-test** (Lumerin release channel; #889 gateway caps early
-access -- not Base testnet) still has no operation-journal managed cleanup.
-Do not assume journal/stake-limit capabilities (M2). Misconfiguration blast
-radius on a future managed-mode digest: sessions may not expire as expected;
-collateral can remain locked until native expiry or manual admin/`/node` close.
+Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
+Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
+radius: sessions may not expire as expected; collateral can remain locked
+until native expiry or manual admin/`/node` close.
 
 ## L1 - privacy env
 
@@ -1279,7 +1277,7 @@ Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.14.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -1297,7 +1295,7 @@ Production path: download digest-pinned release assets from
 (`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
 this scaffold when you cut a real deploy. Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556`
 
 ## Services
 
@@ -1338,21 +1336,18 @@ cross-replica wallet lock on stock 7.11).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.11.6-test** has **no** `operation-journal-v1` / managed-gateway
-cleanup contract. Uplink on this digest must not assume journal headers or
-stake-limit capabilities (M2). Tag is Lumerin release channel (#889 gateway
-caps early access), **not** Base testnet -- chain defaults remain mainnet.
+Pinned **v7.14.0** advertises `operation-journal-v1` and `stake-limit-v1`
+(#889, on Lumerin main -- not Base testnet). Uplink on this digest still
+does not send journal headers or stake-limit leases (M2). Chain defaults
+remain mainnet.
 
-If a future digest enables gateway-managed session cleanup:
+The router can do gateway-managed session cleanup. Uplink does not use it:
 
-- Either refuse managed mode unless a companion gateway is documented **and**
-  enforced, **or** keep the native expiry loop unless an explicit
-  heartbeat/lease proves the gateway owns cleanup.
+- Keep the native expiry loop. Do not assume a heartbeat/lease.
 - Misconfiguration blast radius: sessions may not expire/cleanup as
   operators expect; collateral can remain locked until native expiry or
   manual close via admin/`/node` (admin-gated).
-- Until Workstream 1 lands and Uplink bumps the digest, treat cleanup as
-  **native router expiry + Uplink housekeeping** only.
+- Treat cleanup as **native router expiry + Uplink housekeeping** only.
 
 ## L1 - privacy env honesty
 
@@ -1363,7 +1358,7 @@ Compose sets on `proxy-router`:
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.11.6-test digest until verified.
+privacy on the pinned v7.14.0 digest until verified.
 
 ## M1 / keep list
 

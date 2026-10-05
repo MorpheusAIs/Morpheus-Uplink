@@ -2,7 +2,7 @@
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.11.6-test** (release channel / #889 caps early access -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.14.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -20,7 +20,7 @@ Production path: download digest-pinned release assets from
 (`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
 this scaffold when you cut a real deploy. Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556`
 
 ## Services
 
@@ -61,21 +61,18 @@ cross-replica wallet lock on stock 7.11).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.11.6-test** has **no** `operation-journal-v1` / managed-gateway
-cleanup contract. Uplink on this digest must not assume journal headers or
-stake-limit capabilities (M2). Tag is Lumerin release channel (#889 gateway
-caps early access), **not** Base testnet -- chain defaults remain mainnet.
+Pinned **v7.14.0** advertises `operation-journal-v1` and `stake-limit-v1`
+(#889, on Lumerin main -- not Base testnet). Uplink on this digest still
+does not send journal headers or stake-limit leases (M2). Chain defaults
+remain mainnet.
 
-If a future digest enables gateway-managed session cleanup:
+The router can do gateway-managed session cleanup. Uplink does not use it:
 
-- Either refuse managed mode unless a companion gateway is documented **and**
-  enforced, **or** keep the native expiry loop unless an explicit
-  heartbeat/lease proves the gateway owns cleanup.
+- Keep the native expiry loop. Do not assume a heartbeat/lease.
 - Misconfiguration blast radius: sessions may not expire/cleanup as
   operators expect; collateral can remain locked until native expiry or
   manual close via admin/`/node` (admin-gated).
-- Until Workstream 1 lands and Uplink bumps the digest, treat cleanup as
-  **native router expiry + Uplink housekeeping** only.
+- Treat cleanup as **native router expiry + Uplink housekeeping** only.
 
 ## L1 - privacy env honesty
 
@@ -86,7 +83,7 @@ Compose sets on `proxy-router`:
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.11.6-test digest until verified.
+privacy on the pinned v7.14.0 digest until verified.
 
 ## M1 / keep list
 

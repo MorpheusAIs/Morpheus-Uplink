@@ -85,8 +85,8 @@ There is no separate docs host or MCP for Uplink.
    (`docker-compose.generic.deployed.yml`), and Railway scaffold
    (`deploy/railway/`). Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.11.6-test by digest**
-   (Lumerin release channel / #889 gateway caps early access — **not** Base
+   over forks. Proxy-router (Lumerin) is **pinned to v7.14.0 by digest**
+   (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
 

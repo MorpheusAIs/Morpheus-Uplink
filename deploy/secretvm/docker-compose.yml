@@ -17,12 +17,12 @@
 #     Diamond / MOR / Blockscout (NOT prompted; never mix into uplink bake)
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* live in router_network_env and are
-# believed honored on pinned v7.11.6-test; live acceptance pending. Do not
+# believed honored on pinned v7.14.0; live acceptance pending. Do not
 # market as TEE privacy until verified on the pinned digest.
 #
-# Lumerin pin note: tag v7.11.6-test is the Lumerin release channel (includes
-# #889 gateway caps early access), NOT Base testnet -- chain comes from env
-# (defaults Base mainnet 8453 / Diamond / MOR below).
+# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
+# NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
+# Diamond / MOR below).
 #
 # Traefik SSE buffering: do not invent Traefik flags that break TEE TLS.
 # Prefer documented middleware only after Josh/ops confirm. Generic overlay
@@ -88,7 +88,7 @@ services:
       - traefik.http.services.uplink.loadbalancer.server.port=8080
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.11.6-test@sha256:da9890e376174d587d465c4d2679984939b085e06a3b34fc52a0ac9b19bb999f
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
     restart: unless-stopped
     logging: *default-logging
     init: true
