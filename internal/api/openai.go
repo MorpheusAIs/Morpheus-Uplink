@@ -178,14 +178,19 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if defaultDur <= 0 {
 		defaultDur = 600
 	}
+	nameCount := map[string]int{}
+	for _, m := range models {
+		nameCount[strings.ToLower(m.Name)]++
+	}
 	data := make([]map[string]any, 0, len(models))
 	for _, m := range models {
 		bid, _ := m.LowestBid()
 		data = append(data, map[string]any{
-			"id":       m.Name,
+			"id":       m.SendableID(nameCount[strings.ToLower(m.Name)] > 1),
 			"object":   "model",
 			"owned_by": "morpheus",
 			"morpheus": map[string]any{
+				"name":               m.Name,
 				"blockchainId":       m.ID,
 				"tags":               m.Tags,
 				"modelType":          m.ModelType,

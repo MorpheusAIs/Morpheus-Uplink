@@ -130,12 +130,7 @@ func (c *Catalog) refresh() error {
 	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
 		return fmt.Errorf("parse model catalog: %w", err)
 	}
-	byName := make(map[string]string, len(file.Models))
-	byID := make(map[string]string, len(file.Models))
-	for _, m := range file.Models {
-		byName[strings.ToLower(m.Name)] = m.ID
-		byID[strings.ToLower(m.ID)] = m.Name
-	}
+	byName, byID := indexModels(file.Models)
 	c.models = file.Models
 	c.byName = byName
 	c.byID = byID
@@ -156,7 +151,9 @@ func (c *Catalog) ensureFresh() error {
 }
 
 // Resolve maps a model name (or an already-resolved 0x id) to a blockchain
-// model ID.
+// model ID. When several catalog rows share a name, the winner is the
+// cheapest row that has a healthy bid. Rows with no healthy bid lose to
+// rows that have one. Equal prices break ties by lowercase model ID.
 func (c *Catalog) Resolve(nameOrID string) (string, error) {
 	if strings.HasPrefix(nameOrID, "0x") {
 		return nameOrID, nil
@@ -192,4 +189,88 @@ func (c *Catalog) NameByID(id string) string {
 		return ""
 	}
 	return c.byID[strings.ToLower(id)]
+}
+
+// SendableID is the model string clients should send. sharedName is true
+// when more than one catalog row uses this display name.
+func (m Model) SendableID(sharedName bool) string {
+	if sharedName && strings.TrimSpace(m.ID) != "" {
+		return m.ID
+	}
+	return m.Name
+}
+
+// indexModels maps lowercase names to one blockchain ID. Duplicate names
+// keep the preferred twin (see preferModel) instead of whichever row the
+// feed listed last.
+func indexModels(models []Model) (byName, byID map[string]string) {
+	byName = make(map[string]string, len(models))
+	byID = make(map[string]string, len(models))
+	chosen := make(map[string]Model, len(models))
+	for _, m := range models {
+		byID[strings.ToLower(m.ID)] = m.Name
+		key := strings.ToLower(m.Name)
+		prev, ok := chosen[key]
+		if !ok || preferModel(m, prev) {
+			chosen[key] = m
+		}
+	}
+	for key, m := range chosen {
+		byName[key] = m.ID
+	}
+	return byName, byID
+}
+
+// preferModel reports whether cand should replace cur for a shared name.
+func preferModel(cand, cur Model) bool {
+	cHealthy, cOK := cand.healthyBidWei()
+	uHealthy, uOK := cur.healthyBidWei()
+	if cOK != uOK {
+		return cOK
+	}
+	if cOK && uOK {
+		if cmp := cHealthy.Cmp(uHealthy); cmp != 0 {
+			return cmp < 0
+		}
+	} else {
+		cPrice := cand.LowestPricePerSecondWei()
+		uPrice := cur.LowestPricePerSecondWei()
+		cHas := cPrice != nil && cPrice.Sign() > 0
+		uHas := uPrice != nil && uPrice.Sign() > 0
+		if cHas != uHas {
+			return cHas
+		}
+		if cHas && uHas {
+			if cmp := cPrice.Cmp(uPrice); cmp != 0 {
+				return cmp < 0
+			}
+		}
+	}
+	return strings.ToLower(cand.ID) < strings.ToLower(cur.ID)
+}
+
+// healthyBidWei is the cheapest bid whose status is healthy or unset.
+func (m Model) healthyBidWei() (*big.Int, bool) {
+	var best *big.Int
+	for _, b := range m.BidDetail {
+		if b.Status != "" && !strings.EqualFold(b.Status, "healthy") {
+			continue
+		}
+		n, ok := bidWei(b)
+		if !ok {
+			continue
+		}
+		if best == nil || n.Cmp(best) < 0 {
+			best = n
+		}
+	}
+	return best, best != nil
+}
+
+func bidWei(b BidDetail) (*big.Int, bool) {
+	n, ok := new(big.Int).SetString(strings.TrimSpace(b.PricePerSecond), 10)
+	if !ok || n.Sign() <= 0 {
+		return nil, false
+	}
+	return n, true
 }

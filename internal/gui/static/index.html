@@ -1172,7 +1172,7 @@ let selectedKeyId = 'prompt';
 let keyLabels = {}; // usage keyId -> "Name (abcd1234)"
 let lastClaimableWei = '0';
 let liquidWei = '0';
-let modelStakes = {}; // model name -> { stakeWei, stakeMor }
+let modelStakes = {}; // blockchain model id -> { stakeWei, stakeMor }
 let modelStakesDurationSec = 0; // duration used when modelStakes was last filled
 let stakesSeq = 0;
 let curlDirty = false;
@@ -1667,9 +1667,31 @@ function connectDefaultDurationSec() {
   return Math.max(MIN_SESSION_DURATION, Number(defaultSessionDuration) || 600);
 }
 
+function modelBySendableId(id) {
+  return allModels.find(m => m.id === id) || null;
+}
+
+/** Stake map key. Live estimates are stored by blockchain id. */
+function stakeKeyFor(m) {
+  if (!m) return '';
+  return m.blockchainId || m.id;
+}
+
+function stakeRecord(id) {
+  const m = modelBySendableId(id);
+  const key = m ? stakeKeyFor(m) : id;
+  return modelStakes[key] || null;
+}
+
+function modelTitle(m) {
+  if (!m) return '';
+  if (m.name && m.name !== m.id) return m.name;
+  return m.id;
+}
+
 /** Scale Probe-duration stake to deploy-default session length (stake ∝ duration). */
 function connectStakeMor(id) {
-  const st = modelStakes[id];
+  const st = stakeRecord(id);
   if (!st || !Number.isFinite(st.stakeMor) || st.stakeMor <= 0) return null;
   const fromDur = modelStakesDurationSec || probeDurationSec();
   const toDur = connectDefaultDurationSec();
@@ -1678,12 +1700,15 @@ function connectStakeMor(id) {
 }
 
 function connectModelOptionLabel(id) {
+  const m = modelBySendableId(id);
   const stake = connectStakeMor(id);
+  const name = m ? modelTitle(m) : id;
+  const twin = (m && m.name && m.name !== m.id) ? ' ' + shortSecret(m.id) : '';
   // Duration/unit live in the field label — keep options to name + lock amount.
   if (stake != null) {
-    return id + '\u2003\u2003~\u202f' + fmtMorRate(stake);
+    return name + twin + '\u2003\u2003~\u202f' + fmtMorRate(stake);
   }
-  return id;
+  return name + twin;
 }
 
 function populateConnectModels() {
@@ -2441,19 +2466,23 @@ function weiToMorNum(weiStr) {
   }
 }
 
-function hasReusableSession(modelName) {
+function hasReusableSession(id) {
+  const m = modelBySendableId(id);
+  const chainID = (m && m.blockchainId) || '';
+  const name = (m && m.name) || id;
   const sessions = (lastStatusSnapshot && lastStatusSnapshot.sessions) || [];
   return sessions.some(s => {
     if (!s) return false;
     if (!(s.usable || s.pooled)) return false;
-    return s.modelName === modelName;
+    if (chainID && s.modelId) return String(s.modelId).toLowerCase() === chainID.toLowerCase();
+    return s.modelName === name;
   });
 }
 
-function canAffordModel(modelName) {
-  const st = modelStakes[modelName];
+function canAffordModel(id) {
+  const st = stakeRecord(id);
   if (!st || !st.stakeWei) return true;
-  if (hasReusableSession(modelName)) return true;
+  if (hasReusableSession(id)) return true;
   try {
     return BigInt(String(st.stakeWei)) <= BigInt(String(liquidWei || '0'));
   } catch (_) {
@@ -2480,7 +2509,7 @@ function refreshModelStakes() {
         const rate = Number(m.priceMorPerHour) || 0;
         if (rate <= 0) continue;
         const stakeMor = rate * (dur / 3600) * 250; // rough preview multiplier
-        modelStakes[m.id] = { stakeWei: String(Math.round(stakeMor * 1e18)), stakeMor, preview: true };
+        modelStakes[stakeKeyFor(m)] = { stakeWei: String(Math.round(stakeMor * 1e18)), stakeMor, preview: true };
       }
       filterModels();
       populateConnectModels();
@@ -2493,7 +2522,9 @@ function refreshModelStakes() {
       modelStakes = {};
       modelStakesDurationSec = Number(data.durationSec) || dur;
       for (const row of (data.models || [])) {
-        modelStakes[row.model] = {
+        const key = row.modelId || row.model;
+        if (!key) continue;
+        modelStakes[key] = {
           stakeWei: String(row.stakeWei || '0'),
           stakeMor: weiToMorNum(row.stakeWei),
           priceMorPerHour: Number(row.priceMorPerHour) || 0,
@@ -2653,6 +2684,8 @@ async function loadModels() {
       const mor = m.morpheus || {};
       return {
         id: m.id,
+        name: mor.name || m.id,
+        blockchainId: mor.blockchainId || '',
         tags: mor.tags || m.tags || [],
         priceMorPerHour: Number(mor.priceMorPerHour) || 0,
         pricePerSecondWei: mor.pricePerSecondWei || '',
@@ -2670,9 +2703,9 @@ async function loadModels() {
 function filterModels() {
   const q = document.getElementById('modelSearch').value.trim();
   const scored = allModels.map(m => {
-    const hay = m.id + ' ' + (m.tags || []).join(' ');
+    const hay = [m.name, m.id, m.blockchainId, ...(m.tags || [])].filter(Boolean).join(' ');
     return { m, s: fuzzyScore(q, hay) };
-  }).filter(x => x.s > 0).sort((a, b) => b.s - a.s || a.m.id.localeCompare(b.m.id));
+  }).filter(x => x.s > 0).sort((a, b) => b.s - a.s || modelTitle(a.m).localeCompare(modelTitle(b.m)) || a.m.id.localeCompare(b.m.id));
   const box = document.getElementById('modelList');
   if (!scored.length) {
     box.innerHTML = '<div class="note" style="padding:12px">No matches</div>';
@@ -2680,9 +2713,10 @@ function filterModels() {
   }
   const dur = probeDurationSec();
   box.innerHTML = scored.slice(0, 80).map(({ m }) => {
-    const st = modelStakes[m.id];
+    const st = stakeRecord(m.id);
     const afford = canAffordModel(m.id);
     const reuse = hasReusableSession(m.id);
+    const twin = (m.name && m.name !== m.id) ? `<div class="tags">${escapeHtml(shortSecret(m.blockchainId || m.id))}</div>` : '';
     let pill;
     if (st && Number.isFinite(st.stakeMor)) {
       const title = reuse
@@ -2700,7 +2734,8 @@ function filterModels() {
     ].filter(Boolean).join(' ');
     return `<div class="model-item${cls ? ' ' + cls : ''}" data-model-id="${escapeAttr(m.id)}" role="button" tabindex="0">
        <div class="meta">
-         ${escapeHtml(m.id)}
+         ${escapeHtml(modelTitle(m))}
+         ${twin}
          ${m.tags && m.tags.length ? `<div class="tags">${escapeHtml(m.tags.slice(0, 4).join(', '))}</div>` : ''}
        </div>
        ${pill}
@@ -2713,7 +2748,7 @@ function updateSelectedStakeNote() {
   const note = document.getElementById('selectedStakeNote');
   if (!note) return;
   if (!selectedModel) { note.textContent = ''; return; }
-  const st = modelStakes[selectedModel];
+  const st = stakeRecord(selectedModel);
   if (!st || !Number.isFinite(st.stakeMor)) { note.textContent = ''; return; }
   const reuse = hasReusableSession(selectedModel);
   const afford = canAffordModel(selectedModel);
@@ -2729,7 +2764,10 @@ function escapeAttr(s) {
 
 function selectModel(id) {
   selectedModel = id;
-  document.getElementById('selectedModel').textContent = id;
+  const m = modelBySendableId(id);
+  const label = m ? modelTitle(m) : id;
+  const twin = (m && m.name && m.name !== m.id) ? ' ' + shortSecret(m.id) : '';
+  document.getElementById('selectedModel').textContent = label + twin;
   filterModels();
   updateCurlPreview();
 }

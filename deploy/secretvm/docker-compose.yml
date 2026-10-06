@@ -6,6 +6,10 @@
 # the consumer-mode proxy-router. No other ports face the internet - a
 # consumer node needs no inbound :3333.
 #
+# Routing is static (configs routes_config). SecretVM rejects a docker.sock
+# bind ("directives that would break VM isolation"), so Traefik does not use
+# the Docker provider or service labels.
+#
 # Paste this as the VM's Docker Compose, and fill Encrypted Secrets
 # (SecretVM auto-prompts from the substitutions below).
 #
@@ -80,12 +84,6 @@ services:
       - uplink_data:/data
     networks:
       - web
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.uplink.rule=PathPrefix(`/`)
-      - traefik.http.routers.uplink.entrypoints=websecure
-      - traefik.http.routers.uplink.tls=true
-      - traefik.http.services.uplink.loadbalancer.server.port=8080
 
   proxy-router:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
@@ -128,8 +126,6 @@ services:
     logging: *default-logging
     command:
       - --api.insecure=false
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls.options=default@file
       - --providers.file.directory=/etc/traefik/dynamic
@@ -137,15 +133,15 @@ services:
     ports:
       - 443:443
     volumes:
-      # Keep :ro docker.sock and cert mounts - do not harden Traefik in a way
-      # that removes these (SecretVM edge requires them).
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Cert mount only. Do not add /var/run/docker.sock -- SecretVM rejects it.
       - /mnt/secure/cert:/certs:ro
     networks:
       - web
     configs:
       - source: tls_config
         target: /etc/traefik/dynamic/tls.yml
+      - source: routes_config
+        target: /etc/traefik/dynamic/routes.yml
 
 volumes:
   uplink_data:
@@ -193,3 +189,18 @@ configs:
             defaultCertificate:
               certFile: /certs/secret_vm_fullchain.pem
               keyFile: /certs/secret_vm_private.pem
+  routes_config:
+    content: |-
+      http:
+        routers:
+          uplink:
+            rule: PathPrefix(`/`)
+            entryPoints:
+              - websecure
+            tls: {}
+            service: uplink
+        services:
+          uplink:
+            loadBalancer:
+              servers:
+                - url: http://uplink:8080
