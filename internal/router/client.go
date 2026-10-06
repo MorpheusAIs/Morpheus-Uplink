@@ -124,7 +124,8 @@ func (c *Client) Healthcheck() (json.RawMessage, error) {
 // ForwardResult reports what happened so the caller can decide on retry.
 type ForwardResult struct {
 	StatusCode int
-	// Usage tokens parsed from a buffered (non-streaming) JSON response.
+	// Usage tokens from a buffered JSON body, or from the last SSE chunk
+	// that carried a usage object.
 	PromptTokens     int64
 	CompletionTokens int64
 }
@@ -167,7 +168,7 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 	streaming := isEventStream(contentType)
 	if streaming {
 		w.WriteHeader(resp.StatusCode)
-		flushCopy(w, resp.Body)
+		res.PromptTokens, res.CompletionTokens = flushCopy(w, resp.Body)
 		return res, nil
 	}
 
@@ -196,10 +197,14 @@ func isEventStream(contentType string) bool {
 }
 
 // flushCopy copies src to w, flushing after every chunk so SSE tokens reach
-// the client immediately.
-func flushCopy(w http.ResponseWriter, src io.Reader) {
+// the client immediately. It watches data: lines as they pass and returns
+// the token counts from the last chunk that carries a usage object. The
+// proxy-router sends that chunk before [DONE] on every stream.
+func flushCopy(w http.ResponseWriter, src io.Reader) (promptTokens, completionTokens int64) {
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
+	var pending []byte
+	discardUntilNL := false
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
@@ -209,9 +214,59 @@ func flushCopy(w http.ResponseWriter, src io.Reader) {
 			if flusher != nil {
 				flusher.Flush()
 			}
+			pending = append(pending, buf[:n]...)
+			for {
+				nl := bytes.IndexByte(pending, '\n')
+				if nl < 0 {
+					break
+				}
+				line := pending[:nl]
+				pending = pending[nl+1:]
+				if discardUntilNL {
+					discardUntilNL = false
+					continue
+				}
+				if p, c, ok := sseUsage(line); ok {
+					promptTokens, completionTokens = p, c
+				}
+			}
+			if len(pending) > maxSSELine {
+				// Drop an oversized line instead of buffering without bound.
+				pending = pending[:0]
+				discardUntilNL = true
+			}
 		}
 		if err != nil {
+			if !discardUntilNL {
+				if p, c, ok := sseUsage(pending); ok {
+					promptTokens, completionTokens = p, c
+				}
+			}
 			return
 		}
 	}
+}
+
+const maxSSELine = 1 << 20
+
+// sseUsage parses one SSE line and reports the usage it carries, if any.
+func sseUsage(line []byte) (int64, int64, bool) {
+	line = bytes.TrimSpace(line)
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return 0, 0, false
+	}
+	payload := bytes.TrimSpace(line[len("data:"):])
+	if len(payload) == 0 || payload[0] != '{' || !bytes.Contains(payload, []byte(`"usage"`)) {
+		return 0, 0, false
+	}
+	var chunk struct {
+		Usage *struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(payload, &chunk) != nil || chunk.Usage == nil {
+		return 0, 0, false
+	}
+	return chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, true
 }

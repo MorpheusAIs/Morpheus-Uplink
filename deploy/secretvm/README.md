@@ -42,6 +42,9 @@ verified on the pinned digest.
 
 ## Traefik / SSE
 
-Do not invent Traefik flags that break TEE TLS or remove `:ro` docker.sock /
-cert mounts. Buffering class for streaming: check pending; generic overlay
-uses Caddy `flush_interval -1`.
+TLS still uses the SecretVM cert mount (`/mnt/secure/cert`). Routing is a
+static file (`routes_config` -> `routes.yml`) to `uplink:8080`. SecretVM
+rejects a `/var/run/docker.sock` bind, so this overlay does not use the
+Docker provider or Traefik service labels. Do not invent Traefik flags that
+break TEE TLS, and do not put the socket back. Buffering class for
+streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
