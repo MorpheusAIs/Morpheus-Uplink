@@ -125,6 +125,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"sessionDurationSec":     s.cfg.SessionDurationSec,
 		"sessionDurationDefault": s.cfg.SessionDurationSec,
 	}
+	// Read-only router wallet (replaces former /node/wallet passthrough).
+	if addr, err := s.router.WalletAddress(); err == nil {
+		status["walletAddress"] = addr
+	} else {
+		status["walletAddressError"] = err.Error()
+	}
 	if msg := s.pool.RehydrateError(); msg != "" {
 		status["sessionsError"] = msg
 	}

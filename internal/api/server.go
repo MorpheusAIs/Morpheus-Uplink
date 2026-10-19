@@ -2,19 +2,16 @@
 //
 //	/v1/*      OpenAI-compatible, Bearer sk-… auth (master or generated keys)
 //	/admin/*   management API, Basic auth (admin / ADMIN_PASSWORD)
-//	/node/*    passthrough to the raw proxy-router :8082 API, admin-gated
 //	/gui       embedded single-page management UI
+//
+// The former /node/* passthrough to the proxy-router admin API is removed:
+// scoped router credentials must not be amplified through Uplink admin.
 package api
 
 import (
-	"bytes"
 	"crypto/subtle"
 	"encoding/json"
-	"io"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -73,9 +70,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/estimate-stake", s.requireAdmin(s.handleEstimateStake))
 	mux.HandleFunc("GET /admin/estimate-stakes", s.requireAdmin(s.handleEstimateStakes))
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
-
-	// Raw router passthrough for power users (Swagger, MyGateway-style GUIs).
-	mux.Handle("/node/", s.requireAdminHandler(s.nodeProxy()))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))
@@ -144,48 +138,6 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-func (s *Server) requireAdminHandler(next http.Handler) http.Handler {
-	return s.requireAdmin(next.ServeHTTP)
-}
-
-// nodeProxy reverse-proxies /node/* to the proxy-router, injecting the
-// router's Basic auth so the admin doesn't need the router credentials.
-func (s *Server) nodeProxy() http.Handler {
-	target, _ := url.Parse(s.cfg.RouterURL)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	director := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		director(req)
-		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/node")
-		if req.URL.Path == "" {
-			req.URL.Path = "/"
-		}
-		req.SetBasicAuth(s.cfg.RouterUser, s.cfg.RouterPass)
-		req.Host = target.Host
-	}
-	// The router's swagger spec declares basePath "/", so swagger-ui's
-	// "Try it out" would drop the /node prefix and miss the passthrough.
-	// Rewrite the spec so requests stay under /node/*.
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		if !strings.HasSuffix(resp.Request.URL.Path, "/swagger/doc.json") || resp.StatusCode != http.StatusOK {
-			return nil
-		}
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return err
-		}
-		for _, old := range []string{`"basePath": "/"`, `"basePath":"/"`} {
-			body = bytes.Replace(body, []byte(old), []byte(`"basePath": "/node"`), 1)
-		}
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		resp.ContentLength = int64(len(body))
-		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		return nil
-	}
-	return proxy
 }
 
 // Version is set from main at startup (build-time ldflags).

@@ -34,7 +34,7 @@ func derive(seed, label, prefix string) string {
 }
 
 // MasterKey derives the deterministic owner key from the seed. It is valid
-// for both inference (/v1/*) and administration (/admin/*, /node/*).
+// for both inference (/v1/*) and administration (/admin/*).
 func MasterKey(seed string) string {
 	return derive(seed, "uplink-master-key-v1", "sk-uplink.")
 }

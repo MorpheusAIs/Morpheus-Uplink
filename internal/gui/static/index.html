@@ -921,8 +921,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <span class="note" id="supportMsg" style="margin:0"></span>
         </div>
         <p class="note" style="margin-top:12px">
-          Raw node API (Swagger):
-          <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a>
+          Router admin API is not exposed through Uplink. Wallet address is on Status (read-only).
         </p>
       </section>
     </div>
@@ -1420,11 +1419,7 @@ async function doRefresh() {
          </div>
        </div>`;
 
-    secrets.wallet = '';
-    try {
-      const w = await api('/node/wallet');
-      secrets.wallet = w.address || '';
-    } catch (e) { /* optional */ }
+    secrets.wallet = st.walletAddress || '';
     document.getElementById('walletMasked').textContent = shortSecret(secrets.wallet) || '(unavailable)';
 
     const rawSessions = st.sessions || [];
