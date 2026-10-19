@@ -104,3 +104,16 @@ privacy on the pinned v7.15.0 digest until verified.
 
 **Done** when GUI login works and Probe returns a completion. Bootstrap summary:
 [docs/02-bootstrap.md -- First start -- Railway](../../docs/02-bootstrap.md#first-start--railway).
+
+## Platform edge limits (Railway)
+
+Railway terminates TLS and exposes only the uplink service port you bind
+(`8080`). There is no Traefik/Caddy file provider on this path, so Uplink
+cannot enforce path allowlists or login rate limits at the platform edge.
+
+What Railway can / cannot do for this overlay:
+
+- Can: private networking between uplink and proxy-router; single public port.
+- Cannot (from this compose): Traefik-style path allowlist, access-log middleware,
+  or router-login rate limit. Rely on Railway dashboard networking + Uplink
+  admin lockout (application layer). Do not publish proxy-router `:8082`.

@@ -48,3 +48,10 @@ rejects a `/var/run/docker.sock` bind, so this overlay does not use the
 Docker provider or Traefik service labels. Do not invent Traefik flags that
 break TEE TLS, and do not put the socket back. Buffering class for
 streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
+
+## Edge allowlist / rate limit
+
+Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
+(`/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck`; else 404 via low-priority
+deny router), and an average/burst rate limit middleware on the allowlist
+router. Router `:8082` is not published. Traefik still gets zero secrets.

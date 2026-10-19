@@ -41,3 +41,11 @@ honored; live acceptance pending**). Not TEE privacy.
 ## SSE
 
 Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
+
+## Edge allowlist / rate limit
+
+Caddy allowlists `/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck` (else 404) and
+writes JSON access logs to stdout. Stock `caddy:*-alpine` has no rate_limit
+module; put a reverse-proxy / WAF rate limit in front, or rebuild Caddy with
+`github.com/mholt/caddy-ratelimit` if you need in-process limits. Router
+`:8082` stays off the public edge.

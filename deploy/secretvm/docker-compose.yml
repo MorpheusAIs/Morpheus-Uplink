@@ -104,11 +104,13 @@ services:
       - web
 
   traefik:
-    image: traefik:v2.10
+    image: traefik:v2.11.28@sha256:247c456388728396fda0cb8e500c0d5d83d0624cc364623479cca4cb0fa5257c
     restart: unless-stopped
     logging: *default-logging
     command:
       - --api.insecure=false
+      - --accesslog=true
+      - --accesslog.format=json
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls.options=default@file
       - --providers.file.directory=/etc/traefik/dynamic
@@ -249,13 +251,35 @@ configs:
   routes_config:
     content: |-
       http:
+        middlewares:
+          uplink-ratelimit:
+            rateLimit:
+              average: 30
+              burst: 60
+          # Router login is not exposed on Traefik; this limit covers Uplink admin+API.
+          # Keep tight to slow password guessing on /admin.
+          force404path:
+            replacePath:
+              path: /__denied__
         routers:
-          uplink:
+          uplink-allowed:
+            rule: "PathPrefix(`/gui`) || PathPrefix(`/v1`) || PathPrefix(`/admin`) || Path(`/healthcheck`) || Path(`/`)"
+            entryPoints:
+              - websecure
+            tls: {}
+            middlewares:
+              - uplink-ratelimit
+            service: uplink
+            priority: 10
+          uplink-deny:
             rule: PathPrefix(`/`)
             entryPoints:
               - websecure
             tls: {}
+            middlewares:
+              - force404path
             service: uplink
+            priority: 1
         services:
           uplink:
             loadBalancer:

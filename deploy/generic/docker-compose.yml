@@ -168,8 +168,20 @@ configs:
   caddyfile:
     content: |
       {$PUBLIC_HOST} {
-        reverse_proxy uplink:8080 {
-          flush_interval -1
+        log {
+          output stdout
+          format json
+        }
+        @allowed {
+          path / /gui /gui/* /v1/* /admin/* /healthcheck
+        }
+        handle @allowed {
+          reverse_proxy uplink:8080 {
+            flush_interval -1
+          }
+        }
+        handle {
+          respond 404
         }
       }
   router_user_init:
