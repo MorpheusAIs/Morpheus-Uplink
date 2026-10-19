@@ -9,13 +9,18 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /uplin
 FROM alpine:3.24
 # Runtime user uid 10001 (CI PR smoke asserts non-root drop via su-exec).
 # curl: scoped-user init (router-user-init service + Railway entrypoint).
-RUN apk add --no-cache ca-certificates su-exec curl \
+# jq: allowance read-back and the allowance manager's status file.
+RUN apk add --no-cache ca-certificates su-exec curl jq \
   && adduser -D -u 10001 uplink \
   && mkdir -p /data && chown uplink:uplink /data
 COPY --from=build /uplink /usr/local/bin/uplink
 COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
 COPY deploy/init/router-user-init.sh /usr/local/bin/router-user-init.sh
-RUN chmod +x /docker-entrypoint.sh /usr/local/bin/router-user-init.sh
+COPY deploy/init/router-admin-lib.sh /usr/local/bin/router-admin-lib.sh
+COPY deploy/init/router-allowance-manager.sh /usr/local/bin/router-allowance-manager.sh
+RUN chmod 0755 /docker-entrypoint.sh /usr/local/bin/router-user-init.sh \
+    /usr/local/bin/router-allowance-manager.sh \
+  && chmod 0644 /usr/local/bin/router-admin-lib.sh
 ENV DATA_DIR=/data
 VOLUME /data
 EXPOSE 8080

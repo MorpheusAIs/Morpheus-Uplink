@@ -83,8 +83,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    # No init sidecar here: the entrypoint mints the scoped user itself
+    # before Uplink reads anything (fresh credential every boot), after
+    # waiting for the router healthcheck.
     depends_on:
-      - proxy-router
+      proxy-router:
+        condition: service_healthy
     environment:
       - ROUTER_URL=http://proxy-router:8082
       - ROUTER_AUTH=${ROUTER_AUTH:-}

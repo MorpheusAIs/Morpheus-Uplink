@@ -61,8 +61,12 @@ services:
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
+    # No init sidecar here: the entrypoint mints the scoped user itself
+    # before Uplink reads anything (fresh credential every boot), after
+    # waiting for the router healthcheck.
     depends_on:
-      - proxy-router
+      proxy-router:
+        condition: service_healthy
 
   proxy-router:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
