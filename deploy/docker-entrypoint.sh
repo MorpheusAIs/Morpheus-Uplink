@@ -29,18 +29,17 @@ if [ -f /etc/uplink/bake.env ]; then
 fi
 DATA_DIR="${DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
-RUN_USER="${UPLINK_RUN_USER:-uplink}"
 IS_ROOT=0
 [ "$(id -u)" = "0" ] && IS_ROOT=1
 
 # handoff SRC DST MODE: copy SRC (readable by the current uid) to DST as
-# RUN_USER with MODE, atomically. Root path uses su-exec so DST is owned by
-# RUN_USER without needing DAC_OVERRIDE on DST's directory.
+# the uplink user with MODE, atomically. Root path uses su-exec so DST is owned by
+# the uplink user without needing DAC_OVERRIDE on DST's directory.
 handoff() {
   _src="$1"; _dst="$2"; _mode="$3"
   if [ "$IS_ROOT" = "1" ]; then
     # shellcheck disable=SC2016
-    su-exec "$RUN_USER" /bin/sh -c '
+    su-exec uplink /bin/sh -c '
       set -e
       umask 077
       rm -f "$1.tmp"
@@ -87,7 +86,7 @@ if [ -n "${COOKIE_CONTENT:-}" ]; then
 fi
 
 if [ "$IS_ROOT" = "1" ]; then
-  chown -R "$RUN_USER:$RUN_USER" "$DATA_DIR" 2>/dev/null || true
+  chown -R uplink:uplink "$DATA_DIR" 2>/dev/null || true
   if [ -n "${ROUTER_AUTH_FILE:-}" ]; then
     case "${ROUTER_AUTH_FILE}" in
       "$DATA_DIR"/*) ;;
@@ -99,7 +98,7 @@ if [ "$IS_ROOT" = "1" ]; then
           exit 1
         fi
         export ROUTER_AUTH_FILE="$DATA_DIR/router.auth"
-        echo "uplink-entrypoint: copied ROUTER_AUTH into DATA_DIR (owner $RUN_USER uid $(id -u "$RUN_USER"), mode 0400)"
+        echo "uplink-entrypoint: copied ROUTER_AUTH into DATA_DIR (owner uplink uid $(id -u uplink), mode 0400)"
         ;;
     esac
   fi
@@ -118,6 +117,6 @@ if [ "$IS_ROOT" = "1" ]; then
   if [ -n "${STAGE:-}" ]; then
     rm -rf "$STAGE"
   fi
-  exec su-exec "$RUN_USER" /usr/local/bin/uplink "$@"
+  exec su-exec uplink /usr/local/bin/uplink "$@"
 fi
 exec /usr/local/bin/uplink "$@"
