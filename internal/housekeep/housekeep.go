@@ -35,6 +35,13 @@ type Config struct {
 	CheckEvery         time.Duration
 	// GasLowWei: when router ETH balance is below this, set GasLow on Result.
 	GasLowWei *big.Int
+	// Startup retry: the first scan at boot often races the router coming
+	// up (connection refused). Retry with exponential backoff from
+	// StartupBackoff (default 2s) up to StartupBackoffMax (default 30s),
+	// for at most StartupRetryFor in total (default 5m).
+	StartupBackoff    time.Duration
+	StartupBackoffMax time.Duration
+	StartupRetryFor   time.Duration
 }
 
 type Result struct {
@@ -98,7 +105,7 @@ func (r *Runner) Start(ctx context.Context) {
 	if every <= 0 {
 		every = 15 * time.Minute
 	}
-	r.maybeRun(ctx, true)
+	r.startupRun(ctx)
 
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -112,7 +119,55 @@ func (r *Runner) Start(ctx context.Context) {
 	}
 }
 
-func (r *Runner) maybeRun(ctx context.Context, startup bool) {
+// startupRun performs the boot scan, retrying with bounded backoff while the
+// router is not ready yet. Each attempt replaces Last(), so a stale error
+// clears as soon as a later attempt succeeds.
+func (r *Runner) startupRun(ctx context.Context) {
+	delay := r.cfg.StartupBackoff
+	if delay <= 0 {
+		delay = 2 * time.Second
+	}
+	maxDelay := r.cfg.StartupBackoffMax
+	if maxDelay <= 0 {
+		maxDelay = 30 * time.Second
+	}
+	budget := r.cfg.StartupRetryFor
+	if budget <= 0 {
+		budget = 5 * time.Minute
+	}
+	deadline := time.Now().Add(budget)
+	for attempt := 1; ; attempt++ {
+		res := r.maybeRun(ctx, true)
+		if !startupNeedsRetry(res) {
+			if attempt > 1 {
+				log.Printf("housekeep: startup scan ok after %d attempt(s)", attempt)
+			}
+			return
+		}
+		if time.Now().Add(delay).After(deadline) {
+			log.Printf("housekeep: startup scan still failing after %d attempt(s); next try on the regular schedule", attempt)
+			return
+		}
+		log.Printf("housekeep: startup scan attempt %d failed (%s); retrying in %s", attempt, res.Message, delay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
+// startupNeedsRetry: the boot scan failed to reach the router (on-hold read
+// error or the close scan could not list sessions).
+func startupNeedsRetry(res Result) bool {
+	return res.Status == "error" || !res.ClosedViaScan
+}
+
+func (r *Runner) maybeRun(ctx context.Context, startup bool) Result {
 	now := time.Now().UTC()
 	day := now.Format("2006-01-02")
 	mins := now.Hour()*60 + now.Minute()
@@ -126,7 +181,7 @@ func (r *Runner) maybeRun(ctx context.Context, startup bool) {
 	r.mu.Unlock()
 
 	if !startup && (mins < after || already) {
-		return
+		return Result{Status: "skipped", ClosedViaScan: true}
 	}
 	res := r.Run(ctx)
 	r.mu.Lock()
@@ -135,6 +190,7 @@ func (r *Runner) maybeRun(ctx context.Context, startup bool) {
 		r.lastDay = day
 	}
 	r.mu.Unlock()
+	return res
 }
 
 // RunOnce forces a reclaim pass (admin button / API).

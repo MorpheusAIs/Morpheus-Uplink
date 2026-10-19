@@ -132,7 +132,7 @@ func newServerAgainstRouter(t *testing.T, rt *httptest.Server, seed string) (*ht
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true, false), rc, nil)
+	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true), rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, cfg

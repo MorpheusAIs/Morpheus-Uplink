@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -174,6 +175,25 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable: "+err.Error())
 		return
 	}
+	s.writeModelList(w, models)
+}
+
+// handleAdminModels is the same list for the admin GUI (session cookie). The
+// GUI only holds masked API keys, so it must not call /v1/models itself.
+// The catalog comes from ACTIVE_MODELS_URL, not the router.
+func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
+	models, err := s.catalog.List()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": "model catalog fetch failed: " + err.Error(),
+			"kind":  "catalog_fetch",
+		})
+		return
+	}
+	s.writeModelList(w, models)
+}
+
+func (s *Server) writeModelList(w http.ResponseWriter, models []catalog.Model) {
 	defaultDur := s.cfg.SessionDurationSec
 	if defaultDur <= 0 {
 		defaultDur = 600

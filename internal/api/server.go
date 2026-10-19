@@ -13,6 +13,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -38,6 +40,12 @@ type Server struct {
 	lockout   *adminauth.Lockout
 	audit     *AuditLog
 	outflow   *OutflowAlert
+
+	walletMu   sync.Mutex
+	lastWallet string // last address the router returned (never blanked)
+
+	resyncMu      sync.Mutex
+	lastResyncReq time.Time
 }
 
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
@@ -100,6 +108,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/housekeep", s.requireAdmin(s.handleHousekeep))
 	mux.HandleFunc("GET /admin/estimate-stake", s.requireAdmin(s.handleEstimateStake))
 	mux.HandleFunc("GET /admin/estimate-stakes", s.requireAdmin(s.handleEstimateStakes))
+	mux.HandleFunc("GET /admin/models", s.requireAdmin(s.handleAdminModels))
+	mux.HandleFunc("POST /admin/allowance/resync", s.requireAdmin(s.handleAllowanceResync))
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
 

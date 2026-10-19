@@ -156,10 +156,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"sessionDurationDefault": s.cfg.SessionDurationSec,
 	}
 	// Read-only router wallet (replaces former /node/wallet passthrough).
-	if addr, err := s.router.WalletAddress(); err == nil {
+	// Never blank: fall back to the last router answer, then to the address
+	// router-user-init recorded at boot.
+	addr, src, werr := s.walletAddress()
+	if addr != "" {
 		status["walletAddress"] = addr
-	} else {
-		status["walletAddressError"] = err.Error()
+		status["walletAddressSource"] = src
+	}
+	if werr != nil {
+		status["walletAddressError"] = werr.Error()
 	}
 	if msg := s.pool.RehydrateError(); msg != "" {
 		status["sessionsError"] = msg
@@ -168,6 +173,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["router"] = health
 	} else {
 		status["routerError"] = err.Error()
+		status["routerErrorKind"] = router.KindNotReady
 	}
 
 	var liquidWei *big.Int
@@ -177,6 +183,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	} else {
 		status["balanceError"] = err.Error()
 	}
+	status["routerAuth"] = s.routerAuthStatus()
 
 	activeWei := s.pool.ActiveStakeWei()
 	mor := map[string]any{
@@ -209,13 +216,59 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"required":       s.cfg.Admin2FARequired,
 		"breakGlassWarn": s.breakGlassWarn(),
 	}
-	status["morAllowance"] = map[string]any{
-		"wei":     s.cfg.MORAllowanceWei,
-		"source":  s.cfg.MORAllowanceSource,
-		"warning": s.cfg.MORAllowanceWarning,
-	}
+	allowance, resync := s.allowanceView()
+	status["morAllowance"] = allowance
+	status["allowanceResync"] = resync
 
 	writeJSON(w, http.StatusOK, status)
+}
+
+// walletAddress returns the node wallet address and where it came from:
+// "router" (live), "last-known" (earlier live answer) or "init" (recorded
+// by router-user-init at boot). err is the live lookup error, if any.
+func (s *Server) walletAddress() (addr, source string, err error) {
+	live, err := s.router.WalletAddress()
+	s.walletMu.Lock()
+	defer s.walletMu.Unlock()
+	if err == nil && live != "" {
+		s.lastWallet = live
+		return live, "router", nil
+	}
+	if s.lastWallet != "" {
+		return s.lastWallet, "last-known", err
+	}
+	if s.cfg.RouterWalletAddress != "" {
+		return s.cfg.RouterWalletAddress, "init", err
+	}
+	return "", "", err
+}
+
+// routerAuthStatus summarises whether the router accepts the scoped
+// credential. Never includes the credential.
+func (s *Server) routerAuthStatus() map[string]any {
+	since, msg, failing := s.router.AuthFailure()
+	out := map[string]any{"ok": !failing}
+	if failing {
+		out["kind"] = router.KindAuth
+		out["since"] = since.UTC().Format(time.RFC3339)
+		out["message"] = router.ErrorHint(router.KindAuth)
+		if msg != "" {
+			out["routerMessage"] = msg
+		}
+	}
+	return out
+}
+
+// routerErr writes a router failure with a distinct, operator-facing kind
+// (router_auth / router_not_ready / router_error) so the GUI can tell a
+// rejected credential from a router that is still starting.
+func routerErr(w http.ResponseWriter, what string, err error) {
+	kind := router.ErrorKind(err)
+	writeJSON(w, http.StatusBadGateway, map[string]any{
+		"error": what + ": " + err.Error(),
+		"kind":  kind,
+		"hint":  router.ErrorHint(kind),
+	})
 }
 
 func (s *Server) handleHousekeep(w http.ResponseWriter, r *http.Request) {
@@ -370,17 +423,21 @@ func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
 
 	models, err := s.catalog.List()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": err.Error(),
+			"kind":  "catalog_fetch",
+			"hint":  "model catalog fetch failed (ACTIVE_MODELS_URL)",
+		})
 		return
 	}
 	supply, err := s.router.TokenSupply()
 	if err != nil {
-		http.Error(w, "token supply: "+err.Error(), http.StatusBadGateway)
+		routerErr(w, "token supply", err)
 		return
 	}
 	budget, err := s.router.TodaysBudget()
 	if err != nil {
-		http.Error(w, "todays budget: "+err.Error(), http.StatusBadGateway)
+		routerErr(w, "todays budget", err)
 		return
 	}
 

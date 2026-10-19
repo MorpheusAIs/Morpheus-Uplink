@@ -42,7 +42,7 @@ func TestReclaimViaRouter(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	rc := router.New(srv.URL, "uplink", "pass")
-	pl := pool.New(rc, 600, true, false)
+	pl := pool.New(rc, 600, true)
 	runner, err := New(Config{
 		Enabled:            true,
 		Router:             rc,
@@ -93,7 +93,7 @@ func TestReclaimCapsRounds(t *testing.T) {
 	runner, _ := New(Config{
 		Enabled: true, Router: rc, MaxWithdrawRounds: 2,
 		WithdrawThreshold: big.NewInt(0), WithdrawIterations: 255,
-	}, pool.New(rc, 600, true, false))
+	}, pool.New(rc, 600, true))
 	res := runner.Run(context.Background())
 	if withdraws.Load() != 2 {
 		t.Fatalf("want 2 rounds, got %d status=%s", withdraws.Load(), res.Status)
@@ -120,7 +120,7 @@ func TestGasLowFlag(t *testing.T) {
 	runner, _ := New(Config{
 		Enabled: true, Router: rc, GasLowWei: big.NewInt(1000),
 		WithdrawThreshold: big.NewInt(0),
-	}, pool.New(rc, 600, true, false))
+	}, pool.New(rc, 600, true))
 	res := runner.Run(context.Background())
 	if !res.GasLow {
 		t.Fatalf("expected gasLow, eth=%s", res.EthBalanceWei)

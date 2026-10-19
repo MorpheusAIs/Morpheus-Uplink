@@ -36,6 +36,9 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	// Effective router MOR allowance (wei + source only; never a secret).
+	if cfg.DirectPaymentIgnored {
+		slog.Warn("SESSION_DIRECT_PAYMENT is ignored (set to true): Uplink only opens staking-mode sessions (stake locked and returned, never paid out)")
+	}
 	slog.Info("mor allowance",
 		"wei", cfg.MORAllowanceWei,
 		"source", cfg.MORAllowanceSource,
@@ -49,9 +52,12 @@ func main() {
 		log.Fatalf("store: %v", err)
 	}
 
-	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
+	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass).WithAuthFile(cfg.RouterAuthFile)
+	if cfg.RouterWalletAddress != "" {
+		slog.Info("router wallet recorded at init", "file", cfg.RouterWalletFile)
+	}
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
-	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover, cfg.DirectPayment)
+	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover)
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {
@@ -105,6 +111,8 @@ func main() {
 		}
 	}()
 
+	go routerAuthWatchdog(hkCtx, rc, time.Duration(cfg.Router401ExitSec)*time.Second)
+
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
@@ -129,5 +137,37 @@ func main() {
 	_ = httpServer.Shutdown(ctx)
 	if cfg.CloseSessionsOnExit {
 		pl.CloseAll()
+	}
+}
+
+// routerAuthWatchdog exits the process when the router keeps rejecting the
+// scoped credential (HTTP 401) for longer than limit while the router itself
+// is up. The container restart policy then re-runs the entrypoint, which
+// copies the credential router-user-init wrote most recently. limit <= 0
+// disables the watchdog.
+func routerAuthWatchdog(ctx context.Context, rc *router.Client, limit time.Duration) {
+	if limit <= 0 {
+		return
+	}
+	t := time.NewTicker(15 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		since, _, failing := rc.AuthFailure()
+		if !failing || time.Since(since) < limit {
+			continue
+		}
+		// Confirm with a fresh authenticated call (it also re-reads the
+		// auth file) before giving up.
+		if _, err := rc.WalletAddress(); router.ErrorKind(err) != router.KindAuth {
+			continue
+		}
+		slog.Error("router rejected the scoped credential; exiting so the entrypoint re-reads the current one",
+			"failing_for", time.Since(since).Round(time.Second).String())
+		os.Exit(3)
 	}
 }

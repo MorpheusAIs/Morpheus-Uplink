@@ -30,7 +30,6 @@ type Pool struct {
 	client   *router.Client
 	duration int
 	failover bool
-	direct   bool
 
 	mu      sync.Mutex
 	entries map[string]entry       // modelID -> session
@@ -56,12 +55,13 @@ type ChainSession struct {
 	Pooled    bool      `json:"pooled"` // adopted into the reuse pool
 }
 
-func New(client *router.Client, durationSec int, failover, directPayment bool) *Pool {
+// New builds the session pool. Sessions are always staking-mode (never
+// direct payment).
+func New(client *router.Client, durationSec int, failover bool) *Pool {
 	return &Pool{
 		client:   client,
 		duration: durationSec,
 		failover: failover,
-		direct:   directPayment,
 		entries:  map[string]entry{},
 		opening:  map[string]*sync.Mutex{},
 	}
@@ -135,7 +135,6 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	sessionID, err := p.client.OpenSession(modelID, router.OpenSessionRequest{
 		SessionDuration: durationSec,
 		Failover:        p.failover,
-		DirectPayment:   p.direct,
 	})
 	if err != nil {
 		return EnsureResult{}, err

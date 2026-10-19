@@ -25,11 +25,7 @@ func (s *Server) handleSecurity(w http.ResponseWriter, r *http.Request) {
 		alerts = append(s.outflow.alerts, alerts...)
 		s.outflow.mu.Unlock()
 	}
-	allow := map[string]any{
-		"wei":     s.cfg.MORAllowanceWei,
-		"source":  s.cfg.MORAllowanceSource,
-		"warning": s.cfg.MORAllowanceWarning,
-	}
+	allow, resync := s.allowanceView()
 	if s.cfg.MORAllowanceWarning != "" {
 		alerts = append([]AuditEvent{{
 			At:      time.Now().UTC(),
@@ -39,9 +35,10 @@ func (s *Server) handleSecurity(w http.ResponseWriter, r *http.Request) {
 		}}, alerts...)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"alerts":       alerts,
-		"morAllowance": allow,
-		"note":         "Application audit events. Forward container logs to your SIEM via json-file/journald; do not scrape secrets from env.",
+		"alerts":          alerts,
+		"morAllowance":    allow,
+		"allowanceResync": resync,
+		"note":            "Application audit events. Forward container logs to your SIEM via json-file/journald; do not scrape secrets from env.",
 	})
 }
 

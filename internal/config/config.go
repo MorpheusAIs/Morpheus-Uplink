@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -35,7 +36,9 @@ type Config struct {
 	// Session behavior.
 	SessionDurationSec int
 	SessionFailover    bool
-	DirectPayment      bool
+	// SESSION_DIRECT_PAYMENT (true) is no longer honoured (sessions are always
+	// staking-mode); set so main can warn.
+	DirectPaymentIgnored bool
 	// Close pooled sessions on shutdown to recover stake sooner.
 	CloseSessionsOnExit bool
 	// Optional Diamond address (legacy on-hold helpers; reclaim uses router).
@@ -58,6 +61,23 @@ type Config struct {
 	// Optional path to a file containing "user:password" for ROUTER_AUTH
 	// (written by the init sidecar, mode 0400).
 	RouterAuthFile string
+	// Router wallet address recorded by router-user-init
+	// (UPLINK_ROUTER_WALLET_FILE, default router.wallet.json beside the auth
+	// file). Public; used so the funding address shows even when router
+	// calls fail.
+	RouterWalletFile    string
+	RouterWalletAddress string
+	// Exit (so the container restart re-reads the current credential) after
+	// the router has rejected the scoped credential for this long.
+	// UPLINK_ROUTER_401_EXIT_SECONDS; 0 disables. Default 120.
+	Router401ExitSec int
+	// Allowance manager status file (read-only to Uplink) and the directory
+	// where Uplink drops the presence-only resync request flag. Both are
+	// separate volumes and must never be under DATA_DIR.
+	AllowanceStatusFile string
+	AllowanceCtlDir     string
+	// Manager poll interval; status is "fresh" within 3 polls.
+	AllowancePollSec int
 	// Generic read-only JSON-RPC URL for optional on-chain alerts (no wallet key).
 	EthRPCURL string
 	// Public HTTPS origin for CSRF Origin checks (required for cookie admin auth).
@@ -85,7 +105,7 @@ func FromEnv() (*Config, error) {
 		GatewayBidsURL:        getenv("GATEWAY_BIDS_URL", "https://active.mor.org/gateway_bids.json"),
 		SessionDurationSec:    getenvInt("SESSION_DURATION_SECONDS", 600),
 		SessionFailover:       getenvBool("SESSION_FAILOVER", true),
-		DirectPayment:         getenvBool("SESSION_DIRECT_PAYMENT", false),
+		DirectPaymentIgnored:  getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit:   getenvBool("CLOSE_SESSIONS_ON_EXIT", true),
 		DiamondAddress:        getenv("DIAMOND_CONTRACT_ADDRESS", "0x6aBE1d282f72B474E54527D93b979A4f64d3030a"),
 		EthNodeChainID:        int64(getenvInt("ETH_NODE_CHAIN_ID", 8453)),
@@ -94,6 +114,11 @@ func FromEnv() (*Config, error) {
 		UplinkMORAllowanceWei: strings.TrimSpace(os.Getenv("UPLINK_MOR_ALLOWANCE_WEI")),
 		MORAllowanceFile:      strings.TrimSpace(os.Getenv("UPLINK_MOR_ALLOWANCE_FILE")),
 		RouterAuthFile:        os.Getenv("ROUTER_AUTH_FILE"),
+		RouterWalletFile:      strings.TrimSpace(os.Getenv("UPLINK_ROUTER_WALLET_FILE")),
+		Router401ExitSec:      getenvInt("UPLINK_ROUTER_401_EXIT_SECONDS", 120),
+		AllowanceStatusFile:   strings.TrimSpace(os.Getenv("UPLINK_ALLOWANCE_STATUS_FILE")),
+		AllowanceCtlDir:       strings.TrimSpace(os.Getenv("UPLINK_ALLOWANCE_CTL_DIR")),
+		AllowancePollSec:      getenvInt("UPLINK_ALLOWANCE_POLL_SECONDS", 60),
 		EthRPCURL:             firstNonEmpty(os.Getenv("ETH_RPC_URL"), os.Getenv("ETH_NODE_ADDRESS")),
 		WebPublicURL:          strings.TrimRight(os.Getenv("WEB_PUBLIC_URL"), "/"),
 		MasterKeyAdmin:        getenvBool("MASTER_KEY_ADMIN", false),
@@ -101,6 +126,10 @@ func FromEnv() (*Config, error) {
 		DevHTTP:               getenvBool("UPLINK_DEV_HTTP", false),
 		TrustedProxyCIDRs:     splitCSV(os.Getenv("TRUSTED_PROXY_CIDR")),
 		Reset2FA:              getenvBool("UPLINK_RESET_2FA", false),
+	}
+
+	if err := checkAllowancePaths(c); err != nil {
+		return nil, err
 	}
 
 	auth, authSrc, err := loadRouterAuth(c)
@@ -128,6 +157,7 @@ func FromEnv() (*Config, error) {
 	if err := loadMORAllowance(c); err != nil {
 		return nil, err
 	}
+	loadRouterWallet(c)
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
@@ -196,6 +226,51 @@ func loadMORAllowance(c *Config) error {
 		c.MORAllowanceSource = "override"
 	}
 	return nil
+}
+
+// loadRouterWallet reads the init-recorded wallet address, best effort.
+// Only a well-formed 0x + 40 hex address is accepted.
+func loadRouterWallet(c *Config) {
+	path := c.RouterWalletFile
+	if path == "" && c.RouterAuthFile != "" {
+		dir := c.RouterAuthFile
+		if i := strings.LastIndex(dir, "/"); i >= 0 {
+			dir = dir[:i]
+		} else {
+			dir = "."
+		}
+		path = dir + "/router.wallet.json"
+		c.RouterWalletFile = path
+	}
+	if path == "" {
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var meta struct {
+		Address string `json:"address"`
+	}
+	if json.Unmarshal(b, &meta) != nil {
+		return
+	}
+	if IsWalletAddress(meta.Address) {
+		c.RouterWalletAddress = meta.Address
+	}
+}
+
+// IsWalletAddress reports whether s is 0x followed by 40 hex digits.
+func IsWalletAddress(s string) bool {
+	if len(s) != 42 || !strings.HasPrefix(s, "0x") {
+		return false
+	}
+	for _, r := range s[2:] {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
+			return false
+		}
+	}
+	return true
 }
 
 // loadRouterAuth prefers ROUTER_AUTH_FILE, then ROUTER_AUTH env.
@@ -338,4 +413,44 @@ func ValidateAdminPassword(adminPass, cookieContent string) error {
 		}
 	}
 	return nil
+}
+
+// checkAllowancePaths refuses an allowance status file or control dir under
+// DATA_DIR: those are separate volumes shared with the allowance manager and
+// must never overlap Uplink's private data.
+func checkAllowancePaths(c *Config) error {
+	if c.AllowancePollSec <= 0 {
+		c.AllowancePollSec = 60
+	}
+	data, err := filepath.Abs(c.DataDir)
+	if err != nil {
+		return nil
+	}
+	for name, p := range map[string]string{
+		"UPLINK_ALLOWANCE_STATUS_FILE": c.AllowanceStatusFile,
+		"UPLINK_ALLOWANCE_CTL_DIR":     c.AllowanceCtlDir,
+	} {
+		if p == "" {
+			continue
+		}
+		ap, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		if PathWithin(data, ap) {
+			return fmt.Errorf("%s %s must not be under DATA_DIR %s", name, p, c.DataDir)
+		}
+	}
+	return nil
+}
+
+// PathWithin reports whether p is dir itself or inside it (lexically).
+func PathWithin(dir, p string) bool {
+	dir = filepath.Clean(dir)
+	p = filepath.Clean(p)
+	if p == dir {
+		return true
+	}
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
