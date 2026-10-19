@@ -1,0 +1,26 @@
+services:
+  writer:
+    image: alpine:3.20
+    user: "0:0"
+    volumes: [router_auth_bad:/shared]
+    entrypoint: ["/bin/sh","-c"]
+    command:
+      - |
+        echo uplink:bad > /shared/router.auth
+        chown 100:100 /shared/router.auth
+        chmod 0400 /shared/router.auth
+        ls -la /shared/router.auth
+  reader:
+    image: alpine:3.20
+    user: "10001:10001"
+    volumes: [router_auth_bad:/shared:ro]
+    depends_on:
+      writer:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh","-c"]
+    command:
+      - |
+        if cat /shared/router.auth >/dev/null 2>&1; then echo UNEXPECTED_READ; exit 1; fi
+        echo fail-closed-uid100-0400
+volumes:
+  router_auth_bad:

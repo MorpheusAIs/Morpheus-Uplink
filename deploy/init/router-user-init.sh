@@ -69,5 +69,6 @@ curl -fsS -u "${ADMIN_USER}:${ADMIN_PASS}" -X POST \
 
 umask 077
 printf '%s:%s\n' "$USER_NAME" "$PASS" > "$AUTH_OUT"
+chown 10001:10001 "$AUTH_OUT" 2>/dev/null || true
 chmod 0400 "$AUTH_OUT"
-echo "router-user-init: wrote ROUTER_AUTH file (mode 0400); done"
+echo "router-user-init: wrote ROUTER_AUTH file (mode 0400, uid 10001); done"

@@ -1,0 +1,63 @@
+# MUST 3 proof: sidecar writes 0400 as root→chown 10001; uplink-like reader mounts :ro as 10001.
+# Also proves entrypoint-style root copy into a rw data volume.
+services:
+  router-user-init:
+    image: curlimages/curl:8.12.1@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    user: "0:0"
+    volumes:
+      - router_auth:/shared
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "uplink:proof-secret-$$" > /shared/router.auth
+        chown 10001:10001 /shared/router.auth
+        chmod 0400 /shared/router.auth
+        ls -la /shared/router.auth
+        echo "writer-ok"
+
+  # Simulates Uplink uid 10001 reading :ro shared mount (after chown 10001).
+  uplink-ro-reader:
+    image: alpine:3.20
+    user: "10001:10001"
+    volumes:
+      - router_auth:/shared:ro
+    depends_on:
+      router-user-init:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "reader uid=$$(id -u) gid=$$(id -g)"
+        ls -la /shared/router.auth
+        head -c 20 /shared/router.auth
+        echo
+        echo "ro-read-ok"
+
+  # Simulates entrypoint root copy into DATA_DIR then drop to 10001.
+  uplink-entrypoint-copy:
+    image: alpine:3.20
+    user: "0:0"
+    volumes:
+      - router_auth:/shared:ro
+      - uplink_data:/data
+    depends_on:
+      router-user-init:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        # Foreign-owned case simulation: also prove copy works if file were uid 100.
+        cp -f /shared/router.auth /data/router.auth
+        chown 10001:10001 /data/router.auth
+        chmod 0400 /data/router.auth
+        # drop privileges like su-exec
+        su -s /bin/sh 10001 -c 'set -e; ls -la /data/router.auth; head -c 20 /data/router.auth; echo; echo copy-read-ok' || \
+          /bin/su-exec 10001 /bin/sh -c 'ls -la /data/router.auth; head -c 20 /data/router.auth; echo; echo copy-read-ok' || \
+          (apk add --no-cache su-exec >/dev/null && su-exec 10001 /bin/sh -c 'ls -la /data/router.auth; head -c 20 /data/router.auth; echo; echo copy-read-ok')
+
+volumes:
+  router_auth:
+  uplink_data:

@@ -8,6 +8,11 @@
 # Railway / no-sidecar path: when COOKIE_CONTENT and UPLINK_MOR_ALLOWANCE_WEI
 # are set and ROUTER_AUTH_FILE is empty/missing, mint scoped user then drop
 # COOKIE_CONTENT from the environment before exec.
+#
+# Sidecar handoff: router-user-init may write /shared/router.auth as uid 100
+# mode 0400 on a root-owned volume. Uplink runs as uid 10001 and mounts
+# :ro, so chown on the shared path fails. As root, copy into DATA_DIR and
+# point ROUTER_AUTH_FILE at the owned copy before dropping privileges.
 set -e
 if [ -f /etc/uplink/bake.env ]; then
   set -a
@@ -33,8 +38,22 @@ fi
 
 if [ "$(id -u)" = "0" ]; then
   chown -R uplink:uplink "$DATA_DIR" 2>/dev/null || true
+  # Copy shared auth into DATA_DIR so uid 10001 can read it after drop.
+  if [ -n "${ROUTER_AUTH_FILE:-}" ] && [ -f "${ROUTER_AUTH_FILE}" ]; then
+    case "${ROUTER_AUTH_FILE}" in
+      "$DATA_DIR"/*) ;;
+      *)
+        cp -f "${ROUTER_AUTH_FILE}" "$DATA_DIR/router.auth"
+        chown uplink:uplink "$DATA_DIR/router.auth"
+        chmod 0400 "$DATA_DIR/router.auth"
+        export ROUTER_AUTH_FILE="$DATA_DIR/router.auth"
+        echo "uplink-entrypoint: copied ROUTER_AUTH into DATA_DIR (uid 10001)"
+        ;;
+    esac
+  fi
   if [ -n "${ROUTER_AUTH_FILE:-}" ] && [ -f "${ROUTER_AUTH_FILE}" ]; then
     chown uplink:uplink "${ROUTER_AUTH_FILE}" 2>/dev/null || true
+    chmod 0400 "${ROUTER_AUTH_FILE}" 2>/dev/null || true
   fi
   exec su-exec uplink /usr/local/bin/uplink "$@"
 fi

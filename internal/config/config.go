@@ -15,8 +15,8 @@ type Config struct {
 	// Base URL of the proxy-router admin API, e.g. "http://proxy-router:8082".
 	RouterURL string
 	// Basic-auth credentials for the proxy-router ("user:password").
-	// Prefer ROUTER_AUTH (scoped uplink user). COOKIE_CONTENT is a legacy
-	// fallback during migration; production should not give Uplink the admin cookie.
+	// Scoped router user (never "admin"). Loaded from ROUTER_AUTH_FILE, then
+	// ROUTER_AUTH; COOKIE_CONTENT only when UPLINK_DEV_HTTP is set.
 	RouterUser string
 	RouterPass string
 	// Password for the admin API / GUI (username is always "admin").
@@ -93,11 +93,9 @@ func FromEnv() (*Config, error) {
 		Reset2FA:            getenvBool("UPLINK_RESET_2FA", false),
 	}
 
-	auth := getenv("ROUTER_AUTH", os.Getenv("COOKIE_CONTENT"))
-	if auth == "" && c.RouterAuthFile != "" {
-		if b, err := os.ReadFile(c.RouterAuthFile); err == nil {
-			auth = strings.TrimSpace(string(b))
-		}
+	auth, authSrc, err := loadRouterAuth(c)
+	if err != nil {
+		return nil, err
 	}
 	if user, pass, ok := strings.Cut(auth, ":"); ok {
 		c.RouterUser, c.RouterPass = user, pass
@@ -111,13 +109,16 @@ func FromEnv() (*Config, error) {
 		missing = append(missing, "API_KEY_SEED")
 	}
 	if c.RouterUser == "" || c.RouterPass == "" {
-		missing = append(missing, "ROUTER_AUTH or ROUTER_AUTH_FILE (user:password)")
+		missing = append(missing, "ROUTER_AUTH_FILE or ROUTER_AUTH (user:password)")
 	}
 	if err := requirePositiveWei("UPLINK_MOR_ALLOWANCE_WEI", c.UplinkMORAllowanceWei); err != nil {
 		return nil, err
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+	if strings.EqualFold(c.RouterUser, "admin") {
+		return nil, fmt.Errorf("router user %q refused: use scoped ROUTER_AUTH (not admin); source=%s", c.RouterUser, authSrc)
 	}
 	if err := ValidateAdminPassword(c.AdminPassword, os.Getenv("COOKIE_CONTENT")); err != nil {
 		return nil, err
@@ -130,6 +131,30 @@ func FromEnv() (*Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// loadRouterAuth prefers ROUTER_AUTH_FILE, then ROUTER_AUTH env.
+// COOKIE_CONTENT is accepted only when UPLINK_DEV_HTTP is true (local compose).
+func loadRouterAuth(c *Config) (auth, source string, err error) {
+	if c.RouterAuthFile != "" {
+		b, readErr := os.ReadFile(c.RouterAuthFile)
+		if readErr != nil {
+			return "", "ROUTER_AUTH_FILE", fmt.Errorf("ROUTER_AUTH_FILE %s: %w", c.RouterAuthFile, readErr)
+		}
+		auth = strings.TrimSpace(string(b))
+		if auth != "" {
+			return auth, "ROUTER_AUTH_FILE", nil
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ROUTER_AUTH")); v != "" {
+		return v, "ROUTER_AUTH", nil
+	}
+	if c.DevHTTP {
+		if v := strings.TrimSpace(os.Getenv("COOKIE_CONTENT")); v != "" {
+			return v, "COOKIE_CONTENT", nil
+		}
+	}
+	return "", "", nil
 }
 
 func splitCSV(s string) []string {
