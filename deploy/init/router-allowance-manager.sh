@@ -123,7 +123,10 @@ while :; do
 
   marker=""
   if [ -f "$MGR_DIR/mode" ] && [ ! -L "$MGR_DIR/mode" ]; then
-    marker=$(head -c 16 "$MGR_DIR/mode" 2>/dev/null || true)
+    # Byte-exact: the trailing x stops $(...) from stripping newlines, so
+    # "balance\n" or "balance\r" never matches.
+    marker=$(head -c 16 "$MGR_DIR/mode" 2>/dev/null; printf x)
+    marker=${marker%x}
   fi
 
   if [ -n "$GATE" ]; then

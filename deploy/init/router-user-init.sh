@@ -218,7 +218,7 @@ write_ready_marker() {
   echo "router-user-init: wrote ready marker $READY_FILE (generation $_gen)"
 }
 
-# Scoped perms (pinned; CI check-scoped-perms.sh). Never any user/allowance
+# Scoped perms (pinned; CI check-allowance-manager-policy.sh). Never any user/allowance
 # administration or transfer perm.
 PERMS='["chat","embeddings","open_session","close_session","get_sessions","get_wallet","get_balance","get_supply","get_budget","get_stakes_on_hold","withdraw_user_stakes"]'
 
