@@ -49,7 +49,7 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 
 run_case() {
-  local name="$1" mode="$2" mor="$3" override="$4" want_wei="$5" want_source="$6"
+  local name="$1" mode="$2" mor="$3" override="$4" want_wei="$5" want_source="$6" want_warn="${7:-}"
   echo "== case $name =="
   kill ${MOCK_PID:-} 2>/dev/null || true
   MOCK_MODE="$mode" MOCK_MOR="$mor" python3 "$WORKDIR/mock_router.py" "$PORT" &
@@ -66,9 +66,11 @@ run_case() {
     sh "$SCRIPT_PATH"
   test -f "$out/router.auth"
   test -f "$out/router.mor-allowance.json"
-  python3 - "$out/router.mor-allowance.json" "$want_wei" "$want_source" <<'PY'
+  python3 - "$out/router.mor-allowance.json" "$want_wei" "$want_source" "$want_warn" <<'PY'
 import json, sys
 meta = json.load(open(sys.argv[1]))
+if sys.argv[4]:
+    assert sys.argv[4] in meta.get("warning", ""), meta
 assert meta["wei"] == sys.argv[2], meta
 assert meta["source"] == sys.argv[3], meta
 if meta["source"] == "zero":
@@ -83,4 +85,11 @@ run_case balance balance 9000000000000000000 "" 9000000000000000000 balance
 run_case override balance 9000000000000000000 1000000000000000000 1000000000000000000 override
 run_case zero balance 0 "" 0 zero
 run_case failread fail 0 "" 0 zero
+# Explicit 0 must cap at 0, never fall through to wallet balance.
+run_case zero_override balance 9000000000000000000 "0" 0 zero "UPLINK_MOR_ALLOWANCE_WEI=0"
+# Explicit 0 must not read balance (read failure is irrelevant).
+run_case zero_override_noread fail 0 "0" 0 zero "UPLINK_MOR_ALLOWANCE_WEI=0"
+# Leading zeros normalized; still explicit override.
+run_case padded_override balance 9000000000000000000 "000123" 123 override
+run_case padded_zero balance 9000000000000000000 "000" 0 zero
 echo "OK: router-user-init integration cases"

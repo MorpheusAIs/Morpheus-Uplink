@@ -926,3 +926,53 @@ func TestAdminSecuritySurfacesAllowanceWarning(t *testing.T) {
 		t.Fatalf("expected allowance alert, got %+v", body.Alerts)
 	}
 }
+
+// Allowance wei + source are always surfaced on /admin/status (not only on warning).
+func TestAdminStatusAlwaysIncludesMORAllowance(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	cfg.MORAllowanceWei = "5000000000000000000"
+	cfg.MORAllowanceSource = "balance"
+	cfg.MORAllowanceWarning = ""
+	ac := adminClient(t, ts, cfg)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/status", nil)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var body struct {
+		MORAllowance struct {
+			Wei     string `json:"wei"`
+			Source  string `json:"source"`
+			Warning string `json:"warning"`
+		} `json:"morAllowance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.MORAllowance.Wei != "5000000000000000000" || body.MORAllowance.Source != "balance" {
+		t.Fatalf("morAllowance = %+v", body.MORAllowance)
+	}
+}
+
+func TestBootAuditRecordsMORAllowance(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	ac := adminClient(t, ts, cfg)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/audit", nil)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("audit: %d %s", resp.StatusCode, b)
+	}
+	if !strings.Contains(string(b), `"kind":"allowance"`) || !strings.Contains(string(b), "MOR allowance wei=") {
+		t.Fatalf("missing boot allowance audit: %s", b)
+	}
+}

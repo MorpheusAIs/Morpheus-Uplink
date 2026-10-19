@@ -1,7 +1,9 @@
 #!/bin/sh
 # Create scoped router user "uplink" with MOR allowance. Idempotent.
 # Writes uplink:<password> to ROUTER_AUTH_OUT (mode 0400). Never logs the password.
-# Allowance: UPLINK_MOR_ALLOWANCE_WEI override if >0, else wallet balance at boot.
+# Allowance: UPLINK_MOR_ALLOWANCE_WEI set (all digits, incl. 0) is an explicit
+# cap; unset/empty = wallet MOR balance at boot. 0 means allowance 0
+# (source=zero, warning) and the balance is NOT read.
 # Writes allowance metadata beside the auth file (mode 0444, uid 10001).
 set -eu
 
@@ -37,23 +39,33 @@ if [ "$i" -ge 90 ]; then
   exit 1
 fi
 
-# Resolve ALLOWANCE_WEI: manual override (>0) wins; else wallet balance; else "0".
+# Resolve ALLOWANCE_WEI (matches Go config):
+#   set + all digits -> explicit cap (leading zeros normalized; 0 = source zero)
+#   unset / empty    -> wallet MOR balance at boot (else 0 + warning)
 ALLOWANCE_WEI=""
 ALLOWANCE_SOURCE=""
 ALLOWANCE_WARNING=""
 
 OVERRIDE="${UPLINK_MOR_ALLOWANCE_WEI:-}"
 OVERRIDE=$(printf '%s' "$OVERRIDE" | tr -d '[:space:]')
-if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "0" ]; then
+if [ -n "$OVERRIDE" ]; then
   case "$OVERRIDE" in
     *[!0-9]*)
       echo "router-user-init: UPLINK_MOR_ALLOWANCE_WEI must be a non-negative integer (wei)" >&2
       exit 1
       ;;
   esac
+  OVERRIDE=$(printf '%s' "$OVERRIDE" | sed 's/^0*//')
+  [ -z "$OVERRIDE" ] && OVERRIDE=0
   ALLOWANCE_WEI="$OVERRIDE"
-  ALLOWANCE_SOURCE="override"
-  echo "router-user-init: using UPLINK_MOR_ALLOWANCE_WEI override"
+  if [ "$OVERRIDE" = "0" ]; then
+    ALLOWANCE_SOURCE="zero"
+    ALLOWANCE_WARNING="MOR allowance is zero (UPLINK_MOR_ALLOWANCE_WEI=0); sessions will not open until the cap is raised and Uplink is restarted."
+    echo "router-user-init: WARNING: UPLINK_MOR_ALLOWANCE_WEI=0; creating user with allowance 0 (balance not read)" >&2
+  else
+    ALLOWANCE_SOURCE="override"
+    echo "router-user-init: using UPLINK_MOR_ALLOWANCE_WEI override"
+  fi
 else
   BAL_JSON=""
   if BAL_JSON=$(curl -fsS -u "${ADMIN_USER}:${ADMIN_PASS}" "$ROUTER_URL/blockchain/balance" 2>/dev/null); then
@@ -94,7 +106,7 @@ write_allowance_file() {
     "$ALLOWANCE_WEI" "$ALLOWANCE_SOURCE" "$(json_escape "$ALLOWANCE_WARNING")" > "$ALLOWANCE_FILE"
   chown 10001:10001 "$ALLOWANCE_FILE" 2>/dev/null || true
   chmod 0444 "$ALLOWANCE_FILE"
-  echo "router-user-init: wrote allowance file $ALLOWANCE_FILE (source=$ALLOWANCE_SOURCE)"
+  echo "router-user-init: wrote allowance file $ALLOWANCE_FILE (wei=$ALLOWANCE_WEI source=$ALLOWANCE_SOURCE)"
 }
 
 PASS=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Fail if a compose file publishes host ports targeting 8082 or 3333 unless
-# host_ip is loopback (127.0.0.1 or ::1). Uses rendered JSON, not YAML text.
+# host_ip is loopback (127.0.0.1 or ::1). Also fail if a router or uplink
+# service (name contains "router" or "uplink", or image is proxy-router /
+# uplink) uses network_mode: host, which bypasses port publishing entirely
+# and exposes 8082/3333 on every host interface. Uses rendered JSON, not
+# YAML text.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -29,7 +33,18 @@ import json, sys
 path = sys.argv[1]
 data = json.load(sys.stdin)
 bad = []
+
+def is_router_or_uplink(sname, svc):
+    n = (sname or "").lower()
+    img = (svc.get("image") or "").lower()
+    if "router" in n or "uplink" in n:
+        return True
+    return "proxy-router" in img or "/uplink" in img
+
 for sname, svc in (data.get("services") or {}).items():
+    nm = (svc.get("network_mode") or "").strip().lower()
+    if nm == "host" and is_router_or_uplink(sname, svc):
+        bad.append("%s: network_mode=host (router/uplink must not share host network)" % sname)
     for p in svc.get("ports") or []:
         target = p.get("target")
         try:
@@ -86,7 +101,7 @@ for f in "${FILES[@]}"; do
   fi
 done
 if [ "$bad" -ne 0 ]; then
-  echo "Router ports 8082/3333 must not be published (except loopback 127.0.0.1 / ::1)" >&2
+  echo "Router ports 8082/3333 must not be published (except loopback 127.0.0.1 / ::1); router/uplink must not use network_mode: host" >&2
   exit 1
 fi
 echo "OK: no public 8082/3333 publishes"

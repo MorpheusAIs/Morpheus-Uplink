@@ -35,6 +35,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// Effective router MOR allowance (wei + source only; never a secret).
+	slog.Info("mor allowance",
+		"wei", cfg.MORAllowanceWei,
+		"source", cfg.MORAllowanceSource,
+		"file", cfg.MORAllowanceFile)
+	if cfg.MORAllowanceWarning != "" {
+		slog.Warn("mor allowance warning", "source", cfg.MORAllowanceSource, "message", cfg.MORAllowanceWarning)
+	}
 
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {

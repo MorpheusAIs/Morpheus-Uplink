@@ -159,6 +159,7 @@ jobs:
         run: |
           bash scripts/check-router-ports.sh
           bash scripts/check-router-ports.sh scripts/testdata/ports-bad.yml
+          bash scripts/check-router-ports.sh scripts/testdata/netmode-host-router.yml scripts/testdata/netmode-host-uplink.yml
           bash scripts/check-router-ports.sh --ok scripts/testdata/ports-ok.yml
           echo "OK: port guard JSON fixtures"
       - name: Router image digest must stay pinned

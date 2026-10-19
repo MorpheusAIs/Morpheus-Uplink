@@ -875,6 +875,7 @@
         <div class="sys-line" id="stats"></div>
         <div class="mor-grid" id="morBuckets"></div>
         <p class="note" id="morNote" style="margin-top:8px"></p>
+        <p class="note" id="morAllowanceLine" style="margin-top:4px"></p>
         <div class="callout fund-callout">
           <strong>Need more MOR?</strong>
           <p class="note" style="margin:4px 0 0">
@@ -957,7 +958,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           Forward container logs to your log stack (json-file / journald / SIEM);
           Uplink does not dump secrets at boot.
         </p>
-        <div id="allowanceWarning" class="note" style="display:none;border:1px solid var(--warn, #c90);padding:10px;border-radius:8px;margin-bottom:10px"></div>
+        <div id="allowanceWarning" class="note" style="border:1px solid var(--line, #444);padding:10px;border-radius:8px;margin-bottom:10px">Router MOR allowance: loading…</div>
         <div id="securityAlerts" class="note">Loading…</div>
         <div class="row" style="margin-top:12px">
           <button type="button" class="ghost" onclick="refreshSecurity()">Refresh</button>
@@ -1368,14 +1369,17 @@ async function refreshSecurity() {
         const data = await res.json();
         const aw = document.getElementById('allowanceWarning');
         if (aw) {
-          const warn = (data.morAllowance && data.morAllowance.warning) || '';
-          if (warn) {
-            aw.style.display = 'block';
-            aw.textContent = warn + ' (source: ' + ((data.morAllowance && data.morAllowance.source) || 'unknown') + '; wei: ' + ((data.morAllowance && data.morAllowance.wei) || '0') + ')';
-          } else {
-            aw.style.display = 'none';
-            aw.textContent = '';
-          }
+          // Always show effective allowance + source (not only on warning).
+          const ma = data.morAllowance || {};
+          const warn = ma.warning || '';
+          const wei = (ma.wei === undefined || ma.wei === null || ma.wei === '') ? '' : String(ma.wei);
+          const src = ma.source || 'unknown';
+          aw.style.display = 'block';
+          aw.style.borderColor = warn ? 'var(--warn, #c90)' : '';
+          aw.textContent = 'Router MOR allowance: ' + (wei ? wei + ' wei' : 'unknown')
+            + ' (source: ' + src + ')'
+            + (src === 'balance' ? ' — full wallet MOR balance at boot; set UPLINK_MOR_ALLOWANCE_WEI to cap exposure.' : '')
+            + (warn ? ' — ' + warn : '');
         }
         const alerts = data.alerts || [];
         if (!alerts.length) {
@@ -1602,6 +1606,17 @@ async function doRefresh() {
       holdNote = 'Could not refresh on-hold / to-claim balances right now.';
     }
     document.getElementById('morNote').textContent = holdNote;
+    const allowEl = document.getElementById('morAllowanceLine');
+    if (allowEl) {
+      const ma = st.morAllowance || {};
+      const src = ma.source || 'unknown';
+      const hasWei = !(ma.wei === undefined || ma.wei === null || ma.wei === '');
+      allowEl.textContent = 'Router allowance: '
+        + (hasWei ? fmtMor(ma.wei) + ' MOR (' + String(ma.wei) + ' wei)' : 'unknown')
+        + ' · source: ' + src
+        + (src === 'balance' ? ' (full wallet balance at boot; set a cap to limit exposure)' : '')
+        + (ma.warning ? ' · ' + ma.warning : '');
+    }
 
     const claimVal = mor.onHoldClaimableWei != null ? fmtMor(mor.onHoldClaimableWei) + ' MOR' : '—';
     const lockedVal = lockedWei != null ? fmtMor(lockedWei) + ' MOR' : '—';

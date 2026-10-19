@@ -44,15 +44,16 @@ type Config struct {
 	Housekeeping   bool
 	// Retention for admin usage-history prune (POST /admin/disk/prune-usage).
 	UsagePruneDays int
-	// Optional MOR agent allowance override (wei). Empty = use init-time
-	// balance / allowance file. When set must be a non-negative integer (0 OK).
+	// Optional MOR agent allowance cap (wei). Unset/empty = init uses the
+	// wallet MOR balance at boot. When set must be digits only; 0 is an
+	// explicit zero cap (never "use balance"). Leading zeros are normalized.
 	UplinkMORAllowanceWei string
 	// Path to allowance metadata JSON written by router-user-init
 	// (wei, source, warning). Defaults beside ROUTER_AUTH_FILE.
 	MORAllowanceFile string
 	// Effective allowance from file (or env override when no file).
 	MORAllowanceWei     string
-	MORAllowanceSource  string // balance | override | zero | ""
+	MORAllowanceSource  string // balance | override | zero | unknown
 	MORAllowanceWarning string
 	// Optional path to a file containing "user:password" for ROUTER_AUTH
 	// (written by the init sidecar, mode 0400).
@@ -123,6 +124,7 @@ func FromEnv() (*Config, error) {
 	if err := requireNonNegativeWei("UPLINK_MOR_ALLOWANCE_WEI", c.UplinkMORAllowanceWei); err != nil {
 		return nil, err
 	}
+	c.UplinkMORAllowanceWei = normalizeWei(c.UplinkMORAllowanceWei)
 	if err := loadMORAllowance(c); err != nil {
 		return nil, err
 	}
@@ -171,6 +173,9 @@ func loadMORAllowance(c *Config) error {
 			c.MORAllowanceWei = strings.TrimSpace(meta.Wei)
 			c.MORAllowanceSource = strings.TrimSpace(meta.Source)
 			c.MORAllowanceWarning = strings.TrimSpace(meta.Warning)
+			if c.MORAllowanceSource == "" {
+				c.MORAllowanceSource = "unknown"
+			}
 			return nil
 		}
 		if !os.IsNotExist(err) {
@@ -178,14 +183,17 @@ func loadMORAllowance(c *Config) error {
 		}
 	}
 	// No file: surface env override (including "0") for status/Security.
-	if c.UplinkMORAllowanceWei != "" {
-		c.MORAllowanceWei = c.UplinkMORAllowanceWei
-		if c.UplinkMORAllowanceWei == "0" {
-			c.MORAllowanceSource = "zero"
-			c.MORAllowanceWarning = "MOR allowance is zero; sessions will not open until funded and Uplink is restarted."
-		} else {
-			c.MORAllowanceSource = "override"
-		}
+	// Mirrors router-user-init.sh: set (all digits) = explicit cap, 0 = zero.
+	if c.UplinkMORAllowanceWei == "" {
+		c.MORAllowanceSource = "unknown"
+		return nil
+	}
+	c.MORAllowanceWei = c.UplinkMORAllowanceWei
+	if c.UplinkMORAllowanceWei == "0" {
+		c.MORAllowanceSource = "zero"
+		c.MORAllowanceWarning = "MOR allowance is zero (UPLINK_MOR_ALLOWANCE_WEI=0); sessions will not open until the cap is raised and Uplink is restarted."
+	} else {
+		c.MORAllowanceSource = "override"
 	}
 	return nil
 }
@@ -235,14 +243,30 @@ func requireNonNegativeWei(name, raw string) error {
 	if raw == "" {
 		return nil
 	}
-	n := new(big.Int)
-	if _, ok := n.SetString(raw, 10); !ok {
-		return fmt.Errorf("%s must be a base-10 integer (wei)", name)
-	}
-	if n.Sign() < 0 {
+	if strings.HasPrefix(raw, "-") {
 		return fmt.Errorf("%s must be >= 0 (got %s)", name, raw)
 	}
+	// Digits only, same rule as router-user-init.sh (no sign, no separators).
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("%s must be a base-10 integer (wei)", name)
+		}
+	}
 	return nil
+}
+
+// normalizeWei strips leading zeros from a validated digit string ("000" -> "0").
+// Empty stays empty (= unset: init uses wallet balance).
+func normalizeWei(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	n, ok := new(big.Int).SetString(raw, 10)
+	if !ok {
+		return raw
+	}
+	return n.String()
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -62,6 +62,9 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 	}
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()
+	// Boot audit: effective router MOR allowance (wei + source; no secrets).
+	s.audit.RecordFull("allowance", "boot", "", cfg.MORAllowanceSource,
+		"MOR allowance wei="+allowanceWeiOrUnknown(cfg.MORAllowanceWei)+" source="+cfg.MORAllowanceSource)
 	return s
 }
 
@@ -166,4 +169,11 @@ func writeOpenAIError(w http.ResponseWriter, status int, message string) {
 			"type":    "invalid_request_error",
 		},
 	})
+}
+
+func allowanceWeiOrUnknown(wei string) string {
+	if wei == "" {
+		return "unknown"
+	}
+	return wei
 }

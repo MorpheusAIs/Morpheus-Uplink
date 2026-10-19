@@ -5,9 +5,12 @@
 # Optional bake.env (SecretVM configs mount) applies non-secret defaults
 # without putting them on environment: (SecretVM scrapes every key).
 #
-# Railway / no-sidecar path: when COOKIE_CONTENT and UPLINK_MOR_ALLOWANCE_WEI
-# are set and ROUTER_AUTH_FILE is empty/missing, mint scoped user then drop
-# COOKIE_CONTENT from the environment before exec.
+# Railway / no-sidecar path: when COOKIE_CONTENT is set and ROUTER_AUTH_FILE
+# is empty/missing, mint scoped user then drop COOKIE_CONTENT from the
+# environment before exec. UPLINK_MOR_ALLOWANCE_WEI is an optional cap:
+# unset/empty = wallet MOR balance at boot; set (incl. 0) = explicit cap.
+# Allowance metadata is written beside the auth file
+# (router.auth -> router.mor-allowance.json) unless UPLINK_MOR_ALLOWANCE_FILE.
 #
 # Sidecar handoff: router-user-init may write /shared/router.auth as uid 100
 # mode 0400 on a root-owned volume. Uplink runs as uid 10001 and mounts
@@ -24,10 +27,15 @@ DATA_DIR="${DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
 AUTH_FILE="${ROUTER_AUTH_FILE:-}"
-if [ -n "${COOKIE_CONTENT:-}" ] && [ -n "${UPLINK_MOR_ALLOWANCE_WEI:-}" ]; then
+if [ -n "${COOKIE_CONTENT:-}" ]; then
   if [ -z "$AUTH_FILE" ] || [ ! -s "$AUTH_FILE" ]; then
     AUTH_FILE="${AUTH_FILE:-$DATA_DIR/router.auth}"
     export ROUTER_AUTH_OUT="$AUTH_FILE"
+    case "$AUTH_FILE" in
+      *.auth) ALLOW_DEFAULT="${AUTH_FILE%.auth}.mor-allowance.json" ;;
+      *)      ALLOW_DEFAULT="${AUTH_FILE}.mor-allowance.json" ;;
+    esac
+    export UPLINK_MOR_ALLOWANCE_FILE="${UPLINK_MOR_ALLOWANCE_FILE:-$ALLOW_DEFAULT}"
     export ROUTER_URL="${ROUTER_URL:-http://proxy-router:8082}"
     echo "uplink-entrypoint: minting scoped router user (no sidecar path)"
     /usr/local/bin/router-user-init.sh

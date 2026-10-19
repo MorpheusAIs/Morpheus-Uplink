@@ -148,6 +148,45 @@ func TestAllowanceInvalid(t *testing.T) {
 	if _, err := FromEnv(); err == nil {
 		t.Fatal("expected error for negative wei")
 	}
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "+5")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected error for signed wei (init rejects non-digits)")
+	}
+}
+
+// Explicit 0 (any zero padding) is a zero cap, never "use balance".
+func TestAllowanceZeroOverrideNormalized(t *testing.T) {
+	setRequired(t)
+	t.Setenv("ROUTER_AUTH", "uplink:secret")
+	for _, raw := range []string{"0", "000", " 0 "} {
+		t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", raw)
+		c, err := FromEnv()
+		if err != nil {
+			t.Fatalf("%q: %v", raw, err)
+		}
+		if c.UplinkMORAllowanceWei != "0" || c.MORAllowanceWei != "0" || c.MORAllowanceSource != "zero" {
+			t.Fatalf("%q: override=%q wei=%q source=%q", raw, c.UplinkMORAllowanceWei, c.MORAllowanceWei, c.MORAllowanceSource)
+		}
+		if c.MORAllowanceWarning == "" {
+			t.Fatalf("%q: expected zero warning", raw)
+		}
+	}
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "00123")
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MORAllowanceWei != "123" || c.MORAllowanceSource != "override" {
+		t.Fatalf("padded: wei=%q source=%q", c.MORAllowanceWei, c.MORAllowanceSource)
+	}
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "")
+	c, err = FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MORAllowanceSource != "unknown" {
+		t.Fatalf("empty env, no file: source=%q want unknown", c.MORAllowanceSource)
+	}
 }
 
 func TestAllowanceFileLoad(t *testing.T) {

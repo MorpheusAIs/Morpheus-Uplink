@@ -53,6 +53,33 @@ Keep ownership separate:
 
 No wallet material in logs or (future) journals.
 
+## MOR allowance (optional cap)
+
+Uplink talks to the router as a scoped `uplink` user (never the admin
+cookie). That user is recreated at each boot with a MOR **allowance**: the
+most MOR it can stake for sessions before a restart.
+
+- `UPLINK_MOR_ALLOWANCE_WEI` **empty / unset** (default): allowance = the
+  **full wallet MOR balance** read at boot. Convenient, but it is the
+  maximum exposure if Uplink is compromised.
+- **Set** (digits only, wei): explicit cap. Setting a cap **limits
+  exposure**; e.g. `1000000000000000000000` = 1000 MOR. Leading zeros are
+  ignored.
+- **`0`**: explicit zero cap. The balance is not read; no sessions open
+  until you raise the cap and restart.
+- If the balance read fails or the wallet holds 0 MOR, the allowance is 0
+  with a warning (restart after funding).
+
+The effective allowance (wei + source: `balance`, `override`, `zero`, or
+`unknown`) is shown on the GUI Status and Security tabs, returned by
+`/admin/status` (`morAllowance`), and logged once at boot
+(`mor allowance` line + `allowance` audit event; no secrets).
+
+On Railway there is no init sidecar: the uplink entrypoint mints the
+scoped user whenever `COOKIE_CONTENT` is set (cap optional), writes
+`router.auth` + `router.mor-allowance.json` under `DATA_DIR`, then drops
+`COOKIE_CONTENT` before exec.
+
 ## H3 - single replica (wallet-bearing proxy-router)
 
 This overlay **requires a single replica** for the wallet-bearing
