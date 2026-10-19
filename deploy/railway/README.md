@@ -32,7 +32,7 @@ See `docker-compose.yml` and `railway.toml` (non-secret knobs only).
 ## H4 - operator fillables (Railway Secrets / vars)
 
 Never put these in `railway.toml`, image labels, build args, or committed
-compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
+compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`

@@ -1,7 +1,7 @@
 # SecretVM overlay
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
-certs; Encrypted Secrets supply only the six operator fillables (wallet /
+certs; Encrypted Secrets supply only the operator fillables (wallet /
 RPC / cookie / admin / seed / WEB_PUBLIC_URL). Form stays six; tunables
 change via compose/code, not Encrypted Secrets:
 

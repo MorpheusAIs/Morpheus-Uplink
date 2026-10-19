@@ -8,7 +8,7 @@ https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## Var ownership
 
-Form/`.env` stays the six operator fillables (+ `PUBLIC_HOST` for Caddy).
+Form/`.env` stays the operator fillables (+ `PUBLIC_HOST` for Caddy).
 Tunables change via compose/code:
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
