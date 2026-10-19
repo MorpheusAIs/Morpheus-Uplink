@@ -155,9 +155,9 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 | Var | Used by | Notes |
 |-----|---------|--------|
-| `WALLET_PRIVATE_KEY` | Router (+ Uplink reclaim) | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. |
+| `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
 | `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
-| `COOKIE_CONTENT` | Router + Uplink | `user:password` Basic auth for the router API. Same value in both containers. |
+| `COOKIE_CONTENT` | Router + router-user-init | Router **admin** `user:password`. Only proxy-router and the init step see it; init mints a scoped `uplink` router user and Uplink uses that (never the admin cookie). |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
 | `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
@@ -175,11 +175,11 @@ most MOR it can stake for sessions before a restart.
 - `UPLINK_MOR_ALLOWANCE_WEI` **empty / unset** (default): allowance = the
   **full wallet MOR balance** read at boot. Convenient, but it is the
   maximum exposure if Uplink is compromised.
-- **Set** (digits only, wei): explicit cap. Setting a cap **limits
-  exposure**; e.g. `1000000000000000000000` = 1000 MOR. Leading zeros are
-  ignored.
-- **`0`**: explicit zero cap. The balance is not read; no sessions open
-  until you raise the cap and restart.
+- **Set** (digits only, wei; no internal spaces): explicit cap. Setting a
+  cap **limits exposure**; e.g. `1000000000000000000000` = 1000 MOR.
+  Leading zeros are ignored.
+- **`0`**: explicit zero cap (fail-closed). The balance is not read; no
+  sessions open until you raise the cap and restart.
 - If the balance read fails or the wallet holds 0 MOR, the allowance is 0
   with a warning (restart after funding).
 

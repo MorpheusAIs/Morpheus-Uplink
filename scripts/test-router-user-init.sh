@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODE = os.environ.get("MOCK_MODE", "balance")
 MOR = os.environ.get("MOCK_MOR", "9000000000000000000")
+BODY = os.environ.get("MOCK_BODY", "")
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -30,7 +31,7 @@ class H(BaseHTTPRequestHandler):
                 self.send_response(500); self.end_headers(); return
             if not self._auth_ok():
                 self.send_response(401); self.end_headers(); return
-            body = json.dumps({"mor": MOR, "eth": "0"}).encode()
+            body = (BODY or json.dumps({"mor": MOR, "eth": "0"})).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -52,7 +53,7 @@ run_case() {
   local name="$1" mode="$2" mor="$3" override="$4" want_wei="$5" want_source="$6" want_warn="${7:-}"
   echo "== case $name =="
   kill ${MOCK_PID:-} 2>/dev/null || true
-  MOCK_MODE="$mode" MOCK_MOR="$mor" python3 "$WORKDIR/mock_router.py" "$PORT" &
+  MOCK_MODE="$mode" MOCK_MOR="$mor" MOCK_BODY="${MOCK_BODY:-}" python3 "$WORKDIR/mock_router.py" "$PORT" &
   MOCK_PID=$!
   sleep 0.3
   local out="$WORKDIR/$name"
@@ -92,4 +93,47 @@ run_case zero_override_noread fail 0 "0" 0 zero "UPLINK_MOR_ALLOWANCE_WEI=0"
 # Leading zeros normalized; still explicit override.
 run_case padded_override balance 9000000000000000000 "000123" 123 override
 run_case padded_zero balance 9000000000000000000 "000" 0 zero
+# Surrounding whitespace trimmed; still an override.
+run_case trimmed_override balance 9000000000000000000 "  123 " 123 override
+# Balance parsing: bare integer, pretty-printed multi-line, leading zeros.
+MOCK_BODY='{"eth":"0","mor":7000}' run_case bal_number balance 0 "" 7000 balance
+MOCK_BODY=$'{\n  "eth": "1",\n  "mor": "0005000"\n}' run_case bal_multiline balance 0 "" 5000 balance
+# Ambiguous / malformed balance must fail closed to 0 (never a wrong cap).
+MOCK_BODY='{"mor":"5","nested":{"mor":"9"}}' run_case bal_duplicate balance 0 "" 0 zero "unparseable"
+MOCK_BODY='{"mor":1.5e18,"eth":"0"}' run_case bal_float balance 0 "" 0 zero "unparseable"
+MOCK_BODY='{"mor":"-5"}' run_case bal_negative balance 0 "" 0 zero "unparseable"
+MOCK_BODY='{"amor":"5","eth":"0"}' run_case bal_missing balance 0 "" 0 zero "unparseable"
+
+# Invalid overrides must exit non-zero and write nothing.
+run_fail_case() {
+  local name="$1" override="$2"
+  echo "== fail case $name =="
+  kill ${MOCK_PID:-} 2>/dev/null || true
+  MOCK_MODE=balance python3 "$WORKDIR/mock_router.py" "$PORT" &
+  MOCK_PID=$!
+  sleep 0.3
+  local out="$WORKDIR/$name"
+  mkdir -p "$out"
+  if env -i PATH="$PATH" HOME="$HOME" \
+    ROUTER_URL="http://127.0.0.1:$PORT" \
+    ROUTER_AUTH_OUT="$out/router.auth" \
+    UPLINK_MOR_ALLOWANCE_FILE="$out/router.mor-allowance.json" \
+    COOKIE_CONTENT="admin:testpass" \
+    UPLINK_MOR_ALLOWANCE_WEI="$override" \
+    sh "$SCRIPT_PATH"; then
+    echo "expected failure for override=$override" >&2
+    exit 1
+  fi
+  test ! -e "$out/router.auth"
+  test ! -e "$out/router.mor-allowance.json"
+  echo "OK rejected override=$override"
+  kill "$MOCK_PID" 2>/dev/null || true
+  MOCK_PID=
+}
+run_fail_case internal_space "1 000"
+run_fail_case internal_tab $'12\t34'
+run_fail_case alpha "abc"
+run_fail_case exponent "1e18"
+run_fail_case negative "-5"
+run_fail_case hex "0x10"
 echo "OK: router-user-init integration cases"

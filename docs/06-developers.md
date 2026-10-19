@@ -16,8 +16,10 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
-GUI login is Basic auth (`admin` + `ADMIN_PASSWORD`). The Master key exists so
-automation can hit admin APIs without that password.
+GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
+code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
+is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
+token only when `MASTER_KEY_ADMIN=true` (default off).
 
 ### Soft revoke (tombstone)
 
@@ -104,9 +106,9 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 
 | Var | Required | Purpose |
 |---|---|---|
-| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet (router + Uplink reclaim) |
+| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet, **router only** (Uplink holds no key; reclaim runs via the router API) |
 | `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
-| `COOKIE_CONTENT` | yes | Router basic auth `user:pass` (`ROUTER_AUTH` fallback locally) |
+| `COOKIE_CONTENT` | yes | Router **admin** `user:pass`; proxy-router + router-user-init only. Uplink uses the scoped user from `ROUTER_AUTH_FILE` / `ROUTER_AUTH` (`COOKIE_CONTENT` only with `UPLINK_DEV_HTTP`) |
 | `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
 | `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
 | `WEB_PUBLIC_URL` | yes (deploy) | Public HTTPS origin |
@@ -119,7 +121,7 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | `true` | Provider failover at open |
-| `HOUSEKEEPING` | on when wallet key present | Post-midnight stake reclaim |
+| `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |

@@ -29,6 +29,14 @@ type Session struct {
 type SessionStore struct {
 	mu     sync.Mutex
 	byHash map[string]*Session // hash -> session
+	now    func() time.Time    // injectable clock (tests); nil = time.Now
+}
+
+func (s *SessionStore) clock() time.Time {
+	if s.now != nil {
+		return s.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func NewSessionStore() *SessionStore {
@@ -42,7 +50,7 @@ func (s *SessionStore) Create(ip string) (rawToken string, err error) {
 	}
 	sum := sha256.Sum256(raw)
 	hash := hex.EncodeToString(sum[:])
-	now := time.Now().UTC()
+	now := s.clock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Evict oldest if at cap.
@@ -76,7 +84,7 @@ func (s *SessionStore) Lookup(rawToken string, extendIdle bool) (*Session, bool)
 	if sess == nil {
 		return nil, false
 	}
-	now := time.Now().UTC()
+	now := s.clock()
 	if now.Sub(sess.CreatedAt) > SessionAbsolute {
 		delete(s.byHash, hash)
 		return nil, false

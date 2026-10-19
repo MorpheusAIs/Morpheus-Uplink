@@ -51,7 +51,9 @@ services:
     # Same Uplink image (digest-pinned at release). Script is baked at
     # /usr/local/bin/router-user-init.sh - single-file paste deploys work.
     image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
-    # Root so named-volume /shared is writable and file can be chowned to 10001.
+    # Root so named-volume /shared is writable. Files stay root-owned (0400
+    # auth, 0444 allowance); the uplink entrypoint (root, no DAC_OVERRIDE)
+    # reads them as owner and copies them into DATA_DIR as the uplink user.
     user: "0:0"
     restart: "no"
     logging: *default-logging

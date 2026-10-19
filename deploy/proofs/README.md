@@ -13,4 +13,15 @@ docker compose -f auth-handoff-proof.yml run --rm --no-deps uplink-ro-reader
 # expect: ro-read-ok
 ```
 
-Production fix: init runs as `user: "0:0"`, `chown 10001:10001`, and Uplink entrypoint copies into `DATA_DIR` before `su-exec`.
+Production fix (supersedes the `chown 10001` variant shown in
+`auth-handoff-proof.yml`): the Uplink container runs `cap_drop: ALL` with only
+CHOWN/SETUID/SETGID, so its root entrypoint has no DAC_OVERRIDE and cannot
+read a 0400 file owned by 10001. Init (`user: "0:0"`) therefore leaves
+`/shared/router.auth` **root-owned 0400** (allowance JSON root 0444). The
+entrypoint reads it as owner and streams it into `DATA_DIR` via `su-exec
+uplink`, so the copy is uplink-owned 0400, then points `ROUTER_AUTH_FILE` at
+the copy before dropping privileges.
+
+CI regression: `scripts/e2e-secretvm-handoff.sh` runs the real SecretVM
+compose (caps, volumes, `:ro` handoff) with a mock router and asserts Uplink
+reaches healthy on first and second boot.

@@ -65,6 +65,8 @@ COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
+# Optional: leave empty for full wallet MOR balance; digits-only wei to cap; 0 = zero.
+UPLINK_MOR_ALLOWANCE_WEI=
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
@@ -76,6 +78,31 @@ Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstra
 </details>
 
 **Done when:** GUI at `/gui/`, wallet funded with ETH+MOR on Base, Probe succeeds, OpenAI client hits `https://<host>/v1` with a Prompt key.
+
+<details>
+<summary><strong>MOR allowance (optional cap)</strong></summary>
+
+Uplink talks to the router as a scoped `uplink` user (never the admin
+cookie). That user is recreated at each boot with a MOR **allowance**: the
+most MOR it can stake for sessions before a restart.
+
+- `UPLINK_MOR_ALLOWANCE_WEI` **empty / unset** (default): allowance = the
+  **full wallet MOR balance** read at boot. Convenient, but it is the
+  maximum exposure if Uplink is compromised.
+- **Set** (digits only, wei; no internal spaces): explicit cap. Setting a
+  cap **limits exposure**; e.g. `1000000000000000000000` = 1000 MOR.
+  Leading zeros are ignored.
+- **`0`**: explicit zero cap (fail-closed). The balance is not read; no
+  sessions open until you raise the cap and restart.
+- If the balance read fails or the wallet holds 0 MOR, the allowance is 0
+  with a warning (restart after funding).
+
+The effective allowance (wei + source: `balance`, `override`, `zero`, or
+`unknown`) is shown on the GUI Status and Security tabs and returned by
+`/admin/status` (`morAllowance`). Details:
+[docs/02-bootstrap.md](docs/02-bootstrap.md).
+
+</details>
 
 ### Generic VPS
 
@@ -134,6 +161,9 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   strangers. One wallet, one gateway, your ops.
 - **Any Prompt / ephemeral key can lock MOR** from that wallet. Treat keys like
   spend authority; keep Master off shared machines.
+- **MOR allowance caps that exposure.** Empty `UPLINK_MOR_ALLOWANCE_WEI` =
+  full wallet MOR balance at boot; a digits-only wei cap limits it; `0` =
+  zero allowance (fail-closed).
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.

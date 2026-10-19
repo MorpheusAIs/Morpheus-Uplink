@@ -152,6 +152,13 @@ func TestAllowanceInvalid(t *testing.T) {
 	if _, err := FromEnv(); err == nil {
 		t.Fatal("expected error for signed wei (init rejects non-digits)")
 	}
+	// Internal whitespace is rejected (init rejects it too; never "1 000" -> 1000).
+	for _, raw := range []string{"1 000", "12\t34"} {
+		t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", raw)
+		if _, err := FromEnv(); err == nil {
+			t.Fatalf("expected error for internal whitespace %q", raw)
+		}
+	}
 }
 
 // Explicit 0 (any zero padding) is a zero cap, never "use balance".

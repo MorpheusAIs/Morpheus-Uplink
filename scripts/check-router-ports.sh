@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fail if a compose file publishes host ports targeting 8082 or 3333 unless
 # host_ip is loopback (127.0.0.1 or ::1). Also fail if a router or uplink
-# service (name contains "router" or "uplink", or image is proxy-router /
-# uplink) uses network_mode: host, which bypasses port publishing entirely
+# service (name contains "router" or "uplink", or image repository is
+# morpheus-lumerin-node / proxy-router / uplink) uses network_mode: host, which bypasses port publishing entirely
 # and exposes 8082/3333 on every host interface. Uses rendered JSON, not
 # YAML text.
 set -euo pipefail
@@ -39,7 +39,10 @@ def is_router_or_uplink(sname, svc):
     img = (svc.get("image") or "").lower()
     if "router" in n or "uplink" in n:
         return True
-    return "proxy-router" in img or "/uplink" in img
+    # Image match catches renamed services (e.g. a router called "node").
+    # Strip tag/digest so only the repository path is compared.
+    last = img.split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
+    return last in ("morpheus-lumerin-node", "proxy-router", "uplink")
 
 for sname, svc in (data.get("services") or {}).items():
     nm = (svc.get("network_mode") or "").strip().lower()

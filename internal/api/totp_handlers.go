@@ -196,6 +196,7 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
 		d := s.lockout.Failure(ip)
+		s.auditEvent("2fa_remove", ip, "fail", "bad_password")
 		if d > 0 {
 			s.auditEvent("login_lockout", ip, "blocked", "lockout")
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
@@ -210,9 +211,10 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not enrolled", http.StatusBadRequest)
 		return
 	}
-	ok, _ := s.verifySecondFactor(req.Code, &auth, ip)
+	ok, reason := s.verifySecondFactor(req.Code, &auth, ip)
 	if !ok {
 		d := s.lockout.Failure(ip)
+		s.auditEvent("2fa_remove", ip, "fail", reason)
 		if d > 0 {
 			s.auditEvent("login_lockout", ip, "blocked", "lockout")
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
@@ -250,6 +252,7 @@ func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 	}
 	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
 		d := s.lockout.Failure(ip)
+		s.auditEvent("recovery_codes_regen", ip, "fail", "bad_password")
 		if d > 0 {
 			s.auditEvent("login_lockout", ip, "blocked", "lockout")
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
@@ -264,9 +267,10 @@ func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not enrolled", http.StatusBadRequest)
 		return
 	}
-	ok, _ := s.verifySecondFactor(req.Code, &auth, ip)
+	ok, reason := s.verifySecondFactor(req.Code, &auth, ip)
 	if !ok {
 		d := s.lockout.Failure(ip)
+		s.auditEvent("recovery_codes_regen", ip, "fail", reason)
 		if d > 0 {
 			s.auditEvent("login_lockout", ip, "blocked", "lockout")
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
