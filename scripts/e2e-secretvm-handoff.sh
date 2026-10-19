@@ -8,9 +8,14 @@
 #                no admin credential in env/cmdline, no netrc, no core dumps
 #                (T5); manager network isolation (T8, bridge hosts only).
 #  sessions      SIGKILL with open sessions, restart: the boot reconcile
-#                adopts the usable ones, closes duplicate/expired/unconfigured
-#                ones, opens nothing new, inference works; then docker stop
-#                closes the sessions before exit (app is PID 1), timed.
+#                adopts the usable ones, closes duplicate/expired ones, leaves
+#                the unconfigured one open, opens nothing new, inference
+#                works, audits each adopt/close with a short id, reports in
+#                /admin/status and the status file; a second SIGKILL is
+#                idempotent; an empty or {} catalog closes nothing live; a
+#                failing list holds opens and closes nothing, then recovers
+#                closing expired only; a slow close does not block opens;
+#                then docker stop closes the sessions before exit, timed.
 #  funding       allowance follows the wallet balance with the password
 #                unchanged (T2); GUI resync request path; rate limit.
 #  init re-run   init alone while uplink keeps running: credential kept,
@@ -298,44 +303,129 @@ APIKEY=$(uapi POST /admin/keys '{"name":"e2e"}' | jq -r .key)
 [ -n "$APIKEY" ] && [ "$APIKEY" != null ] || fail "could not create an API key"
 # chat MODEL -> HTTP code; the key goes to curl on stdin (-K -), never argv.
 chat() {
-  "${C:-dc}" exec -T uplink sh -c 'curl -sS -o /dev/null -w "%{http_code}" -K - -X POST \
+  "${C:-dc}" exec -T uplink sh -c 'curl -sS -o /dev/null -w "%{http_code}" -m 30 -K - -X POST \
     -H "Content-Type: application/json" --data-binary "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
     http://127.0.0.1:8080/v1/chat/completions' _ "$1" <<<"header = \"Authorization: Bearer $APIKEY\""
 }
 sessions() { mockctl GET /e2e/sessions; }
 sess_field() { sessions | jq -r --arg id "$1" ".sessions[] | select(.Id == \$id) | .$2"; }
 opens() { stats | jq -r .session_opens; }
+ulog() { dc logs --no-color uplink; }
+# Reconcile audit lines (summary, adopt, close, cap) as JSON objects.
+rec_lines() { ulog | grep -o '{.*' | jq -cR 'fromjson? | select(.msg == "audit" and (.event // "" | startswith("session_reconcile")))'; }
+nsum() { rec_lines | jq -s '[.[] | select(.event == "session_reconcile" and .result != "deferred")] | length'; }
+last_sum() { rec_lines | jq -s -c '[.[] | select(.event == "session_reconcile" and .result != "deferred")] | last'; }
+# kill_restart: SIGKILL uplink, start it again, wait for the next reconcile summary.
+kill_restart() {
+  local n0; n0=$(nsum)
+  docker kill -s KILL "$(cid uplink)" >/dev/null
+  [ "${1:-}" = "--before-start" ] && "$2"
+  dc up -d uplink >/dev/null
+  wait_healthy uplink >/dev/null
+  login
+  if [ "${1:-}" != "--no-wait" ] && [ "${1:-}" != "--before-start" ]; then
+    summary_after() { [ "$(nsum)" -gt "$n0" ]; }
+    wait_for "reconcile summary" 60 summary_after
+  fi
+}
+expect_sum() { # adopted closed skipped
+  local l; l=$(last_sum); echo "reconcile: $l"
+  [ "$(jq -r .adopted <<<"$l")/$(jq -r .closed <<<"$l")/$(jq -r .skipped <<<"$l")/$(jq -r .failed <<<"$l")" = "$1/$2/$3/0" ] \
+    || fail "reconcile counts: want adopted/closed/skipped/failed $1/$2/$3/0, got $l"
+}
+no_full_ids_in_audit() {
+  if rec_lines | grep -qiE '0x[0-9a-f]{9,}'; then fail "reconcile audit carries a full session id"; fi
+  rec_lines | jq -r 'select(.session) | .session' | awk 'length($0) != 10 {bad=1} END {exit bad}' || fail "session prefix is not 10 chars"
+}
 [ "$(chat e2e-alpha)" = 200 ] || fail "chat e2e-alpha through uplink"
 SA=$(sessions | jq -r --arg m "$MA" '[.sessions[] | select(.ModelAgentId == $m and .OpenedBy == "uplink")][0].Id')
 [ -n "$SA" ] && [ "$SA" != null ] || fail "uplink opened no session for e2e-alpha"
 SB=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=3600" | jq -r .id)       # adoptable
 SDUP=$(mockctl POST "/e2e/seed-session?model=$MA&ends_in=300" | jq -r .id)      # duplicate of SA
 SEXP=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)       # inside expiry buffer
-SX=$(mockctl POST "/e2e/seed-session?model=$MX&ends_in=3600" | jq -r .id)       # model not configured
-nrec() { dc logs --no-color uplink | grep -c '"event":"session_reconcile"' || true; }
-nrec0=$(nrec)
-docker kill -s KILL "$(cid uplink)" >/dev/null
+SX=$(mockctl POST "/e2e/seed-session?model=$MX&ends_in=3600" | jq -r .id)       # model not in catalog
 open0=$(opens)
-[ "$(sess_field "$SA" ClosedAt)" = 0 ] || fail "SIGKILL closed a session (should be impossible)"
-dc up -d uplink >/dev/null
-wait_healthy uplink
-login
-reconciled() { [ "$(nrec)" -gt "$nrec0" ]; }
-wait_for "reconcile audit line" 60 reconciled
-line=$(dc logs --no-color uplink | grep '"event":"session_reconcile"' | tail -n 1)
-echo "reconcile: $(printf '%s' "$line" | jq -c '{result,open,adopted,closed,failed,attempts}' 2>/dev/null || printf '%s' "$line")"
-printf '%s' "$line" | grep -q '"adopted":2' || fail "expected 2 adopted: $line"
-printf '%s' "$line" | grep -q '"closed":3' || fail "expected 3 closed: $line"
-printf '%s' "$line" | grep -q '"failed":0' || fail "expected 0 failed: $line"
-for id in "$SDUP" "$SEXP" "$SX"; do [ "$(sess_field "$id" ClosedAt)" != 0 ] || fail "stale/unconfigured session ${id:0:10} left open"; done
-for id in "$SA" "$SB"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "adoptable session ${id:0:10} was closed"; done
-if printf '%s' "$line" | grep -qiE '0x[0-9a-f]{8}'; then fail "audit line carries a session id"; fi
+kill_restart
+[ "$(sess_field "$SA" ClosedAt)" = 0 ] || fail "adoptable session SA was closed"
+expect_sum 2 2 1
+for id in "$SDUP" "$SEXP"; do [ "$(sess_field "$id" ClosedAt)" != 0 ] || fail "stale session ${id:0:10} left open"; done
+for id in "$SA" "$SB" "$SX"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "session ${id:0:10} was closed (adoptable or unconfigured)"; done
+[ "$(rec_lines | jq -s '[.[] | select(.event == "session_reconcile_close")] | map(.reason) | sort | join(",")' -r)" = "duplicate,expired" ] \
+  || fail "per-close audit events: $(rec_lines | jq -s -c '[.[] | select(.event == "session_reconcile_close")]')"
+[ "$(rec_lines | jq -s '[.[] | select(.event == "session_reconcile_adopt")] | length')" = 2 ] || fail "per-adopt audit events"
+no_full_ids_in_audit
 pa=$(sess_field "$SA" Prompts); pb=$(sess_field "$SB" Prompts)
 [ "$(chat e2e-alpha)" = 200 ] || fail "chat e2e-alpha after restart"
 [ "$(chat e2e-beta)" = 200 ] || fail "chat e2e-beta after restart"
 [ "$(opens)" = "$open0" ] || fail "uplink opened a new session for a model that had an adoptable one ($(opens) != $open0)"
 [ "$(sess_field "$SA" Prompts)" -gt "$pa" ] && [ "$(sess_field "$SB" Prompts)" -gt "$pb" ] || fail "inference did not use the adopted sessions"
-echo "OK reconcile: adopted 2 (alpha, beta), closed 3 (duplicate, expired, unconfigured), no new open, inference works"
+st=$(status_json | jq -c .sessionReconcile)
+[ "$(jq -r '.state + " " + (.adopted|tostring) + " " + (.closed|tostring) + " " + (.opensHeld|tostring)' <<<"$st")" = "ok 2 2 false" ] || fail "status sessionReconcile: $st"
+sf=$(dc exec -T --user 10001 uplink cat /data/session-reconcile.json)
+[ "$(jq -r '.state + " " + (.adopted|tostring) + " " + (.skipped|tostring)' <<<"$sf")" = "ok 2 1" ] || fail "status file: $sf"
+[ "$(dc exec -T --user 10001 uplink stat -c "%u %a" /data/session-reconcile.json)" = "10001 640" ] || fail "status file owner/mode"
+echo "OK reconcile: adopted 2, closed 2 (duplicate, expired), unconfigured left open, no new open, inference works, audited per session, status + file"
+
+echo "== sessions: second SIGKILL right away (idempotent) =="
+kill_restart
+expect_sum 2 0 1
+[ "$(opens)" = "$open0" ] || fail "second restart opened a session"
+[ "$(chat e2e-alpha)" = 200 ] && [ "$(opens)" = "$open0" ] || fail "inference after second restart"
+echo "OK idempotent: adopted 2 again, nothing new closed or opened"
+
+echo "== sessions: empty and {} catalog close nothing live =="
+for m in empty braces; do
+  mockctl POST "/e2e/catalog-mode?m=$m" >/dev/null
+  kill_restart
+  l=$(last_sum); echo "catalog=$m reconcile: $l"
+  [ "$(jq -r .closed <<<"$l")" = 0 ] || fail "catalog=$m closed sessions: $l"
+  for id in "$SA" "$SB" "$SX"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "catalog=$m closed ${id:0:10}"; done
+done
+mockctl POST "/e2e/catalog-mode?m=normal" >/dev/null
+echo "OK empty / {} catalog: zero closes, live sessions kept"
+
+echo "== sessions: list failure (deferred, opens held, then recovery) =="
+SE2=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)
+inject_list_fail() { mockctl POST "/e2e/fail?path=/blockchain/sessions/user&code=503" >/dev/null; }
+n0=$(nsum)
+kill_restart --before-start inject_list_fail
+deferred() { ulog | grep -q '"event":"session_reconcile","result":"deferred"'; }
+wait_for "deferred audit line" 40 deferred
+st=$(status_json | jq -c .sessionReconcile)
+jq -e '(.state == "deferred" or .state == "retrying") and .opensHeld == true' <<<"$st" >/dev/null || fail "status during list failure: $st"
+o1=$(opens)
+[ "$(chat e2e-gamma)" != 200 ] || fail "a new session was opened while the list was failing"
+[ "$(opens)" = "$o1" ] || fail "opened a session while the list was failing"
+[ "$(sess_field "$SE2" ClosedAt)" = 0 ] || fail "closed a session without a successful list"
+mockctl POST "/e2e/fail?path=/blockchain/sessions/user&code=0" >/dev/null
+recovered() { [ "$(nsum)" -gt "$n0" ]; }
+wait_for "reconcile recovery" 30 recovered
+l=$(last_sum); echo "recovery: $l"
+jq -e '.late == true and .failed == 0' <<<"$l" >/dev/null || fail "late recovery summary: $l"
+[ "$(sess_field "$SE2" ClosedAt)" != 0 ] || fail "late recovery did not close the expired session"
+for id in "$SA" "$SB" "$SX"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "late recovery closed ${id:0:10}"; done
+[ "$(chat e2e-alpha)" = 200 ] && [ "$(opens)" = "$o1" ] || fail "inference after recovery"
+echo "OK list failure: no closes, no opens while failing; recovery closed expired only"
+
+echo "== sessions: slow close does not block opens =="
+SE3=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)
+slow() { mockctl POST "/e2e/slow-close?sec=20" >/dev/null; }
+n0=$(nsum)
+kill_restart --before-start slow
+closing() { status_json | jq -e '.sessionReconcile.state == "closing"' >/dev/null; }
+wait_for "reconcile closing in background" 20 closing
+o2=$(opens); t0=$(date +%s)
+[ "$(chat e2e-gamma)" = 200 ] || fail "open during slow close"
+t1=$(date +%s)
+[ "$(opens)" = $((o2 + 1)) ] || fail "expected exactly one new open for e2e-gamma"
+[ $((t1 - t0)) -lt 10 ] || fail "open waited $((t1 - t0))s behind a slow close"
+closing || fail "close finished early; slow-close not exercised"
+mockctl POST "/e2e/slow-close?sec=0" >/dev/null
+wait_for "slow close done" 40 recovered
+[ "$(sess_field "$SE3" ClosedAt)" != 0 ] || fail "slow close did not complete"
+echo "TIMING open during slow close: $((t1 - t0))s"
+echo "OK slow close: opens proceed while closes run in the background"
+no_full_ids_in_audit
 
 echo "== sessions: docker stop closes them before exit =="
 grace=$(docker inspect -f '{{.Config.StopTimeout}}' "$(cid uplink)")

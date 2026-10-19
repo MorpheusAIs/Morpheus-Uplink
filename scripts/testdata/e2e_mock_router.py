@@ -15,7 +15,8 @@ POST /e2e/readback-skew?on=1 (make GET /auth/users report a wrong value),
 POST /e2e/consume?wei=N (simulate session holds lowering the allowance),
 POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
 previous process), GET /e2e/sessions (every session with its open/close
-times and prompt count), GET /e2e/catalog (gateway model catalog).
+times and prompt count), GET /e2e/catalog (gateway model catalog),
+POST /e2e/catalog-mode?m=normal|empty|braces, POST /e2e/slow-close?sec=N.
 Sessions: list (/blockchain/sessions/user), open, close, detail, and
 POST /v1/chat/completions with a session_id header (open sessions only).
 Any request asking for direct payment is refused and counted
@@ -48,7 +49,9 @@ S = {
               "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0,
               "session_opens": 0, "session_closes": 0},
     "fail": {},        # path -> code
-    "sessions": {},    # id -> session row (in memory; survives uplink restarts)
+    "sessions": {},
+    "catalog_mode": "normal",
+    "slow_close": 0,    # id -> session row (in memory; survives uplink restarts)
     "skew": False,
 }
 if STATE_FILE and os.path.exists(STATE_FILE):
@@ -59,6 +62,7 @@ if STATE_FILE and os.path.exists(STATE_FILE):
 CATALOG = [
     {"Name": "e2e-alpha", "Id": "0x" + "a1" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
     {"Name": "e2e-beta", "Id": "0x" + "b2" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
+    {"Name": "e2e-gamma", "Id": "0x" + "c3" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
 ]
 
 
@@ -130,6 +134,8 @@ class H(BaseHTTPRequestHandler):
     def _route(self, method):
         u = urlparse(self.path)
         path, q = u.path, parse_qs(u.query)
+        if S["slow_close"] and method == "POST" and path.startswith("/blockchain/sessions/") and path.endswith("/close"):
+            time.sleep(S["slow_close"])  # outside the lock: other calls proceed
         with LOCK:
             if path.startswith("/e2e/"):
                 return self._control(method, path, q)
@@ -255,14 +261,19 @@ class H(BaseHTTPRequestHandler):
         if path == "/e2e/sessions":
             return self._json(200, {"now": time.time(), "sessions": list(S["sessions"].values())})
         if path == "/e2e/catalog":
-            return self._json(200, {"models": CATALOG})
+            mode = S["catalog_mode"]
+            return self._json(200, {} if mode == "braces" else {"models": [] if mode == "empty" else CATALOG})
         if path == "/e2e/bids":
             return self._json(200, {})
         self._body()
         if path == "/e2e/seed-session":
             sid = new_session(q.get("model", [""])[0], time.time() + int(q.get("ends_in", ["3600"])[0]), "seed")
             return self._json(200, {"id": sid})
-        if path == "/e2e/fund":
+        if path == "/e2e/catalog-mode":
+            S["catalog_mode"] = q.get("m", ["normal"])[0]
+        elif path == "/e2e/slow-close":
+            S["slow_close"] = int(q.get("sec", ["0"])[0])
+        elif path == "/e2e/fund":
             S["mor"] = q.get("mor", ["0"])[0]
         elif path == "/e2e/consume":
             # Simulate session holds: lower every user's allowance by wei.
