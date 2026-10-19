@@ -22,7 +22,7 @@ func (s *Server) AuditSessionReconcile(r pool.ReconcileResult) {
 	}
 	slog.Info("audit", "event", "session_reconcile", "result", result,
 		"open", r.Open, "adopted", r.Adopted, "closed", r.Closed, "failed", r.Failed,
-		"skipped", r.Skipped, "deferred", r.Deferred, "attempts", r.Attempts, "late", r.Late)
+		"skipped", r.Skipped, "deferred", r.Deferred, "attempts", r.Attempts, "late", r.Late, "catalog", r.Catalog)
 	s.audit.RecordFull("session_reconcile", "system", "", result,
 		fmt.Sprintf("session_reconcile %s open=%d adopted=%d closed=%d failed=%d skipped=%d deferred=%d",
 			result, r.Open, r.Adopted, r.Closed, r.Failed, r.Skipped, r.Deferred))
@@ -32,6 +32,9 @@ func (s *Server) AuditSessionReconcile(r pool.ReconcileResult) {
 // for a cap hit. Session ids appear only as a short prefix.
 func (s *Server) AuditSessionReconcileEvent(ev pool.ReconcileEvent) {
 	attrs := []any{"event", ev.Kind, "result", ev.Result, "reason", ev.Reason}
+	if ev.Source != "" {
+		attrs = append(attrs, "source", ev.Source)
+	}
 	msg := ev.Kind + " " + ev.Result + " " + ev.Reason
 	if ev.Session != "" {
 		attrs = append(attrs, "session", ev.Session)

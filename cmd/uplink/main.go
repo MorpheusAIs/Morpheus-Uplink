@@ -94,9 +94,11 @@ func main() {
 	srv := api.NewServer(cfg, st, cat, pl, rc, hk)
 
 	// Boot session reconcile: gate session opens until the wallet's open
-	// sessions were listed once, adopting usable ones and closing expired,
-	// duplicate and unconfigured ones (see internal/pool/reconcile.go).
+	// sessions were listed once, adopting usable ones and closing expired
+	// and duplicate ones; sessions for models not in the catalog are left
+	// to expire (see internal/pool/reconcile.go).
 	pl.SetOnReconcileState(srv.WriteReconcileStatus)
+	pl.SetOnRescanEvent(srv.AuditSessionReconcileEvent)
 	pl.Gate()
 	reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
 	defer reconcileCancel()
@@ -161,11 +163,19 @@ func main() {
 	_ = httpServer.Shutdown(ctx)
 	log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
 	if cfg.CloseSessionsOnExit {
-		r := pl.CloseAll()
-		log.Printf("shutdown: closed %d/%d session(s), %d failed, total %s",
-			r.Closed, r.Attempted, r.Failed, time.Since(t0).Round(time.Millisecond))
+		// Finish inside the 45 s stop grace: 40 s from SIGTERM in total,
+		// at most 8 s per close. Whatever is left is closed (expired) or
+		// adopted by the next boot reconcile.
+		r := pl.CloseAllWithin(t0.Add(shutdownBudget), shutdownPerClose)
+		log.Printf("shutdown: closed %d/%d session(s), %d failed, %d left for boot reconcile, total %s",
+			r.Closed, r.Attempted, r.Failed, r.Left, time.Since(t0).Round(time.Millisecond))
 	}
 }
+
+const (
+	shutdownBudget   = 40 * time.Second
+	shutdownPerClose = 8 * time.Second
+)
 
 // routerAuthWatchdog exits the process when the router keeps rejecting the
 // scoped credential (HTTP 401) for longer than limit while the router itself

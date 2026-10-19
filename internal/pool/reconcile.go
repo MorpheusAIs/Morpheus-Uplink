@@ -78,6 +78,7 @@ type ReconcileResult struct {
 	Deferred int
 	Attempts int
 	Late     bool // ran after the gate deadline (expired-only closes)
+	Catalog  int  // configured models seen; -1 = catalog unknown
 }
 
 // ReconcileEvent is one per-session audit event (adopt, close, cap).
@@ -87,6 +88,7 @@ type ReconcileEvent struct {
 	Session string // short id prefix
 	Result  string // ok | failed
 	Count   int    // cap: deferred count
+	Source  string // boot | rescan
 }
 
 // ReconcileState is the latest reconcile status (for /admin/status, the GUI
@@ -249,14 +251,17 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 	if configured != nil {
 		ids, known = configured()
 	}
-	res := ReconcileResult{Open: len(open), Late: late}
+	res := ReconcileResult{Open: len(open), Late: late, Catalog: -1}
+	if known {
+		res.Catalog = len(ids)
+	}
 	var expired, dups []ReconcileDecision
 	for _, d := range PlanReconcile(open, time.Now(), ids, known) {
 		s := d.Session
 		switch {
 		case d.Action == ActAdopt:
 			usableUntil := time.Unix(s.EndsAt, 0).Add(-expiryBuffer)
-			key := s.ModelAgentID
+			key := normModel(s.ModelAgentID)
 			p.mu.Lock()
 			if e, ok := p.entries[key]; ok && e.expiresAt.After(usableUntil) {
 				p.mu.Unlock()
@@ -266,7 +271,7 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 			p.entries[key] = entry{sessionID: s.ID, expiresAt: usableUntil, stake: s.Stake}
 			p.mu.Unlock()
 			res.Adopted++
-			emit(ReconcileEvent{Kind: "session_reconcile_adopt", Reason: ReasonUsable, Session: short(s.ID), Result: "ok"})
+			emit(ReconcileEvent{Kind: "session_reconcile_adopt", Reason: ReasonUsable, Session: short(s.ID), Result: "ok", Source: "boot"})
 		case d.Action == ActClose && d.Reason == ReasonExpired:
 			expired = append(expired, d)
 		case d.Action == ActClose && d.Reason == ReasonDuplicate && !late:
@@ -281,7 +286,7 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 	if len(closes) > MaxBootCloses {
 		res.Deferred = len(closes) - MaxBootCloses
 		closes = closes[:MaxBootCloses]
-		emit(ReconcileEvent{Kind: "session_reconcile_cap", Reason: fmt.Sprintf("max %d closes per pass", MaxBootCloses), Result: "deferred", Count: res.Deferred})
+		emit(ReconcileEvent{Kind: "session_reconcile_cap", Reason: fmt.Sprintf("max %d closes per pass", MaxBootCloses), Result: "deferred", Count: res.Deferred, Source: "boot"})
 	}
 	p.stateKnown.Store(true)
 	return res, closes, nil
@@ -310,7 +315,7 @@ func (p *Pool) runCloses(res *ReconcileResult, closes []ReconcileDecision, emit 
 		p.recMu.Unlock()
 	}()
 	for _, d := range closes {
-		ev := ReconcileEvent{Kind: "session_reconcile_close", Reason: d.Reason, Session: short(d.Session.ID), Result: "ok"}
+		ev := ReconcileEvent{Kind: "session_reconcile_close", Reason: d.Reason, Session: short(d.Session.ID), Result: "ok", Source: "boot"}
 		if err := p.client.CloseSession(d.Session.ID); err != nil {
 			log.Printf("pool: reconcile close (%s) session %s: %v", d.Reason, short(d.Session.ID), err)
 			res.Failed++

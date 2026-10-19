@@ -337,6 +337,105 @@ func TestReconcileCaseMismatchedCatalogClosesNoLiveSession(t *testing.T) {
 	if len(p.Snapshot()) != 1 {
 		t.Fatalf("snapshot %+v", p.Snapshot())
 	}
+	// The catalog id (lowercase) must find the adopted session: no new open.
+	res, err := p.EnsureDuration(modelA, 600)
+	if err != nil || res.Opened || res.SessionID != "0xlive0" || f.opened.Load() != 0 {
+		t.Fatalf("case-mismatched adopt not reused: %+v err=%v opened=%d", res, err, f.opened.Load())
+	}
+	// A second pass sees one session for the model: nothing to close.
+	r2, err := p.reconcileOnce(catalogServing(t, `{"models":[{"Name":"a","Id":"`+modelA+`"}]}`))
+	if err != nil || r2.Closed != 0 || f.closes.Load() != 0 {
+		t.Fatalf("second pass closed a case-only match: %+v %v", r2, err)
+	}
+}
+
+func TestRescanKeysByLowercaseModel(t *testing.T) {
+	upper := "0xAAAA000000000000000000000000000000000000000000000000000000000000"
+	f := &fakeRouter{closed: map[string]int{}, sessions: liveRows(time.Now(), upper)}
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	if err := p.RehydrateForce(); err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.EnsureDuration(modelA, 600)
+	if err != nil || res.Opened || f.opened.Load() != 0 {
+		t.Fatalf("rescan adopt not found by lowercase id: %+v %v opened=%d", res, err, f.opened.Load())
+	}
+	p.Invalidate(upper) // invalidate by either case
+	if len(p.Snapshot()) != 0 {
+		t.Fatalf("invalidate missed: %+v", p.Snapshot())
+	}
+}
+
+func TestRescanAuditsExpiredClose(t *testing.T) {
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{row("0xexp-rescan-0000", modelA, time.Now().Add(-time.Minute))}}
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	var evs []ReconcileEvent
+	p.SetOnRescanEvent(func(ev ReconcileEvent) { evs = append(evs, ev) })
+	if err := p.RehydrateForce(); err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Kind != "session_reconcile_close" || evs[0].Reason != "expired" ||
+		evs[0].Source != "rescan" || evs[0].Result != "ok" || evs[0].Session != "0xexp-resc" {
+		t.Fatalf("rescan events %+v", evs)
+	}
+}
+
+func TestReconcileSummaryCarriesCatalogSize(t *testing.T) {
+	f := &fakeRouter{closed: map[string]int{}}
+	got, _ := runReconcile(t, f, configuredAB)
+	if got.Catalog != 2 {
+		t.Fatalf("catalog size %d, want 2", got.Catalog)
+	}
+	got, _ = runReconcile(t, &fakeRouter{closed: map[string]int{}}, catalogServing(t, `{}`))
+	if got.Catalog != -1 {
+		t.Fatalf("unknown catalog size %d, want -1", got.Catalog)
+	}
+}
+
+func TestShutdownCloseAllWithinTimesOut(t *testing.T) {
+	now := time.Now()
+	hang := make(chan struct{})
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{
+		row("0xa-fast", modelA, now.Add(time.Hour)), row("0xb-slow", modelB, now.Add(time.Hour)),
+	}}
+	inner := f.server(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /blockchain/sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") == "0xb-slow" {
+			select {
+			case <-hang:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		proxyTo(t, inner.URL, w, r)
+	})
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxyTo(t, inner.URL, w, r) }))
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(hang) }) // runs before ts.Close
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	if err := p.RehydrateForce(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	r := p.CloseAllWithin(start.Add(5*time.Second), 200*time.Millisecond)
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("took %s", el)
+	}
+	if r.Closed != 1 || r.Left != 1 || f.closed["0xa-fast"] != 1 {
+		t.Fatalf("result %+v closed=%v", r, f.closed)
+	}
+	// Past the deadline nothing is attempted; everything is left.
+	if err := p.RehydrateForce(); err != nil {
+		t.Fatal(err)
+	}
+	r2 := p.CloseAllWithin(time.Now().Add(-time.Second), time.Second)
+	if r2.Attempted != 0 || r2.Left != 1 {
+		t.Fatalf("past deadline: %+v", r2)
+	}
 }
 
 func TestReconcileUnconfiguredNeverClosed(t *testing.T) {

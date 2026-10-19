@@ -33,7 +33,7 @@ type Pool struct {
 	failover bool
 
 	mu      sync.Mutex
-	entries map[string]entry       // modelID -> session
+	entries map[string]entry       // normModel(modelID) -> session
 	opening map[string]*sync.Mutex // per-model open lock
 
 	onClosed OnSessionClosed
@@ -49,6 +49,7 @@ type Pool struct {
 	closing     map[string]bool // ids the reconcile is closing (rehydrate skips them)
 	recState    ReconcileState
 	onState     func(ReconcileState)
+	onRescan    func(ReconcileEvent)
 
 	// Last on-chain open-session scan (for GUI), refreshed by Rehydrate.
 	chainMu      sync.Mutex
@@ -102,6 +103,23 @@ func (p *Pool) SetOnReconcileState(f func(ReconcileState)) {
 	p.recMu.Unlock()
 }
 
+// SetOnRescanEvent registers the audit hook for closes made by a rescan
+// (expired sessions, including ones the boot reconcile deferred).
+func (p *Pool) SetOnRescanEvent(f func(ReconcileEvent)) {
+	p.recMu.Lock()
+	p.onRescan = f
+	p.recMu.Unlock()
+}
+
+func (p *Pool) emitRescan(ev ReconcileEvent) {
+	p.recMu.Lock()
+	f := p.onRescan
+	p.recMu.Unlock()
+	if f != nil {
+		f(ev)
+	}
+}
+
 // EnsureResult is returned by EnsureDuration.
 type EnsureResult struct {
 	SessionID   string
@@ -124,15 +142,16 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	if durationSec <= 0 {
 		durationSec = p.duration
 	}
+	key := normModel(modelID)
 	p.mu.Lock()
-	if e, ok := p.entries[modelID]; ok && time.Now().Before(e.expiresAt) {
+	if e, ok := p.entries[key]; ok && time.Now().Before(e.expiresAt) {
 		p.mu.Unlock()
 		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
 	}
-	lock, ok := p.opening[modelID]
+	lock, ok := p.opening[key]
 	if !ok {
 		lock = &sync.Mutex{}
-		p.opening[modelID] = lock
+		p.opening[key] = lock
 	}
 	p.mu.Unlock()
 
@@ -165,7 +184,7 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 		return EnsureResult{}, err
 	}
 	p.mu.Lock()
-	p.entries[modelID] = entry{
+	p.entries[key] = entry{
 		sessionID: sessionID,
 		expiresAt: time.Now().Add(time.Duration(durationSec)*time.Second - expiryBuffer),
 	}
@@ -177,7 +196,7 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e, ok := p.entries[modelID]
+	e, ok := p.entries[normModel(modelID)]
 	if !ok || !time.Now().Before(e.expiresAt) {
 		return EnsureResult{}, false
 	}
@@ -189,7 +208,7 @@ func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, boo
 func (p *Pool) Invalidate(modelID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.entries, modelID)
+	delete(p.entries, normModel(modelID))
 }
 
 type Snapshot struct {
@@ -291,13 +310,16 @@ func (p *Pool) rehydrate(force bool) error {
 		if s.Stake != nil {
 			stakeStr = s.Stake.String()
 		}
-		if !usable && p.isClosing(s.ID) {
-			continue
+		if p.isClosing(s.ID) {
+			continue // the boot reconcile is closing it
 		}
 		if !usable {
 			// Past end (or inside buffer): ask router to close so unused
 			// returns and used moves to the daylock queue.
+			ev := ReconcileEvent{Kind: "session_reconcile_close", Reason: ReasonExpired, Session: short(s.ID), Result: "ok", Source: "rescan"}
 			if err := p.client.CloseSession(s.ID); err != nil {
+				ev.Result = "failed"
+				p.emitRescan(ev)
 				log.Printf("pool: close expired session %s: %v", short(s.ID), err)
 				// Still show it — close failed, stake remains active.
 				display = append(display, ChainSession{
@@ -305,13 +327,14 @@ func (p *Pool) rehydrate(force bool) error {
 					EndsAt: time.Unix(s.EndsAt, 0).UTC(), Usable: false,
 				})
 			} else {
+				p.emitRescan(ev)
 				log.Printf("pool: closed expired session %s (model %s)", short(s.ID), s.ModelAgentID)
 				p.notifyClosed(s.ID)
 			}
 			continue
 		}
-		if cur, ok := best[s.ModelAgentID]; !ok || s.EndsAt > cur.EndsAt {
-			best[s.ModelAgentID] = s
+		if cur, ok := best[normModel(s.ModelAgentID)]; !ok || s.EndsAt > cur.EndsAt {
+			best[normModel(s.ModelAgentID)] = s
 		}
 		display = append(display, ChainSession{
 			ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stakeStr,
@@ -390,6 +413,7 @@ type CloseAllResult struct {
 	Attempted int      `json:"attempted"`
 	Closed    int      `json:"closed"`
 	Failed    int      `json:"failed"`
+	Left      int      `json:"left,omitempty"` // shutdown: not closed in time
 	Errors    []string `json:"errors,omitempty"`
 }
 
@@ -428,5 +452,67 @@ func (p *Pool) CloseAll() CloseAllResult {
 		tryClose(s.SessionID, "on-chain "+s.ModelID)
 	}
 	_ = p.RehydrateForce()
+	return res
+}
+
+// CloseAllWithin is CloseAll for shutdown: each close gets at most perClose,
+// and nothing is attempted after deadline. Sessions not closed in time are
+// counted in Left and logged as left for the boot reconcile. It does not
+// rescan afterwards.
+func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseAllResult {
+	p.mu.Lock()
+	entries := p.entries
+	p.entries = map[string]entry{}
+	p.mu.Unlock()
+	type target struct{ id, label string }
+	var targets []target
+	seen := map[string]bool{}
+	add := func(id, label string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			targets = append(targets, target{id, label})
+		}
+	}
+	for modelID, e := range entries {
+		add(e.sessionID, "pooled "+modelID)
+	}
+	for _, s := range p.ChainOpen() {
+		add(s.SessionID, "on-chain "+s.ModelID)
+	}
+	res := CloseAllResult{}
+	for i, t := range targets {
+		left := time.Until(deadline)
+		if left <= 0 {
+			for _, r := range targets[i:] {
+				res.Left++
+				log.Printf("pool: session %s (%s) left for boot reconcile (shutdown deadline)", short(r.id), r.label)
+			}
+			break
+		}
+		wait := perClose
+		if left < wait {
+			wait = left
+		}
+		res.Attempted++
+		done := make(chan error, 1)
+		go func(id string) { done <- p.client.CloseSession(id) }(t.id)
+		select {
+		case err := <-done:
+			if err != nil {
+				res.Failed++
+				if len(res.Errors) < 5 {
+					res.Errors = append(res.Errors, t.label+": "+err.Error())
+				}
+				log.Printf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
+				continue
+			}
+			res.Closed++
+			log.Printf("pool: closed session %s (%s)", short(t.id), t.label)
+			p.notifyClosed(t.id)
+		case <-time.After(wait):
+			res.Left++
+			log.Printf("pool: session %s (%s) left for boot reconcile (close timed out after %s)", short(t.id), t.label, wait)
+		}
+	}
 	return res
 }
