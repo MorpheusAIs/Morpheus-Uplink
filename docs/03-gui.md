@@ -78,9 +78,11 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 ## Sessions & Usage
 
 - On boot Uplink lists the open sessions before opening any: still-valid
-  ones are reused (one per configured model), expired, duplicate and
-  no-longer-configured ones are closed so their stake is returned. On
-  `docker stop` Uplink closes its sessions before it exits.
+  ones are reused (one per model), expired and duplicate ones are closed so
+  their stake is returned, and sessions for models not in the catalog are
+  left to expire. The Status tab shows the last boot check and its counts.
+  On `docker stop` Uplink closes its sessions before it exits. Use a
+  dedicated wallet: the boot check acts on every session of the wallet.
 - **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
 
 ---

@@ -905,6 +905,7 @@
           <p style="margin:4px 0">Note: the router also supports "direct payment" sessions, where the provider is paid from the stake (at most <code>getTodaysBudget / totalMORSupply</code> of it, about 0.3% today). The gateway itself never uses it, but whoever holds the router credential could. A cap bounds that worst case to the same fraction of the cap.</p>
           <p style="margin:4px 0">For high-value wallets, set a cap.</p>
         </details>
+        <p class="note" id="sessionReconcileLine" style="margin-top:4px"></p>
         <div class="note" id="allowanceResyncBox" style="margin-top:4px">
           <span id="allowanceResyncNote"></span>
           <button type="button" class="secondary hidden" id="allowanceResyncBtn" onclick="requestAllowanceResync()">Resync allowance now</button>
@@ -1350,6 +1351,31 @@ function allowanceSourceNote(src, ar) {
   return locks;
 }
 
+function renderSessionReconcile(sr) {
+  const el = document.getElementById('sessionReconcileLine');
+  if (!el) return;
+  const when = sr.at ? new Date(sr.at).toLocaleString() : '';
+  const counts = 'adopted ' + (sr.adopted || 0) + ', closed ' + (sr.closed || 0)
+    + ', skipped ' + (sr.skipped || 0) + ', deferred ' + (sr.deferred || 0)
+    + ((sr.failed || 0) ? ', failed ' + sr.failed : '');
+  let txt;
+  switch (sr.state) {
+    case 'pending': case 'reconciling':
+      txt = 'Boot session check: listing open sessions… new sessions wait until it finishes.'; break;
+    case 'closing':
+      txt = 'Boot session check: ' + counts + ' (closing stale sessions in the background).'; break;
+    case 'ok': case 'partial':
+      txt = 'Boot session check ' + when + ': ' + counts + (sr.state === 'partial' ? ' (some left for later scans or expiry)' : '') + '.'; break;
+    case 'deferred': case 'retrying':
+      txt = 'Boot session check retrying (open sessions could not be listed' + (sr.attempts ? ', attempt ' + sr.attempts : '') + ').'
+        + (sr.opensHeld ? ' New sessions are not opened until the list succeeds.' : ''); break;
+    default:
+      txt = '';
+  }
+  el.textContent = txt;
+  el.classList.toggle('msg-err', sr.state === 'deferred' || sr.state === 'retrying');
+}
+
 function renderAllowanceResync(ar) {
   const note = document.getElementById('allowanceResyncNote');
   const btn = document.getElementById('allowanceResyncBtn');
@@ -1360,6 +1386,9 @@ function renderAllowanceResync(ar) {
     const res = ar.lastResult === 'error' ? 'error' : (ar.lastResult === 'ok' ? 'ok' : (ar.lastResult || '—'));
     txt = 'Auto-resync: on · last resync ' + when + ' (' + res + '). New deposits are included within ~2 min.';
     btn.classList.remove('hidden');
+  } else if (ar.fresh && ar.mode === 'ceiling') {
+    txt = 'Ceiling mode: no budget; the allowance sits above total MOR, so the wallet balance is the only limit (no auto-resync).';
+    btn.classList.add('hidden');
   } else if (ar.fresh && ar.mode && ar.mode !== 'balance') {
     txt = 'Fixed cap set: the allowance stays at the cap (no auto-resync).';
     btn.classList.add('hidden');
@@ -1945,6 +1974,7 @@ async function doRefresh() {
         : '';
     }
     renderRouterBanner(st);
+    renderSessionReconcile(st.sessionReconcile || {});
 
     const rawSessions = st.sessions || [];
     lastRawSessionIds.clear();
