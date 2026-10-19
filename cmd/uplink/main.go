@@ -81,6 +81,20 @@ func main() {
 	defer hkCancel()
 	go hk.Start(hkCtx)
 
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		srv.CheckOutflow()
+		for {
+			select {
+			case <-hkCtx.Done():
+				return
+			case <-t.C:
+				srv.CheckOutflow()
+			}
+		}
+	}()
+
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),

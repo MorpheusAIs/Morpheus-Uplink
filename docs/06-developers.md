@@ -198,3 +198,10 @@ Concept sketch (optional): [`.ai-docs/UPLINK_CONCEPT.md`](../.ai-docs/UPLINK_CON
 ---
 
 [← Updates](05-updates.md) · [Guide home](README.md)
+
+## Quiet boot / log forwarding
+
+Uplink does not print config or secrets at process start (listen line only).
+Forward container stdout/stderr with your host log driver (json-file rotation
+is set in compose) or a SIEM agent. Do not scrape environment variables from
+the runtime.
