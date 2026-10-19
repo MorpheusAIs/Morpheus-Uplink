@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/absgrafx/morpheus-uplink/internal/config"
@@ -10,9 +11,9 @@ import (
 
 func TestKeysMaskedByDefault(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
+	ac := adminClient(t, ts, cfg)
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/keys", nil)
-	req.SetBasicAuth("admin", cfg.AdminPassword)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ac.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +33,7 @@ func TestKeysMaskedByDefault(t *testing.T) {
 	}
 	// reveal=1 returns full
 	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/keys?reveal=1", nil)
-	req2.SetBasicAuth("admin", cfg.AdminPassword)
-	resp2, err := http.DefaultClient.Do(req2)
+	resp2, err := ac.Do(req2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +49,10 @@ func TestKeysMaskedByDefault(t *testing.T) {
 }
 
 func TestLoginLockoutBackoff(t *testing.T) {
-	ts, cfg, _ := newTestServer(t)
-	_ = cfg
+	ts, _, _ := newTestServer(t)
 	for i := 0; i < 5; i++ {
-		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/status", nil)
-		req.SetBasicAuth("admin", "wrong-password-here")
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/login", strings.NewReader(`{"password":"wrong-password-here"}`))
+		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -63,15 +62,32 @@ func TestLoginLockoutBackoff(t *testing.T) {
 			t.Fatalf("iter %d: want 401/429 got %d", i, resp.StatusCode)
 		}
 	}
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/status", nil)
-	req.SetBasicAuth("admin", "wrong-password-here")
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/login", strings.NewReader(`{"password":"wrong-password-here"}`))
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests && resp.Header.Get("Retry-After") == "" {
-		t.Fatalf("expected lockout after 5 failures, status=%d", resp.StatusCode)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected lockout after 5 failures, status=%d retry=%q", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After header")
+	}
+}
+
+func TestBasicAuthRejectedOnAdmin(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/status", nil)
+	req.SetBasicAuth("admin", cfg.AdminPassword)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("Basic on /admin: status=%d, want 401", resp.StatusCode)
 	}
 }
 

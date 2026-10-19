@@ -51,6 +51,18 @@ type Config struct {
 	RouterAuthFile string
 	// Generic read-only JSON-RPC URL for optional on-chain alerts (no wallet key).
 	EthRPCURL string
+	// Public HTTPS origin for CSRF Origin checks (required for cookie admin auth).
+	WebPublicURL string
+	// MASTER_KEY_ADMIN: when true, Bearer master key may access /admin (audited). Default false.
+	MasterKeyAdmin bool
+	// ADMIN_2FA_REQUIRED: when true and nothing enrolled, only login+enroll work. Default false.
+	Admin2FARequired bool
+	// UPLINK_DEV_HTTP: allow non-Secure cookie for localhost only.
+	DevHTTP bool
+	// TRUSTED_PROXY_CIDR: comma-separated CIDRs that may supply X-Forwarded-For.
+	TrustedProxyCIDRs []string
+	// UPLINK_RESET_2FA: break-glass wipe of 2FA/sessions/lockouts once per marker cycle.
+	Reset2FA bool
 }
 
 func FromEnv() (*Config, error) {
@@ -73,6 +85,12 @@ func FromEnv() (*Config, error) {
 		UplinkMORAllowanceWei: os.Getenv("UPLINK_MOR_ALLOWANCE_WEI"),
 		RouterAuthFile:      os.Getenv("ROUTER_AUTH_FILE"),
 		EthRPCURL:           firstNonEmpty(os.Getenv("ETH_RPC_URL"), os.Getenv("ETH_NODE_ADDRESS")),
+		WebPublicURL:        strings.TrimRight(os.Getenv("WEB_PUBLIC_URL"), "/"),
+		MasterKeyAdmin:      getenvBool("MASTER_KEY_ADMIN", false),
+		Admin2FARequired:    getenvBool("ADMIN_2FA_REQUIRED", false),
+		DevHTTP:             getenvBool("UPLINK_DEV_HTTP", false),
+		TrustedProxyCIDRs:   splitCSV(os.Getenv("TRUSTED_PROXY_CIDR")),
+		Reset2FA:            getenvBool("UPLINK_RESET_2FA", false),
 	}
 
 	auth := getenv("ROUTER_AUTH", os.Getenv("COOKIE_CONTENT"))
@@ -104,7 +122,28 @@ func FromEnv() (*Config, error) {
 	if err := ValidateAdminPassword(c.AdminPassword, os.Getenv("COOKIE_CONTENT")); err != nil {
 		return nil, err
 	}
+	if c.DevHTTP {
+		u := strings.ToLower(c.WebPublicURL)
+		if u != "http://localhost" && u != "http://127.0.0.1" &&
+			!strings.HasPrefix(u, "http://localhost:") && !strings.HasPrefix(u, "http://127.0.0.1:") {
+			return nil, fmt.Errorf("UPLINK_DEV_HTTP=true requires WEB_PUBLIC_URL http://localhost or http://127.0.0.1")
+		}
+	}
 	return c, nil
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // requirePositiveWei refuses boot when name is missing, empty, or zero.

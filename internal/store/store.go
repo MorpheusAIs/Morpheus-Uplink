@@ -42,6 +42,7 @@ type state struct {
 	Usage           map[string]*UsageRow       `json:"usage"` // "day|keyId|model"
 	OpenSessions    map[string]OpenSessionMeta `json:"openSessions,omitempty"`
 	SessionTimeMode string                     `json:"sessionTimeMode,omitempty"` // "actual" after migration
+	Auth            AuthState                  `json:"auth,omitempty"`
 }
 
 type Store struct {

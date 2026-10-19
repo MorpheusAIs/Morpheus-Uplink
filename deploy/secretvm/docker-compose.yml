@@ -59,6 +59,8 @@ services:
       start_period: 90s
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ADMIN_2FA_REQUIRED=true
+      - MASTER_KEY_ADMIN=false
       - API_KEY_SEED=${API_KEY_SEED}
       - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}

@@ -93,6 +93,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
       - WEB_PUBLIC_URL=http://localhost:8080
+      - UPLINK_DEV_HTTP=true
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
       # Behavior bake (change via compose/code only).
       - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
@@ -102,7 +103,7 @@ services:
       - HOUSEKEEPING=true
       - DATA_DIR=/data
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - uplink_data:/data
 

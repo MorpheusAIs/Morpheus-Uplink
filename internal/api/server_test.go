@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -82,6 +84,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *config.Config, *atomic.Int3
 		ActiveModelsURL:    cat.URL,
 		SessionDurationSec: 600,
 		SessionFailover:    true,
+		DevHTTP:            true,
+		WebPublicURL:       "http://127.0.0.1", // patched to ts origin below
 	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -91,7 +95,41 @@ func newTestServer(t *testing.T) (*httptest.Server, *config.Config, *atomic.Int3
 	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true, false), rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
+	u, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.WebPublicURL = u.Scheme + "://" + u.Host
 	return ts, cfg, &opened
+}
+
+// adminClient logs in via POST /admin/login and returns a cookie-jar client.
+func adminClient(t *testing.T, ts *httptest.Server, cfg *config.Config) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &http.Client{Jar: jar}
+	body := `{"password":"` + cfg.AdminPassword + `"}`
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("login status=%d body=%s", resp.StatusCode, b)
+	}
+	return c
+}
+
+// withCSRF sets Origin + Sec-Fetch-Site for cookie-authenticated mutating requests.
+func withCSRF(req *http.Request, cfg *config.Config) {
+	req.Header.Set("Origin", cfg.WebPublicURL)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 }
 
 func TestChatCompletionsEndToEnd(t *testing.T) {
@@ -158,13 +196,14 @@ func TestAuthRejected(t *testing.T) {
 }
 
 func TestGeneratedKeyLifecycle(t *testing.T) {
-	ts, _, _ := newTestServer(t)
+	ts, cfg, _ := newTestServer(t)
+	ac := adminClient(t, ts, cfg)
 
 	// Create a key via the admin API.
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"cursor"}`))
-	req.SetBasicAuth("admin", "adminpass")
+	withCSRF(req, cfg)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ac.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,8 +234,8 @@ func TestGeneratedKeyLifecycle(t *testing.T) {
 
 	// Revoke, then it must fail.
 	del, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+created.Record.ID, nil)
-	del.SetBasicAuth("admin", "adminpass")
-	resp3, err := http.DefaultClient.Do(del)
+	withCSRF(del, cfg)
+	resp3, err := ac.Do(del)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,9 +277,9 @@ func TestKeyScopes(t *testing.T) {
 		t.Fatalf("master key on /v1/models: %d, want 200", code)
 	}
 
-	// Only the master key reaches the admin surface via Bearer.
-	if code := get("/admin/keys", master); code != http.StatusOK {
-		t.Fatalf("master key on /admin/keys: %d, want 200", code)
+	// MASTER_KEY_ADMIN default false: master is inference-only.
+	if code := get("/admin/keys", master); code != http.StatusUnauthorized {
+		t.Fatalf("master key on /admin/keys (default): %d, want 401", code)
 	}
 	if code := get("/admin/keys", prompt); code != http.StatusUnauthorized {
 		t.Fatalf("prompt key on /admin/keys: %d, want 401", code)
@@ -248,8 +287,17 @@ func TestKeyScopes(t *testing.T) {
 	if code := get("/admin/status", prompt); code != http.StatusUnauthorized {
 		t.Fatalf("prompt key on /admin/status: %d, want 401", code)
 	}
+	if code := get("/admin/status", master); code != http.StatusUnauthorized {
+		t.Fatalf("master key on /admin/status (default): %d, want 401", code)
+	}
+
+	// Opt-in: MASTER_KEY_ADMIN=true allows master on admin.
+	cfg.MasterKeyAdmin = true
+	if code := get("/admin/keys", master); code != http.StatusOK {
+		t.Fatalf("master key on /admin/keys (opt-in): %d, want 200", code)
+	}
 	if code := get("/admin/status", master); code != http.StatusOK {
-		t.Fatalf("master key on /admin/status: %d, want 200", code)
+		t.Fatalf("master key on /admin/status (opt-in): %d, want 200", code)
 	}
 }
 
@@ -257,6 +305,7 @@ func TestKeyScopes(t *testing.T) {
 // (no admin password) can mint and revoke prompt-scoped subkeys.
 func TestMasterKeyCreatesSubkeys(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
+	cfg.MasterKeyAdmin = true
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"subkey-via-master"}`))
@@ -329,11 +378,11 @@ func TestNodePassthroughRemoved(t *testing.T) {
 }
 
 func TestAdminStatusIncludesWalletAddress(t *testing.T) {
-	ts, _, _ := newTestServer(t)
+	ts, cfg, _ := newTestServer(t)
+	ac := adminClient(t, ts, cfg)
 
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/status", nil)
-	req.SetBasicAuth("admin", "adminpass")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ac.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,6 +404,7 @@ func TestAdminStatusIncludesWalletAddress(t *testing.T) {
 
 func TestImportKeyRestoresInference(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
+	cfg.MasterKeyAdmin = true
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 
 	// Import restores a previously issued sk-… after a storage wipe (empty store).
@@ -391,6 +441,7 @@ func TestImportKeyRestoresInference(t *testing.T) {
 
 func TestRevokeTombstoneListAndAuth(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
+	cfg.MasterKeyAdmin = true
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"tomb-me"}`))
@@ -483,6 +534,7 @@ func TestRevokeTombstoneListAndAuth(t *testing.T) {
 
 func TestRevokeTombstoneNoRevive(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
+	cfg.MasterKeyAdmin = true
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"no-revive"}`))
@@ -522,6 +574,7 @@ func TestRevokeTombstoneNoRevive(t *testing.T) {
 
 func TestRevokeMasterPromptRefused(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
+	cfg.MasterKeyAdmin = true
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 	for _, id := range []string{keymaker.MasterKeyID, keymaker.PromptKeyID} {
 		del, _ := http.NewRequest(http.MethodDelete, ts.URL+"/admin/keys/"+id, nil)
@@ -629,11 +682,12 @@ func TestUsageV1GeneratedSelfScope(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 	prompt := keymaker.PromptKey(cfg.APIKeySeed)
+	ac := adminClient(t, ts, cfg)
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"agent"}`))
-	req.SetBasicAuth("admin", "adminpass")
+	withCSRF(req, cfg)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ac.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,11 +731,12 @@ func TestUsageV1MasterFullInstance(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
 	master := keymaker.MasterKey(cfg.APIKeySeed)
 	prompt := keymaker.PromptKey(cfg.APIKeySeed)
+	ac := adminClient(t, ts, cfg)
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/keys", strings.NewReader(`{"name":"crew"}`))
-	req.SetBasicAuth("admin", "adminpass")
+	withCSRF(req, cfg)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ac.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

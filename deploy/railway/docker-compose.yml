@@ -42,6 +42,9 @@ services:
       - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # Railway volume persistence is operator-managed; keep 2FA opt-in (code default false).
+      # - ADMIN_2FA_REQUIRED=true
+      - MASTER_KEY_ADMIN=false
       - API_KEY_SEED=${API_KEY_SEED}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}

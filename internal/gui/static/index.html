@@ -802,9 +802,12 @@
       <div class="eyebrow">Establish connection</div>
       <h2>Operator.<em>_</em></h2>
       <p>Dial into your personal Morpheus gateway. One password opens the console; API keys live behind it.</p>
-      <form class="row" onsubmit="event.preventDefault(); login();">
-        <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
-        <button type="submit">Connect</button>
+      <form class="stack" onsubmit="event.preventDefault(); login();" style="gap:8px">
+        <div class="row">
+          <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
+          <button type="submit">Connect</button>
+        </div>
+        <input id="totpCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="2FA code (if enrolled)" style="width:100%">
       </form>
       <div class="note" id="loginMsg"></div>
     </div>
@@ -929,6 +932,24 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 
 
     <div class="panel" id="tab-security">
+      <section>
+        <h2>Two-factor auth</h2>
+        <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
+        <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
+          <div class="row">
+            <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
+            <button class="ghost" type="button" onclick="confirmTotpEnroll()">Confirm code</button>
+          </div>
+          <input id="enrollCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code from authenticator">
+          <div id="enrollSecret" class="note" style="word-break:break-all"></div>
+          <img id="enrollQr" alt="" style="display:none;max-width:200px;background:#fff;padding:8px;border-radius:8px">
+          <pre id="recoveryCodes" class="note" style="display:none;white-space:pre-wrap"></pre>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" type="button" onclick="logoutAllSessions()">Revoke all sessions</button>
+          <button class="ghost" type="button" onclick="logout()">Log out</button>
+        </div>
+      </section>
       <section>
         <h2>Security alerts</h2>
         <p class="note" style="margin-top:0">
@@ -1180,7 +1201,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 </div>
 
 <script>
-let auth = sessionStorage.getItem('uplink_auth') || '';
+let authed = false;
 let secrets = { wallet: '', prompt: '', master: '' };
 let promptKey = '';
 let allModels = [];
@@ -1243,15 +1264,20 @@ function showTab(id) {
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
   // Status / Sessions show live wallet + chain state — refresh on every visit.
-  if ((id === 'status' || id === 'activity') && auth && !document.getElementById('app').classList.contains('hidden')) {
+  if ((id === 'status' || id === 'activity') && authed && !document.getElementById('app').classList.contains('hidden')) {
     refresh({ force: true });
   }
 }
 
 async function api(path, opts = {}) {
-  opts.headers = Object.assign({}, opts.headers, { 'Authorization': 'Basic ' + auth });
+  opts = Object.assign({ credentials: 'same-origin' }, opts);
+  opts.headers = Object.assign({}, opts.headers);
+  if (opts.poll) {
+    opts.headers['X-Uplink-Poll'] = '1';
+    delete opts.poll;
+  }
   const res = await fetch(path, opts);
-  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || res.statusText);
@@ -1295,44 +1321,150 @@ function setLoggedIn(on) {
   else refreshConnectBaseUrl();
 }
 
-function logout() {
-  sessionStorage.removeItem('uplink_auth');
-  auth = '';
+function showLogin() {
+  authed = false;
   setLoggedIn(false);
+}
+
+async function logout() {
+  try {
+    await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch (_) {}
+  showLogin();
 }
 
 
 async function refreshSecurity() {
   const box = document.getElementById('securityAlerts');
-  if (!box) return;
-  try {
-    const data = await api('/admin/security');
-    const alerts = data.alerts || [];
-    if (!alerts.length) {
-      box.textContent = 'No recent alerts.';
-      return;
+  const stEl = document.getElementById('twoFactorStatus');
+  const enrollBox = document.getElementById('twoFactorEnroll');
+  if (box) {
+    try {
+      const data = await api('/admin/security');
+      const alerts = data.alerts || [];
+      if (!alerts.length) {
+        box.textContent = 'No recent alerts.';
+      } else {
+        box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
+          const when = a.at ? new Date(a.at).toLocaleString() : '';
+          return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
+            + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
+        }).join('') + '</ul>';
+      }
+    } catch (e) {
+      box.textContent = 'Failed to load: ' + e.message;
     }
-    box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
-      const when = a.at ? new Date(a.at).toLocaleString() : '';
-      return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
-        + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
-    }).join('') + '</ul>';
+  }
+  if (stEl) {
+    try {
+      const st = await api('/admin/status', { poll: true });
+      const tf = st.twoFactor || {};
+      let msg = tf.enrolled ? '2FA enrolled.' : '2FA not enrolled.';
+      if (tf.required && !tf.enrolled) msg += ' Enrollment required before other admin actions.';
+      if (tf.breakGlassWarn) msg += ' Break-glass wipe already applied — remove UPLINK_RESET_2FA.';
+      stEl.textContent = msg;
+      if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
+    } catch (e) {
+      stEl.textContent = 'Could not load 2FA status.';
+    }
+  }
+}
+
+async function startTotpEnroll() {
+  const secretEl = document.getElementById('enrollSecret');
+  const qr = document.getElementById('enrollQr');
+  const rec = document.getElementById('recoveryCodes');
+  if (rec) { rec.style.display = 'none'; rec.textContent = ''; }
+  try {
+    const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    secretEl.textContent = 'Secret (save offline): ' + (data.secret || '');
+    if (data.qrPngB64 && qr) {
+      qr.src = 'data:image/png;base64,' + data.qrPngB64;
+      qr.style.display = 'block';
+    } else if (qr) {
+      qr.style.display = 'none';
+    }
   } catch (e) {
-    box.textContent = 'Failed to load: ' + e.message;
+    secretEl.textContent = 'Enroll start failed: ' + e.message;
+  }
+}
+
+async function confirmTotpEnroll() {
+  const code = (document.getElementById('enrollCode') || {}).value || '';
+  const rec = document.getElementById('recoveryCodes');
+  try {
+    const data = await api('/admin/2fa/enroll/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (rec && data.recoveryCodes) {
+      rec.style.display = 'block';
+      rec.textContent = 'Recovery codes (shown once):
+' + data.recoveryCodes.join('
+');
+    }
+    refreshSecurity();
+  } catch (e) {
+    alert('Confirm failed: ' + e.message);
+  }
+}
+
+async function logoutAllSessions() {
+  if (!confirm('Revoke all admin sessions on this instance?')) return;
+  try {
+    await api('/admin/sessions/revoke-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    showLogin();
+  } catch (e) {
+    alert('Revoke failed: ' + e.message);
   }
 }
 
 async function login() {
   const pw = document.getElementById('pw').value;
-  auth = btoa('admin:' + pw);
+  const code = (document.getElementById('totpCode') || {}).value || '';
+  const msg = document.getElementById('loginMsg');
+  msg.textContent = '';
   try {
-    await api('/admin/status');
-    sessionStorage.setItem('uplink_auth', auth);
+    const res = await fetch('/admin/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw, code: code || undefined }),
+    });
+    if (res.status === 429) {
+      const ra = res.headers.get('Retry-After') || '?';
+      msg.textContent = 'Too many attempts. Retry after ' + ra + 's.';
+      return;
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      msg.textContent = 'Login failed: ' + (t || res.statusText);
+      return;
+    }
+    const data = await res.json();
+    authed = true;
     setLoggedIn(true);
+    if (data.need2fa) {
+      msg.textContent = 'Enroll 2FA from the Security tab before other admin actions.';
+    }
     refresh();
   } catch (e) {
-    document.getElementById('loginMsg').textContent = 'Connection failed: ' + e.message;
+    msg.textContent = 'Connection failed: ' + e.message;
   }
+}
+
+async function tryRestoreSession() {
+  try {
+    const res = await fetch('/admin/status', { credentials: 'same-origin' });
+    if (res.ok) {
+      authed = true;
+      setLoggedIn(true);
+      refresh();
+      return;
+    }
+  } catch (_) {}
+  showLogin();
 }
 
 function fmtMor(v) {
@@ -1371,7 +1503,7 @@ function fmtEnds(iso) {
 }
 
 function loggedIn() {
-  return !!auth && !document.getElementById('app').classList.contains('hidden');
+  return !!authed && !document.getElementById('app').classList.contains('hidden');
 }
 
 /** Refresh wallet/sessions/usage. force=true skips the short coalesce window. */
@@ -1391,7 +1523,7 @@ function refresh(opts = {}) {
 
 async function doRefresh() {
   try {
-    const st = await api('/admin/status');
+    const st = await api('/admin/status', { poll: true });
     const bal = st.balance || {};
     const mor = st.mor || {};
     lastStatusSnapshot = st;
@@ -2373,7 +2505,7 @@ async function closeAll() {
   try {
     const res = await fetch('/admin/pool/close-all', {
       method: 'POST',
-      headers: { 'Authorization': 'Basic ' + auth },
+      credentials: 'same-origin',
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok && !(body.ok > 0)) {
@@ -2540,8 +2672,8 @@ function refreshModelStakes() {
   const dur = probeDurationSec();
   const seq = ++stakesSeq;
   lockPreviewTimer = setTimeout(async () => {
-    if (!auth) {
-      // Preview mode: fake stakes from MOR/h × hours (display only).
+    if (!authed) {
+      // Preview mode: fake stakes from MOR/h x hours (display only).
       modelStakes = {};
       modelStakesDurationSec = dur;
       for (const m of allModels) {
@@ -3085,7 +3217,7 @@ startMatrixRain();
 
 const previewMode = new URLSearchParams(location.search).has('preview')
   || location.protocol === 'file:';
-if (previewMode && !auth) {
+if (previewMode && !authed) {
   enterUiPreview();
   showTab('status');
 } else {
@@ -3097,15 +3229,7 @@ if (previewMode && !auth) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && loggedIn()) refresh({ force: true });
   });
-  if (auth) {
-    (async () => {
-      try {
-        await api('/admin/status');
-        setLoggedIn(true);
-        refresh({ force: true });
-      } catch (e) { logout(); }
-    })();
-  }
+  tryRestoreSession();
 }
 </script>
 </body>

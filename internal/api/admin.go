@@ -36,7 +36,7 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		// Explicit reveal only — master key is never returned by default.
 		out["masterKey"] = s.masterKey
 		out["promptKey"] = s.promptKey
-		s.audit.Record("key_reveal", clientKey(r), "admin revealed master/prompt keys")
+		s.audit.Record("key_reveal", s.lockout.ClientIP(r), "admin revealed master/prompt keys")
 	} else {
 		out["masterKey"] = maskSecret(s.masterKey)
 		out["promptKey"] = maskSecret(s.promptKey)
@@ -83,7 +83,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.audit.Record("key_create", clientKey(r), "created key "+rec.ID)
+	s.audit.Record("key_create", s.lockout.ClientIP(r), "created key "+rec.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"key":    full, // shown once; only the hash is stored
 		"record": rec,
@@ -132,7 +132,7 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
 	}
-	s.audit.Record("key_revoke", clientKey(r), "revoked key "+id)
+	s.audit.Record("key_revoke", s.lockout.ClientIP(r), "revoked key "+id)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
@@ -202,8 +202,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Free-space for / and DATA_DIR — never include wallet/cookie/Bearer material.
+	// Free-space for / and DATA_DIR - never include wallet/cookie/Bearer material.
 	status["disk"] = collectDiskStatus("/", s.cfg.DataDir)
+	auth := s.store.GetAuthState()
+	status["twoFactor"] = map[string]any{
+		"enrolled":  auth.Enrolled,
+		"required":  s.cfg.Admin2FARequired,
+		"breakGlassWarn": s.breakGlassWarn(),
+	}
 
 	writeJSON(w, http.StatusOK, status)
 }

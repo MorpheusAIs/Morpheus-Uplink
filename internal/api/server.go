@@ -1,7 +1,7 @@
 // Package api wires the UPLINK HTTP surface:
 //
 //	/v1/*      OpenAI-compatible, Bearer sk-… auth (master or generated keys)
-//	/admin/*   management API, Basic auth (admin / ADMIN_PASSWORD)
+//	/admin/*   management API, HttpOnly session cookie (no Basic)
 //	/gui       embedded single-page management UI
 //
 // The former /node/* passthrough to the proxy-router admin API is removed:
@@ -9,12 +9,12 @@
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
+	"log"
 	"net/http"
-	"strconv"
 	"strings"
 
+	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/gui"
@@ -34,13 +34,19 @@ type Server struct {
 	housekeep *housekeep.Runner
 	masterKey string
 	promptKey string
-	guard     *loginGuard
+	sessions  *adminauth.SessionStore
+	lockout   *adminauth.Lockout
 	audit     *AuditLog
 	outflow   *OutflowAlert
 }
 
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
-	return &Server{
+	lo, err := adminauth.NewLockout(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		log.Printf("adminauth: trusted proxy CIDR: %v (using RemoteAddr only)", err)
+		lo, _ = adminauth.NewLockout(nil)
+	}
+	s := &Server{
 		cfg:       cfg,
 		store:     st,
 		catalog:   cat,
@@ -49,10 +55,14 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		housekeep: hk,
 		masterKey: keymaker.MasterKey(cfg.APIKeySeed),
 		promptKey: keymaker.PromptKey(cfg.APIKeySeed),
-		guard:     newLoginGuard(),
-		audit:     NewAuditLog(256),
+		sessions:  adminauth.NewSessionStore(),
+		lockout:   lo,
+		audit:     NewAuditLog(500),
 		outflow:   &OutflowAlert{},
 	}
+	s.applyBreakGlass()
+	s.ensurePasswordFingerprint()
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -64,7 +74,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/models", s.requireAPIKey(s.handleModels))
 	mux.HandleFunc("GET /v1/usage", s.requireAPIKey(s.handleUsageV1))
 
-	// Admin surface.
+	// Auth (public login; session-gated logout / 2FA enroll).
+	mux.HandleFunc("POST /admin/login", s.handleLogin)
+	mux.HandleFunc("POST /admin/logout", s.requireSession(s.handleLogout))
+	mux.HandleFunc("POST /admin/sessions/revoke-all", s.requireAdmin(s.handleRevokeAllSessions))
+	mux.HandleFunc("POST /admin/2fa/enroll/start", s.requireSession(s.handleTOTPEnrollStart))
+	mux.HandleFunc("POST /admin/2fa/enroll/confirm", s.requireSession(s.handleTOTPEnrollConfirm))
+	mux.HandleFunc("POST /admin/2fa/remove", s.requireAdmin(s.handleTOTPRemove))
+	mux.HandleFunc("POST /admin/2fa/recovery/regen", s.requireAdmin(s.handleRecoveryRegen))
+	mux.HandleFunc("GET /admin/audit", s.requireAdmin(s.handleAudit))
+
+	// Admin surface (session cookie).
 	mux.HandleFunc("GET /admin/keys", s.requireAdmin(s.handleListKeys))
 	mux.HandleFunc("POST /admin/keys", s.requireAdmin(s.handleCreateKey))
 	mux.HandleFunc("POST /admin/keys/import", s.requireAdmin(s.handleImportKey))
@@ -79,7 +99,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
 
-	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))
 	mux.HandleFunc("GET /gui", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/gui/", http.StatusMovedPermanently)
@@ -92,9 +111,6 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// requireAPIKey authenticates Bearer sk-… keys for the inference surface.
-// Every valid key — master, prompt, or generated — may prompt; the scope
-// difference only matters on the admin surface.
 func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -116,57 +132,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
-		// Overwrite is intentional: any client-supplied X-Uplink-Key-Id is ignored
-		// so callers cannot forge another key's identity for scoped handlers.
 		r.Header.Set("X-Uplink-Key-Id", keyID)
-		next(w, r)
-	}
-}
-
-// checkAdmin grants the admin surface to either the Basic-auth admin
-// password (humans, GUI) or the Bearer master key (automation) — never the
-// prompt key or generated keys.
-func (s *Server) checkAdmin(r *http.Request) bool {
-	if user, pass, ok := r.BasicAuth(); ok {
-		return user == "admin" &&
-			subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.AdminPassword)) == 1
-	}
-	if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-		return keymaker.Equal(token, s.masterKey)
-	}
-	return false
-}
-
-func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		key := clientKey(r)
-		_, _, basic := r.BasicAuth()
-		if basic {
-			if ok, retry := s.guard.allow(key); !ok {
-				s.audit.Record("lockout", key, "admin auth blocked")
-				w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-				http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-				return
-			}
-		}
-		if !s.checkAdmin(r) {
-			if basic {
-				d := s.guard.failure(key)
-				msg := "admin auth failed"
-				if d > 0 {
-					msg += "; backoff " + d.String()
-					w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-				}
-				s.audit.Record("login_failure", key, msg)
-			}
-			w.Header().Set("WWW-Authenticate", `Basic realm="uplink-admin"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if basic {
-			s.guard.success(key)
-			s.audit.Record("login_ok", key, "admin basic auth ok")
-		}
 		next(w, r)
 	}
 }
@@ -192,8 +158,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeOpenAIError mimics the OpenAI error envelope so SDKs surface a
-// readable message.
 func writeOpenAIError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
