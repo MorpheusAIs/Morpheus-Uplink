@@ -63,7 +63,7 @@ func main() {
 	pl.SetOnSessionClosed(func(sessionID string) {
 		detail, sec, err := rc.AwaitActualDuration(sessionID, 8, 2*time.Second)
 		if err != nil {
-			log.Printf("usage: closed session %s: %v", sessionID, err)
+			log.Printf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
 			return
 		}
 		model := cat.NameByID(detail.ModelAgentID)
@@ -75,7 +75,7 @@ func main() {
 		if detail.ClosedAt <= 0 {
 			src = "open+now"
 		}
-		log.Printf("usage: session %s actual %ds for model %s (%s)", sessionID, sec, model, src)
+		log.Printf("usage: session %s actual %ds for model %s (%s)", pool.ShortID(sessionID), sec, model, src)
 	})
 
 	hk, err := housekeep.New(housekeep.Config{
@@ -96,22 +96,22 @@ func main() {
 	// Boot session reconcile: gate session opens until the wallet's open
 	// sessions were listed once, adopting usable ones and closing expired,
 	// duplicate and unconfigured ones (see internal/pool/reconcile.go).
+	pl.SetOnReconcileState(srv.WriteReconcileStatus)
 	pl.Gate()
 	reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
 	defer reconcileCancel()
-	go pl.StartupReconcile(reconcileCtx, func() (map[string]bool, bool) {
+	go pl.StartupReconcile(reconcileCtx, pool.ConfiguredFrom(func() ([]string, error) {
 		models, err := cat.List()
-		if err != nil {
-			log.Printf("pool: reconcile: catalog unavailable, not closing sessions by model: %v", err)
-			return nil, false
-		}
-		ids := make(map[string]bool, len(models))
+		ids := make([]string, 0, len(models))
 		for _, m := range models {
-			ids[m.ID] = true
+			ids = append(ids, m.ID)
 		}
-		return ids, true
-	}, pool.ReconcileConfig{
+		return ids, err
+	}), pool.ReconcileConfig{
+		GateFor:     time.Duration(cfg.ReconcileGateSec) * time.Second,
+		RetryEvery:  time.Duration(cfg.ReconcileRetrySec) * time.Second,
 		OnReconcile: srv.AuditSessionReconcile,
+		OnEvent:     srv.AuditSessionReconcileEvent,
 		OnGiveUp:    srv.AuditSessionReconcileDeferred,
 	})
 

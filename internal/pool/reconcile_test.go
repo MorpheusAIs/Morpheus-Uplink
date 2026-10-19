@@ -5,13 +5,31 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
+
+// catalogServing returns ConfiguredModels backed by a real catalog fetching body.
+func catalogServing(t *testing.T, body string) ConfiguredModels {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+	t.Cleanup(ts.Close)
+	cat := catalog.New(ts.URL)
+	return ConfiguredFrom(func() ([]string, error) {
+		ms, err := cat.List()
+		var ids []string
+		for _, m := range ms {
+			ids = append(ids, m.ID)
+		}
+		return ids, err
+	})
+}
 
 const (
 	modelA = "0xaaaa000000000000000000000000000000000000000000000000000000000000"
@@ -47,7 +65,7 @@ func TestPlanReconcileDecisions(t *testing.T) {
 		"a-short":  "close:duplicate",
 		"a-buffer": "close:expired",
 		"b-past":   "close:expired",
-		"x-live":   "close:unconfigured",
+		"x-live":   "skip:unconfigured",
 	}
 	for id, w := range want {
 		if got[id] != w {
@@ -60,7 +78,7 @@ func TestPlanReconcileUnknownCatalogNeverClosesForModel(t *testing.T) {
 	now := time.Now()
 	open := []router.Session{sess("x-live", modelX, now.Add(time.Hour)), sess("x-past", modelX, now.Add(-time.Hour))}
 	got := decisions(PlanReconcile(open, now, nil, false))
-	if got["x-live"] != "adopt:unknown-catalog" || got["x-past"] != "close:expired" {
+	if got["x-live"] != "adopt:usable" || got["x-past"] != "close:expired" {
 		t.Fatalf("got %v", got)
 	}
 }
@@ -78,6 +96,8 @@ type fakeRouter struct {
 	opened   atomic.Int32
 	listFail atomic.Int32 // fail this many list calls
 	lists    atomic.Int32
+	failPage atomic.Int32 // >0: the page at this offset fails (midway)
+	closes   atomic.Int32
 }
 
 func (f *fakeRouter) server(t *testing.T) *httptest.Server {
@@ -92,19 +112,31 @@ func (f *fakeRouter) server(t *testing.T) *httptest.Server {
 			http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
+		off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		lim, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if lim <= 0 {
+			lim = 100
+		}
+		if fp := int(f.failPage.Load()); fp > 0 && off >= fp {
+			http.Error(w, `{"error":"page unavailable"}`, http.StatusBadGateway)
+			return
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		var open []map[string]any
-		if r.URL.Query().Get("offset") == "" || r.URL.Query().Get("offset") == "0" {
-			for _, s := range f.sessions {
-				if f.closed[s["Id"].(string)] == 0 {
-					open = append(open, s)
-				}
+		for _, s := range f.sessions {
+			if f.closed[s["Id"].(string)] == 0 {
+				open = append(open, s)
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": open})
+		page := []map[string]any{}
+		if off < len(open) {
+			page = open[off:min(off+lim, len(open))]
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": page})
 	})
 	mux.HandleFunc("POST /blockchain/sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		f.closes.Add(1)
 		f.mu.Lock()
 		f.closed[r.PathValue("id")]++
 		f.mu.Unlock()
@@ -138,16 +170,16 @@ func TestStartupReconcileAdoptsAndClosesThenNoDoubleOpen(t *testing.T) {
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{OnReconcile: func(r ReconcileResult) { got = r }})
-	if got.Open != 4 || got.Adopted != 1 || got.Closed != 3 || got.Failed != 0 || got.Attempts != 1 {
+	if got.Open != 4 || got.Adopted != 1 || got.Closed != 2 || got.Skipped != 1 || got.Failed != 0 || got.Attempts != 1 {
 		t.Fatalf("result %+v", got)
 	}
-	for _, id := range []string{"0xa-dup", "0xb-past", "0xx-live"} {
+	for _, id := range []string{"0xa-dup", "0xb-past"} {
 		if f.closed[id] != 1 {
 			t.Errorf("%s closed %d times", id, f.closed[id])
 		}
 	}
-	if f.closed["0xa-long"] != 0 {
-		t.Fatal("adoptable session was closed")
+	if f.closed["0xa-long"] != 0 || f.closed["0xx-live"] != 0 {
+		t.Fatal("adoptable or unconfigured session was closed")
 	}
 	res, err := p.EnsureDuration(modelA, 600)
 	if err != nil || res.Opened || res.SessionID != "0xa-long" {
@@ -158,7 +190,7 @@ func TestStartupReconcileAdoptsAndClosesThenNoDoubleOpen(t *testing.T) {
 	}
 	// Idempotent: a second run adopts the same session and closes nothing.
 	r2, err := p.reconcileOnce(configuredAB)
-	if err != nil || r2.Closed != 0 || r2.Adopted+r2.Skipped != 1 {
+	if err != nil || r2.Closed != 0 || r2.Adopted+r2.Skipped != 2 {
 		t.Fatalf("second run %+v %v", r2, err)
 	}
 }
@@ -252,4 +284,260 @@ func proxyTo(t *testing.T, base string, w http.ResponseWriter, r *http.Request) 
 	buf := make([]byte, 1<<16)
 	n, _ := resp.Body.Read(buf)
 	_, _ = w.Write(buf[:n])
+}
+
+// liveRows returns n live sessions for models not (or not exactly) in the catalog.
+func liveRows(now time.Time, models ...string) []map[string]any {
+	var out []map[string]any
+	for i, m := range models {
+		out = append(out, row("0xlive"+strconv.Itoa(i), m, now.Add(time.Hour)))
+	}
+	return out
+}
+
+func runReconcile(t *testing.T, f *fakeRouter, configured ConfiguredModels) (ReconcileResult, *Pool) {
+	t.Helper()
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p.Gate()
+	var got ReconcileResult
+	p.StartupReconcile(context.Background(), configured, ReconcileConfig{OnReconcile: func(r ReconcileResult) { got = r }})
+	return got, p
+}
+
+func TestReconcileEmptyCatalogClosesNoLiveSession(t *testing.T) {
+	f := &fakeRouter{closed: map[string]int{}, sessions: liveRows(time.Now(), modelA, modelX)}
+	got, _ := runReconcile(t, f, catalogServing(t, `{"models":[]}`))
+	if got.Closed != 0 || f.closes.Load() != 0 {
+		t.Fatalf("empty catalog closed live sessions: %+v", got)
+	}
+	if got.Adopted != 2 {
+		t.Fatalf("empty catalog is unknown: both usable sessions adopted, got %+v", got)
+	}
+}
+
+func TestReconcileBracesCatalogClosesNoLiveSession(t *testing.T) {
+	f := &fakeRouter{closed: map[string]int{}, sessions: liveRows(time.Now(), modelA, modelX)}
+	got, _ := runReconcile(t, f, catalogServing(t, `{}`))
+	if got.Closed != 0 || f.closes.Load() != 0 {
+		t.Fatalf("{} catalog closed live sessions: %+v", got)
+	}
+}
+
+func TestReconcileCaseMismatchedCatalogClosesNoLiveSession(t *testing.T) {
+	upper := "0xAAAA000000000000000000000000000000000000000000000000000000000000"
+	f := &fakeRouter{closed: map[string]int{}, sessions: liveRows(time.Now(), upper, modelX)}
+	got, p := runReconcile(t, f, catalogServing(t, `{"models":[{"Name":"a","Id":"`+modelA+`"}]}`))
+	if got.Closed != 0 || f.closes.Load() != 0 {
+		t.Fatalf("case-mismatched catalog closed live sessions: %+v", got)
+	}
+	if got.Adopted != 1 || got.Skipped != 1 {
+		t.Fatalf("want upper-case session adopted (case-insensitive match), unconfigured skipped: %+v", got)
+	}
+	if len(p.Snapshot()) != 1 {
+		t.Fatalf("snapshot %+v", p.Snapshot())
+	}
+}
+
+func TestReconcileUnconfiguredNeverClosed(t *testing.T) {
+	now := time.Now()
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{
+		row("0xx-1", modelX, now.Add(time.Hour)), row("0xx-2", modelX, now.Add(2*time.Hour)),
+	}}
+	got, _ := runReconcile(t, f, configuredAB)
+	if f.closes.Load() != 0 || got.Skipped != 2 || got.Adopted != 0 {
+		t.Fatalf("unconfigured sessions must be skipped, never closed: %+v closes=%d", got, f.closes.Load())
+	}
+}
+
+func TestReconcileCloseCapDefersExcess(t *testing.T) {
+	now := time.Now()
+	var rows []map[string]any
+	for i := 0; i < MaxBootCloses+7; i++ {
+		rows = append(rows, row("0xexp"+strconv.Itoa(i), modelA, now.Add(-time.Minute)))
+	}
+	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p.Gate()
+	var got ReconcileResult
+	var caps []ReconcileEvent
+	closeEv := 0
+	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{
+		OnReconcile: func(r ReconcileResult) { got = r },
+		OnEvent: func(ev ReconcileEvent) {
+			switch ev.Kind {
+			case "session_reconcile_cap":
+				caps = append(caps, ev)
+			case "session_reconcile_close":
+				closeEv++
+				if len(ev.Session) > 10 {
+					t.Errorf("close event carries a long id %q", ev.Session)
+				}
+			}
+		},
+	})
+	if got.Closed != MaxBootCloses || got.Deferred != 7 || int(f.closes.Load()) != MaxBootCloses {
+		t.Fatalf("cap: %+v closes=%d", got, f.closes.Load())
+	}
+	if len(caps) != 1 || caps[0].Count != 7 || closeEv != MaxBootCloses {
+		t.Fatalf("cap events %+v, close events %d", caps, closeEv)
+	}
+	if p.ReconcileStatus().State != "partial" || p.ReconcileStatus().Deferred != 7 {
+		t.Fatalf("state %+v", p.ReconcileStatus())
+	}
+}
+
+func TestReconcileCloseCapExpiredFirst(t *testing.T) {
+	now := time.Now()
+	var rows []map[string]any
+	for i := 0; i < MaxBootCloses; i++ {
+		rows = append(rows, row("0xdup"+strconv.Itoa(i), modelA, now.Add(time.Duration(10+i)*time.Minute)))
+	}
+	rows = append(rows, row("0xkeep", modelA, now.Add(5*time.Hour)), row("0xexp", modelB, now.Add(-time.Minute)))
+	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
+	got, _ := runReconcile(t, f, configuredAB)
+	if f.closed["0xexp"] != 1 || f.closed["0xkeep"] != 0 || got.Deferred != 1 {
+		t.Fatalf("expired must be closed first: %+v", got)
+	}
+}
+
+func TestReconcilePartialListFailureClosesNothing(t *testing.T) {
+	now := time.Now()
+	var rows []map[string]any
+	for i := 0; i < 150; i++ { // two pages of 100; the second page fails
+		rows = append(rows, row("0xexp"+strconv.Itoa(i), modelA, now.Add(-time.Minute)))
+	}
+	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
+	f.failPage.Store(100)
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p.Gate()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var gaveUp atomic.Bool
+	go p.StartupReconcile(ctx, configuredAB, ReconcileConfig{
+		Backoff: 5 * time.Millisecond, BackoffMax: 10 * time.Millisecond, GateFor: 40 * time.Millisecond,
+		RetryEvery: 10 * time.Millisecond, OnGiveUp: func(error) { gaveUp.Store(true) },
+	})
+	if _, err := p.EnsureDuration(modelA, 600); err != ErrSessionStateUnknown {
+		t.Fatalf("err = %v, want ErrSessionStateUnknown", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if f.closes.Load() != 0 || f.opened.Load() != 0 {
+		t.Fatalf("partial list: closes=%d opens=%d, want 0/0", f.closes.Load(), f.opened.Load())
+	}
+	st := p.ReconcileStatus()
+	if !gaveUp.Load() || !st.OpensHeld || (st.State != "deferred" && st.State != "retrying") {
+		t.Fatalf("state %+v", st)
+	}
+}
+
+func TestReconcileUnverifiableRowClosesNothing(t *testing.T) {
+	now := time.Now()
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{
+		row("0xexp", modelA, now.Add(-time.Minute)),
+		{"Id": "", "ModelAgentId": modelA, "Stake": "1", "EndsAt": now.Add(time.Hour).Unix(), "ClosedAt": 0},
+	}}
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	if _, err := p.reconcileOnce(configuredAB); err == nil {
+		t.Fatal("want error for a row without an id")
+	}
+	if f.closes.Load() != 0 || len(p.Snapshot()) != 0 {
+		t.Fatalf("unverifiable list acted on: closes=%d snap=%v", f.closes.Load(), p.Snapshot())
+	}
+}
+
+func TestReconcileGateReleasedBeforeSlowCloses(t *testing.T) {
+	now := time.Now()
+	release := make(chan struct{})
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{row("0xexp", modelB, now.Add(-time.Minute))}}
+	inner := f.server(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /blockchain/sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		proxyTo(t, inner.URL, w, r)
+	})
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxyTo(t, inner.URL, w, r) }))
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p.Gate()
+	done := make(chan struct{})
+	go func() {
+		p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{})
+		close(done)
+	}()
+	res := make(chan error, 1)
+	go func() { _, err := p.EnsureDuration(modelA, 600); res <- err }()
+	select {
+	case err := <-res:
+		if err != nil || f.opened.Load() != 1 {
+			t.Fatalf("open during slow close: err=%v opened=%d", err, f.opened.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("open blocked by a slow close")
+	}
+	if st := p.ReconcileStatus().State; st != "closing" {
+		t.Fatalf("state %q, want closing", st)
+	}
+	close(release)
+	<-done
+	if f.closed["0xexp"] != 1 || p.ReconcileStatus().State != "ok" {
+		t.Fatalf("close not finished: %v %+v", f.closed, p.ReconcileStatus())
+	}
+}
+
+func TestLateRecoveryClosesExpiredOnly(t *testing.T) {
+	now := time.Now()
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{
+		row("0xa-long", modelA, now.Add(2*time.Hour)), row("0xa-dup", modelA, now.Add(time.Hour)),
+		row("0xb-past", modelB, now.Add(-time.Minute)),
+	}}
+	f.listFail.Store(3)
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p.Gate()
+	var got ReconcileResult
+	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{
+		Backoff: 5 * time.Millisecond, GateFor: 8 * time.Millisecond, RetryEvery: 5 * time.Millisecond,
+		OnReconcile: func(r ReconcileResult) { got = r },
+	})
+	if !got.Late || f.closed["0xb-past"] != 1 || f.closed["0xa-dup"] != 0 || got.Closed != 1 {
+		t.Fatalf("late recovery must close expired only: %+v %v", got, f.closed)
+	}
+}
+
+func TestReconcileAuditsEveryAdoptAndClose(t *testing.T) {
+	now := time.Now()
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{
+		row("0xa-long-session-id-0000", modelA, now.Add(2*time.Hour)),
+		row("0xa-dup-session-id-00000", modelA, now.Add(20*time.Minute)),
+		row("0xb-past-session-id-0000", modelB, now.Add(-time.Minute)),
+	}}
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p.Gate()
+	var evs []ReconcileEvent
+	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{OnEvent: func(ev ReconcileEvent) { evs = append(evs, ev) }})
+	kinds := map[string]int{}
+	reasons := map[string]bool{}
+	for _, ev := range evs {
+		kinds[ev.Kind]++
+		reasons[ev.Reason] = true
+		if len(ev.Session) != 10 {
+			t.Errorf("session prefix %q is not 10 chars", ev.Session)
+		}
+	}
+	if kinds["session_reconcile_adopt"] != 1 || kinds["session_reconcile_close"] != 2 || !reasons["expired"] || !reasons["duplicate"] {
+		t.Fatalf("events %+v", evs)
+	}
 }

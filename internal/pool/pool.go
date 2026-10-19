@@ -45,6 +45,10 @@ type Pool struct {
 	reconcileMu sync.Mutex
 	stateKnown  atomic.Bool
 	gated       atomic.Bool
+	recMu       sync.Mutex
+	closing     map[string]bool // ids the reconcile is closing (rehydrate skips them)
+	recState    ReconcileState
+	onState     func(ReconcileState)
 
 	// Last on-chain open-session scan (for GUI), refreshed by Rehydrate.
 	chainMu      sync.Mutex
@@ -88,6 +92,14 @@ func (p *Pool) notifyClosed(sessionID string) {
 	}
 	// Caller may poll chain; never block close/rehydrate on usage attribution.
 	go p.onClosed(sessionID)
+}
+
+// SetOnReconcileState registers a callback for reconcile state changes
+// (used to write the status file).
+func (p *Pool) SetOnReconcileState(f func(ReconcileState)) {
+	p.recMu.Lock()
+	p.onState = f
+	p.recMu.Unlock()
 }
 
 // EnsureResult is returned by EnsureDuration.
@@ -141,7 +153,7 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 		}
 	}
 	if res, ok := p.cachedSession(modelID, durationSec); ok {
-		log.Printf("pool: adopted on-chain session %s for model %s", res.SessionID, modelID)
+		log.Printf("pool: adopted on-chain session %s for model %s", short(res.SessionID), modelID)
 		return res, nil
 	}
 
@@ -158,7 +170,7 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 		expiresAt: time.Now().Add(time.Duration(durationSec)*time.Second - expiryBuffer),
 	}
 	p.mu.Unlock()
-	log.Printf("pool: opened session %s for model %s (duration %ds)", sessionID, modelID, durationSec)
+	log.Printf("pool: opened session %s for model %s (duration %ds)", short(sessionID), modelID, durationSec)
 	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
 }
 
@@ -279,18 +291,21 @@ func (p *Pool) rehydrate(force bool) error {
 		if s.Stake != nil {
 			stakeStr = s.Stake.String()
 		}
+		if !usable && p.isClosing(s.ID) {
+			continue
+		}
 		if !usable {
 			// Past end (or inside buffer): ask router to close so unused
 			// returns and used moves to the daylock queue.
 			if err := p.client.CloseSession(s.ID); err != nil {
-				log.Printf("pool: close expired session %s: %v", s.ID, err)
+				log.Printf("pool: close expired session %s: %v", short(s.ID), err)
 				// Still show it — close failed, stake remains active.
 				display = append(display, ChainSession{
 					ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stakeStr,
 					EndsAt: time.Unix(s.EndsAt, 0).UTC(), Usable: false,
 				})
 			} else {
-				log.Printf("pool: closed expired session %s (model %s)", s.ID, s.ModelAgentID)
+				log.Printf("pool: closed expired session %s (model %s)", short(s.ID), s.ModelAgentID)
 				p.notifyClosed(s.ID)
 			}
 			continue
@@ -399,11 +414,11 @@ func (p *Pool) CloseAll() CloseAllResult {
 			if len(res.Errors) < 5 {
 				res.Errors = append(res.Errors, msg)
 			}
-			log.Printf("pool: close session %s: %v", sessionID, err)
+			log.Printf("pool: close session %s: %v", short(sessionID), err)
 			return
 		}
 		res.Closed++
-		log.Printf("pool: closed session %s (%s)", sessionID, label)
+		log.Printf("pool: closed session %s (%s)", short(sessionID), label)
 		p.notifyClosed(sessionID)
 	}
 	for modelID, e := range entries {

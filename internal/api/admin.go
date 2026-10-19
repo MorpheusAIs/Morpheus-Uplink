@@ -184,6 +184,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["balanceError"] = err.Error()
 	}
 	status["routerAuth"] = s.routerAuthStatus()
+	status["sessionReconcile"] = s.sessionReconcileStatus()
 
 	activeWei := s.pool.ActiveStakeWei()
 	mor := map[string]any{

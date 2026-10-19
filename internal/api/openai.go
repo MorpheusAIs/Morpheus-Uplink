@@ -11,6 +11,7 @@ import (
 
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
@@ -115,7 +116,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		// another stake while a usable session is still open on-chain.
 		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
 		if err != nil {
-			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, sessionID, err)
+			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 			if !isSessionDeadError(err) {
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
@@ -132,7 +133,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			sessionID = ensured.SessionID
 			res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
 			if err != nil {
-				log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, sessionID, err)
+				log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
 			}

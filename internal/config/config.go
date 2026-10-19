@@ -71,6 +71,10 @@ type Config struct {
 	// the router has rejected the scoped credential for this long.
 	// UPLINK_ROUTER_401_EXIT_SECONDS; 0 disables. Default 120.
 	Router401ExitSec int
+	// Boot session reconcile: how long opens wait for the first session
+	// list, and the background retry interval after that.
+	ReconcileGateSec  int
+	ReconcileRetrySec int
 	// Allowance manager status file (read-only to Uplink) and the directory
 	// where Uplink drops the presence-only resync request flag. Both are
 	// separate volumes and must never be under DATA_DIR.
@@ -116,6 +120,8 @@ func FromEnv() (*Config, error) {
 		RouterAuthFile:        os.Getenv("ROUTER_AUTH_FILE"),
 		RouterWalletFile:      strings.TrimSpace(os.Getenv("UPLINK_ROUTER_WALLET_FILE")),
 		Router401ExitSec:      getenvInt("UPLINK_ROUTER_401_EXIT_SECONDS", 120),
+		ReconcileGateSec:      getenvInt("UPLINK_RECONCILE_GATE_SECONDS", 60),
+		ReconcileRetrySec:     getenvInt("UPLINK_RECONCILE_RETRY_SECONDS", 30),
 		AllowanceStatusFile:   strings.TrimSpace(os.Getenv("UPLINK_ALLOWANCE_STATUS_FILE")),
 		AllowanceCtlDir:       strings.TrimSpace(os.Getenv("UPLINK_ALLOWANCE_CTL_DIR")),
 		AllowancePollSec:      getenvInt("UPLINK_ALLOWANCE_POLL_SECONDS", 60),
