@@ -601,7 +601,6 @@ func TestRevokeMasterPromptRefused(t *testing.T) {
 	}
 }
 
-
 func seedChatUsage(t *testing.T, ts *httptest.Server, bearer string) {
 	t.Helper()
 	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`

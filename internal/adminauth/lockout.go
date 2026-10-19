@@ -12,13 +12,17 @@ import (
 type Lockout struct {
 	mu sync.Mutex
 
-	perIP   map[string]*ipState
-	global  []time.Time // recent failure timestamps
-	globalUntil time.Time
-	globalBackoff time.Duration
+	perIP          map[string]*ipState
+	global         []time.Time // recent failure timestamps
+	globalUntil    time.Time
+	globalBackoff  time.Duration
+	globalLastTrip time.Time
 
 	trusted []*net.IPNet
 }
+
+const maxTrackedIPs = 10000
+const globalDecayAfter = time.Hour
 
 type ipState struct {
 	failures    int
@@ -28,8 +32,8 @@ type ipState struct {
 
 func NewLockout(trustedCIDRs []string) (*Lockout, error) {
 	l := &Lockout{
-		perIP:           map[string]*ipState{},
-		globalBackoff:   time.Minute,
+		perIP:         map[string]*ipState{},
+		globalBackoff: time.Minute,
 	}
 	for _, c := range trustedCIDRs {
 		c = strings.TrimSpace(c)
@@ -126,11 +130,17 @@ func (l *Lockout) Failure(ip string) time.Duration {
 		}
 	}
 	l.global = append(trimmed, now)
+	// Decay global backoff after a clean hour without trips.
+	if !l.globalLastTrip.IsZero() && now.Sub(l.globalLastTrip) >= globalDecayAfter {
+		l.globalBackoff = time.Minute
+		l.globalLastTrip = time.Time{}
+	}
 	if len(l.global) > 20 {
 		if l.globalBackoff < time.Minute {
 			l.globalBackoff = time.Minute
 		}
 		l.globalUntil = now.Add(l.globalBackoff)
+		l.globalLastTrip = now
 		d := l.globalBackoff
 		if l.globalBackoff < 15*time.Minute {
 			l.globalBackoff *= 2
@@ -138,7 +148,6 @@ func (l *Lockout) Failure(ip string) time.Duration {
 				l.globalBackoff = 15 * time.Minute
 			}
 		}
-		// Also bump per-IP
 		st := l.ensureIP(ip, now)
 		st.failures++
 		st.lastFail = now
@@ -168,6 +177,24 @@ func (l *Lockout) Failure(ip string) time.Duration {
 func (l *Lockout) ensureIP(ip string, now time.Time) *ipState {
 	st := l.perIP[ip]
 	if st == nil {
+		if len(l.perIP) >= maxTrackedIPs {
+			// Evict a stale unlocked entry to bound memory.
+			for k, v := range l.perIP {
+				if now.After(v.lockedUntil) && (v.failures == 0 || now.Sub(v.lastFail) >= time.Hour) {
+					delete(l.perIP, k)
+					break
+				}
+			}
+			// Still full: drop an arbitrary unlocked key.
+			if len(l.perIP) >= maxTrackedIPs {
+				for k, v := range l.perIP {
+					if now.After(v.lockedUntil) {
+						delete(l.perIP, k)
+						break
+					}
+				}
+			}
+		}
 		st = &ipState{}
 		l.perIP[ip] = st
 	}

@@ -1,4 +1,4 @@
-# MUST 3 proof: sidecar writes 0400 as root→chown 10001; uplink-like reader mounts :ro as 10001.
+# MUST 3 proof: sidecar writes 0400 as root->chown 10001; uplink-like reader mounts :ro as 10001.
 # Also proves entrypoint-style root copy into a rw data volume.
 services:
   router-user-init:

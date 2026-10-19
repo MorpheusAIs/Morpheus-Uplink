@@ -13,7 +13,6 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
-
 // recordsForAdminJSON returns key records with secrets forced empty when revoked.
 func recordsForAdminJSON(recs []keymaker.Record) []keymaker.Record {
 	out := make([]keymaker.Record, len(recs))
@@ -206,8 +205,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status["disk"] = collectDiskStatus("/", s.cfg.DataDir)
 	auth := s.store.GetAuthState()
 	status["twoFactor"] = map[string]any{
-		"enrolled":  auth.Enrolled,
-		"required":  s.cfg.Admin2FARequired,
+		"enrolled":       auth.Enrolled,
+		"required":       s.cfg.Admin2FARequired,
 		"breakGlassWarn": s.breakGlassWarn(),
 	}
 

@@ -1,6 +1,6 @@
 module github.com/absgrafx/morpheus-uplink
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/boombuler/barcode v1.1.0

@@ -10,11 +10,11 @@ import (
 
 // OutflowAlert is a minimal on-chain outflow watch (read-only RPC).
 type OutflowAlert struct {
-	mu            sync.Mutex
-	lastETH       *big.Int
-	lastMOR       *big.Int
-	lastChecked   time.Time
-	alerts        []AuditEvent
+	mu          sync.Mutex
+	lastETH     *big.Int
+	lastMOR     *big.Int
+	lastChecked time.Time
+	alerts      []AuditEvent
 }
 
 func (s *Server) handleSecurity(w http.ResponseWriter, r *http.Request) {

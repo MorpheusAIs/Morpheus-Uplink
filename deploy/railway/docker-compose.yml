@@ -9,7 +9,7 @@
 # ETH_NODE_ADDRESS, WEB_PUBLIC_URL, UPLINK_MOR_ALLOWANCE_WEI.
 #
 # H3: single replica for wallet-bearing proxy-router.
-# Lumerin pin: v7.15.0 digest. Uplink image TODO digest until Alan build go.
+# Lumerin pin: v7.15.0 digest. Uplink image TODO digest until release pin.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -18,8 +18,8 @@ x-logging: &default-logging
 
 services:
   uplink:
-    # TODO digest: pin after Alan build go (CI release check fails if still :latest or TODO)
-    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AFTER_ALAN_BUILD
+    # TODO digest: pin at release (CI release check fails if still :latest or TODO)
+    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -45,6 +45,7 @@ services:
       # Railway volume persistence is operator-managed; keep 2FA opt-in (code default false).
       # - ADMIN_2FA_REQUIRED=true
       - MASTER_KEY_ADMIN=false
+      - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - API_KEY_SEED=${API_KEY_SEED}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}

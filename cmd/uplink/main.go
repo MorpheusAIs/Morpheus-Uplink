@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ import (
 var version = "dev"
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	api.Version = version
 	cfg, err := config.FromEnv()
 	if err != nil {

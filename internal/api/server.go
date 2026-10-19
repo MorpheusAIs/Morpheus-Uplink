@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/login", s.handleLogin)
 	mux.HandleFunc("POST /admin/logout", s.requireSession(s.handleLogout))
 	mux.HandleFunc("POST /admin/sessions/revoke-all", s.requireAdmin(s.handleRevokeAllSessions))
+	mux.HandleFunc("GET /admin/2fa/status", s.requireSession(s.handleTOTPStatus))
 	mux.HandleFunc("POST /admin/2fa/enroll/start", s.requireSession(s.handleTOTPEnrollStart))
 	mux.HandleFunc("POST /admin/2fa/enroll/confirm", s.requireSession(s.handleTOTPEnrollConfirm))
 	mux.HandleFunc("POST /admin/2fa/remove", s.requireAdmin(s.handleTOTPRemove))

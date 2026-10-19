@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
@@ -89,8 +90,9 @@ func RandomBase32(nBytes int) (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b), nil
 }
 
-// PasswordFingerprint is HMAC-like SHA256(seed || ":" || password) for change detection.
+// PasswordFingerprint is HMAC-SHA256(seed, password) for change detection.
 func PasswordFingerprint(apiKeySeed, password string) string {
-	sum := sha256.Sum256([]byte(apiKeySeed + "\x00" + password))
-	return hex.EncodeToString(sum[:])
+	mac := hmac.New(sha256.New, []byte(apiKeySeed))
+	_, _ = mac.Write([]byte(password))
+	return hex.EncodeToString(mac.Sum(nil))
 }

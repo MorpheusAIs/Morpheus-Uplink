@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +83,13 @@ func (s *Server) handleTOTPEnrollStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request) {
+	ip := s.lockout.ClientIP(r)
+	if ok, retry := s.lockout.Allow(ip); !ok {
+		s.auditEvent("login_lockout", ip, "blocked", "lockout")
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+		return
+	}
 	var req struct {
 		Code string `json:"code"`
 	}
@@ -117,9 +125,18 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 	secret := string(secretBytes)
 	ok, step, err := adminauth.ValidateTOTP(secret, req.Code, 0)
 	if err != nil || !ok {
+		d := s.lockout.Failure(ip)
+		s.auditEvent("login", ip, "fail", "bad_totp_enroll")
+		if d > 0 {
+			s.auditEvent("login_lockout", ip, "blocked", "lockout")
+			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, "invalid code", http.StatusUnauthorized)
 		return
 	}
+	s.lockout.Success(ip)
 	// Fresh encrypt for stored blob (new nonce).
 	enc, err := adminauth.EncryptSecret(aesKey, secretBytes)
 	if err != nil {
@@ -161,6 +178,13 @@ func generateRecoveryCodes(n int) (plain []string, hashes []string, err error) {
 }
 
 func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
+	ip := s.lockout.ClientIP(r)
+	if ok, retry := s.lockout.Allow(ip); !ok {
+		s.auditEvent("login_lockout", ip, "blocked", "lockout")
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+		return
+	}
 	var req struct {
 		Password string `json:"password"`
 		Code     string `json:"code"`
@@ -169,9 +193,14 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	ip := s.lockout.ClientIP(r)
 	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
-		s.lockout.Failure(ip)
+		d := s.lockout.Failure(ip)
+		if d > 0 {
+			s.auditEvent("login_lockout", ip, "blocked", "lockout")
+			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -180,9 +209,15 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not enrolled", http.StatusBadRequest)
 		return
 	}
-	ok, _ := s.verifySecondFactor(req.Code, &auth)
+	ok, _ := s.verifySecondFactor(req.Code, &auth, ip)
 	if !ok {
-		s.lockout.Failure(ip)
+		d := s.lockout.Failure(ip)
+		if d > 0 {
+			s.auditEvent("login_lockout", ip, "blocked", "lockout")
+			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -197,6 +232,13 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
+	ip := s.lockout.ClientIP(r)
+	if ok, retry := s.lockout.Allow(ip); !ok {
+		s.auditEvent("login_lockout", ip, "blocked", "lockout")
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+		return
+	}
 	var req struct {
 		Password string `json:"password"`
 		Code     string `json:"code"`
@@ -205,9 +247,14 @@ func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	ip := s.lockout.ClientIP(r)
 	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
-		s.lockout.Failure(ip)
+		d := s.lockout.Failure(ip)
+		if d > 0 {
+			s.auditEvent("login_lockout", ip, "blocked", "lockout")
+			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -216,9 +263,15 @@ func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not enrolled", http.StatusBadRequest)
 		return
 	}
-	ok, _ := s.verifySecondFactor(req.Code, &auth)
+	ok, _ := s.verifySecondFactor(req.Code, &auth, ip)
 	if !ok {
-		s.lockout.Failure(ip)
+		d := s.lockout.Failure(ip)
+		if d > 0 {
+			s.auditEvent("login_lockout", ip, "blocked", "lockout")
+			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -242,4 +295,16 @@ func subtleCompare(a, b string) int {
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": s.audit.Recent(500)})
+}
+
+// handleTOTPStatus is session-gated (not Admin2FARequired) so a password holder
+// can learn enrollment state and open the enroll UI before other admin routes work.
+func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
+	auth := s.store.GetAuthState()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enrolled":       auth.Enrolled,
+		"required":       s.cfg.Admin2FARequired,
+		"breakGlassWarn": s.breakGlassWarn(),
+		"need2fa":        s.cfg.Admin2FARequired && !auth.Enrolled,
+	})
 }

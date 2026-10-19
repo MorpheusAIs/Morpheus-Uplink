@@ -1,0 +1,8 @@
+services:
+  x:
+    ports:
+      - "127.0.0.1:8082:8082"
+    environment:
+      - ROUTER_URL=http://proxy-router:8082
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]

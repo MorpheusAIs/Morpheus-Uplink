@@ -103,9 +103,8 @@ jobs:
               echo "No findings."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          # Keep the gate visible in logs; do not block stock-7.11 hardening PRs on
-          # pre-existing geth call-graph findings.
-          exit 0
+          # Fail the job on findings (stdlib/toolchain bumps must clear the board).
+          exit "$code"
       - name: Deploy files must be ASCII (SecretVM btoa chokes on Latin1+)
         run: |
           if LC_ALL=C grep -rnP '[^\x00-\x7F]' deploy/ docker-compose.local.yml .env.example; then
@@ -158,20 +157,31 @@ jobs:
           echo "✅ SecretVM compose prompts for seven secrets only; non-secrets stay in configs:"
       - name: Templates must not publish router ports 8082 or 3333
         run: |
-          # Public host port mappings only (left side of host:container).
-          # Internal healthchecks and ROUTER_URL strings mentioning :8082 are OK.
-          if grep -nE '^[[:space:]]*-[[:space:]]*("?)([0-9.:\\[\\]]*):(8082|3333)\1' \
-              deploy/*/docker-compose.yml docker-compose.local.yml 2>/dev/null \
-            | grep -vE '127\.0\.0\.1:8082'; then
-            echo "❌ Router ports 8082/3333 must not be published (except local 127.0.0.1:8082)"
+          bash scripts/check-router-ports.sh
+          # Fixture: bad file must fail
+          if bash scripts/check-router-ports.sh 2>/dev/null; then
+            :
+          fi
+          # Unit-style: pattern must catch bad publishes
+          if ! grep -nE '^[[:space:]]*-[[:space:]]*"?([0-9.]+:)?(8082|3333):' scripts/testdata/ports-bad.yml >/dev/null; then
+            echo "port guard regex missed bad fixture"
             exit 1
           fi
-          # Also catch unquoted forms and 3333 anywhere as host publish
-          if grep -nE '^[[:space:]]*-[[:space:]]*[\'\''"]?[0-9.*:]*3333' deploy/*/docker-compose.yml; then
-            echo "❌ Port 3333 must not be published"
+          if ! grep -nE 'published:[[:space:]]*"?(8082|3333)"?' scripts/testdata/ports-bad.yml >/dev/null; then
+            echo "port guard regex missed published: fixture"
             exit 1
           fi
-          echo "✅ No public 8082/3333 publishes in deploy templates"
+          if grep -nE '^[[:space:]]*-[[:space:]]*"?([0-9.]+:)?(8082|3333):' scripts/testdata/ports-ok.yml | grep -v '127\.0\.0\.1:8082'; then
+            echo "port guard regex false-positive on ok fixture"
+            exit 1
+          fi
+          echo "OK: port guard regex fixtures"
+      - name: Router image digest must stay pinned
+        run: bash scripts/check-router-digest.sh
+      - name: Compose templates must render
+        run: bash scripts/check-compose-config.sh
+      - name: GUI script must parse
+        run: bash scripts/check-gui-js.sh
       - name: Uplink image lines must not be :latest without TODO (script self-check)
         run: |
           bash scripts/check-uplink-image-pins.sh --allow-todo

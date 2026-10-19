@@ -36,6 +36,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		d := s.lockout.Failure(ip)
 		s.auditEvent("login", ip, "fail", "bad_password")
 		if d > 0 {
+			s.auditEvent("login_lockout", ip, "blocked", "lockout")
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
 			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
 			return
@@ -47,16 +48,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	auth := s.store.GetAuthState()
 	if auth.Enrolled {
 		if req.Code == "" {
-			s.lockout.Failure(ip)
+			// Correct password, missing code: prompt without burning a lockout strike.
 			s.auditEvent("login", ip, "fail", "2fa_required")
-			http.Error(w, "2fa required", http.StatusUnauthorized)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		ok, reason := s.verifySecondFactor(req.Code, &auth)
+		ok, reason := s.verifySecondFactor(req.Code, &auth, ip)
 		if !ok {
 			d := s.lockout.Failure(ip)
 			s.auditEvent("login", ip, "fail", reason)
 			if d > 0 {
+				s.auditEvent("login_lockout", ip, "blocked", "lockout")
 				w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
 				http.Error(w, "too many failed logins", http.StatusTooManyRequests)
 				return
@@ -82,7 +84,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) verifySecondFactor(code string, auth *store.AuthState) (bool, string) {
+func (s *Server) verifySecondFactor(code string, auth *store.AuthState, ip string) (bool, string) {
 	code = strings.TrimSpace(code)
 	// Try recovery codes first (single use).
 	h := adminauth.HashString(strings.ToUpper(strings.ReplaceAll(code, " ", "")))
@@ -91,7 +93,7 @@ func (s *Server) verifySecondFactor(code string, auth *store.AuthState) (bool, s
 	for i, rh := range auth.RecoveryHashes {
 		if rh == h || rh == h2 {
 			auth.RecoveryHashes = append(auth.RecoveryHashes[:i], auth.RecoveryHashes[i+1:]...)
-			s.auditEvent("recovery_code_used", "", "ok", "")
+			s.auditEvent("recovery_code_used", ip, "ok", "")
 			return true, "recovery"
 		}
 	}
@@ -155,7 +157,7 @@ func (s *Server) auditEvent(event, ip, result, reason string) {
 	if reason != "" {
 		msg += " " + reason
 	}
-	s.audit.Record(event, ip, msg)
+	s.audit.RecordFull(event, ip, ip, result, msg)
 }
 
 // requireAdmin enforces cookie session (or optional master Bearer) + CSRF + 2FA gate.
@@ -234,7 +236,7 @@ func (s *Server) applyBreakGlass() {
 		return
 	}
 	if auth.BreakGlassDone {
-		s.audit.Record("2fa_reset_breakglass", "", "already wiped; remove UPLINK_RESET_2FA")
+		s.auditEvent("2fa_reset_breakglass", "", "blocked", "already wiped; remove UPLINK_RESET_2FA")
 		return
 	}
 	auth = store.AuthState{BreakGlassDone: true, PasswordFingerprint: adminauth.PasswordFingerprint(s.cfg.APIKeySeed, s.cfg.AdminPassword)}

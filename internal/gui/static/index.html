@@ -1338,34 +1338,45 @@ async function refreshSecurity() {
   const box = document.getElementById('securityAlerts');
   const stEl = document.getElementById('twoFactorStatus');
   const enrollBox = document.getElementById('twoFactorEnroll');
+  if (stEl) {
+    try {
+      const res = await fetch('/admin/2fa/status', { credentials: 'same-origin' });
+      if (res.status === 401) { showLogin(); return; }
+      if (!res.ok) throw new Error(await res.text() || res.statusText);
+      const tf = await res.json();
+      let msg = tf.enrolled ? '2FA enrolled.' : '2FA not enrolled.';
+      if (tf.required && !tf.enrolled) msg += ' Enrollment required before other admin actions.';
+      if (tf.breakGlassWarn) msg += ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.';
+      stEl.textContent = msg;
+      if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
+      if (tf.need2fa) showTab('security');
+    } catch (e) {
+      stEl.textContent = 'Could not load 2FA status.';
+    }
+  }
   if (box) {
     try {
-      const data = await api('/admin/security');
-      const alerts = data.alerts || [];
-      if (!alerts.length) {
-        box.textContent = 'No recent alerts.';
+      const res = await fetch('/admin/security', { credentials: 'same-origin' });
+      if (res.status === 401) { showLogin(); return; }
+      if (res.status === 403) {
+        box.textContent = 'Security alerts available after 2FA enrollment.';
+      } else if (!res.ok) {
+        box.textContent = 'Failed to load: ' + (await res.text() || res.statusText);
       } else {
-        box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
-          const when = a.at ? new Date(a.at).toLocaleString() : '';
-          return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
-            + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
-        }).join('') + '</ul>';
+        const data = await res.json();
+        const alerts = data.alerts || [];
+        if (!alerts.length) {
+          box.textContent = 'No recent alerts.';
+        } else {
+          box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
+            const when = a.at ? new Date(a.at).toLocaleString() : '';
+            return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
+              + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
+          }).join('') + '</ul>';
+        }
       }
     } catch (e) {
       box.textContent = 'Failed to load: ' + e.message;
-    }
-  }
-  if (stEl) {
-    try {
-      const st = await api('/admin/status', { poll: true });
-      const tf = st.twoFactor || {};
-      let msg = tf.enrolled ? '2FA enrolled.' : '2FA not enrolled.';
-      if (tf.required && !tf.enrolled) msg += ' Enrollment required before other admin actions.';
-      if (tf.breakGlassWarn) msg += ' Break-glass wipe already applied — remove UPLINK_RESET_2FA.';
-      stEl.textContent = msg;
-      if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
-    } catch (e) {
-      stEl.textContent = 'Could not load 2FA status.';
     }
   }
 }
@@ -1400,9 +1411,7 @@ async function confirmTotpEnroll() {
     });
     if (rec && data.recoveryCodes) {
       rec.style.display = 'block';
-      rec.textContent = 'Recovery codes (shown once):
-' + data.recoveryCodes.join('
-');
+      rec.textContent = 'Recovery codes (shown once):\n' + data.recoveryCodes.join('\n');
     }
     refreshSecurity();
   } catch (e) {
@@ -1447,6 +1456,9 @@ async function login() {
     setLoggedIn(true);
     if (data.need2fa) {
       msg.textContent = 'Enroll 2FA from the Security tab before other admin actions.';
+      showTab('security');
+      refreshSecurity();
+      return;
     }
     refresh();
   } catch (e) {
@@ -1462,6 +1474,22 @@ async function tryRestoreSession() {
       setLoggedIn(true);
       refresh();
       return;
+    }
+    // 403 with ADMIN_2FA_REQUIRED: session may be valid but enroll pending.
+    if (res.status === 403) {
+      const st = await fetch('/admin/2fa/status', { credentials: 'same-origin' });
+      if (st.ok) {
+        const tf = await st.json();
+        authed = true;
+        setLoggedIn(true);
+        if (tf.need2fa) {
+          showTab('security');
+          refreshSecurity();
+          return;
+        }
+        refresh();
+        return;
+      }
     }
   } catch (_) {}
   showLogin();

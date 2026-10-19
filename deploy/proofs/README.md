@@ -1,6 +1,6 @@
 # Auth-file handoff proof (MUST 3)
 
-Reproduces the sidecar → Uplink `router.auth` ownership fix.
+Reproduces the sidecar -> Uplink `router.auth` ownership fix.
 
 ```bash
 cd deploy/proofs

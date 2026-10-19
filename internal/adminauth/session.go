@@ -27,7 +27,7 @@ type Session struct {
 }
 
 type SessionStore struct {
-	mu   sync.Mutex
+	mu     sync.Mutex
 	byHash map[string]*Session // hash -> session
 }
 
