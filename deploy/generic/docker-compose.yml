@@ -99,7 +99,6 @@ services:
     image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
     restart: unless-stopped
     logging: *default-logging
-    init: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -108,6 +107,8 @@ services:
       - CHOWN
       - SETUID
       - SETGID
+    # No init: true here: the entrypoint execs the app as PID 1 so docker stop
+    # delivers SIGTERM to it and open sessions close before exit.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]

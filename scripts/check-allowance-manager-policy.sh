@@ -10,6 +10,7 @@
 #      UPLINK_MOR_ALLOWANCE_MODE (ceiling opt-in) never appears in the
 #      SecretVM or generic templates.
 #  B   Uplink's /ctl and /status mounts are never under DATA_DIR.
+#  S   uplink: no init: true, no CAP_KILL, stop_grace_period >= 45s.
 # Self-test: each rule must reject a deliberately broken render.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -48,6 +49,18 @@ def vols(s):
 def env(s):
     e = svcs[s].get("environment") or {}
     return e if isinstance(e, dict) else {}
+
+if UP in svcs:
+    u = svcs[UP]
+    if u.get("init"):
+        bad.append("S: uplink sets init: true (SIGTERM must reach the app as PID 1)")
+    if "KILL" in [c.upper().replace("CAP_", "") for c in (u.get("cap_add") or [])]:
+        bad.append("S: uplink adds CAP_KILL")
+    g = str(u.get("stop_grace_period") or "")
+    m = re.fullmatch(r"(?:(\d+)m)?(?:(\d+)s)?", g)
+    secs = (int(m.group(1) or 0) * 60 + int(m.group(2) or 0)) if (g and m) else 0
+    if secs < 45:
+        bad.append("S: uplink stop_grace_period %r < 45s" % g)
 
 for s in svcs:
     for v in vols(s):
@@ -115,7 +128,7 @@ if UP in svcs:
 if bad:
     for b in bad: print("BAD(%s): %s" % (name, b), file=sys.stderr)
     sys.exit(1)
-print("OK(%s): C/T8/T9/B" % name)
+print("OK(%s): C/T8/T9/B/S" % name)
 PY
 
 render() { (cd "$(dirname "$1")" && docker compose -f "$(basename "$1")" config --format json) > "$2"; }
@@ -148,10 +161,13 @@ if m == "router_ports": s["proxy-router"]["ports"] = [{"target": 9999, "publishe
 if m == "ctl_in_data":
     for v in s["uplink"]["volumes"]:
         if v["target"] == "/ctl": v["target"] = "/data/ctl"
+if m == "up_init": s["uplink"]["init"] = True
+if m == "up_kill": s["uplink"]["cap_add"] = s["uplink"].get("cap_add", []) + ["KILL"]
+if m == "up_grace": s["uplink"]["stop_grace_period"] = "10s"
 json.dump(d, open(sys.argv[2], "w"))
 PY
 }
-for m in uplink_cred mgr_rw mgr_net mgr_cap mgr_image mgr_sock mgr_auth router_ports ctl_in_data; do
+for m in uplink_cred mgr_rw mgr_net mgr_cap mgr_image mgr_sock mgr_auth router_ports ctl_in_data up_init up_kill up_grace; do
   mutate "$m"
   if check "selftest-$m" "$tmp/bad.json" "$ROOT/deploy/secretvm/docker-compose.yml" manager 2>/dev/null; then
     echo "BAD: self-test $m was not rejected" >&2; exit 1
@@ -170,4 +186,4 @@ s = s[:j] + "UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI:-}" + s[j + len
 open(sys.argv[2], "w").write(s)
 PY
 if check selftest-expr "$tmp/base.json" "$tmp/raw2.yml" manager 2>/dev/null; then echo "BAD: self-test expr not rejected" >&2; exit 1; fi
-echo "OK: allowance manager policy (self-tests reject 11 broken variants)"
+echo "OK: allowance manager policy (self-tests reject 14 broken variants)"
