@@ -122,10 +122,13 @@ while :; do
   if [ -e "$FLAG" ] || [ -L "$FLAG" ]; then flag=1; fi
 
   marker=""
+  exact=0
   if [ -f "$MGR_DIR/mode" ] && [ ! -L "$MGR_DIR/mode" ]; then
-    # Byte-exact: the trailing x stops $(...) from stripping newlines, so
-    # "balance\n" or "balance\r" never matches.
-    marker=$(head -c 16 "$MGR_DIR/mode" 2>/dev/null; printf x)
+    # Exact bytes: only the 7 bytes "balance" qualify. cmp compares raw
+    # bytes, so a trailing newline, CR or NUL never matches ($(...) would
+    # drop NULs). marker is for reporting only.
+    if printf balance | cmp -s - "$MGR_DIR/mode"; then exact=1; fi
+    marker=$(head -c 16 "$MGR_DIR/mode" 2>/dev/null | tr -d '\000'; printf x)
     marker=${marker%x}
   fi
 
@@ -133,8 +136,8 @@ while :; do
     MODE="cap"; SOURCE="override"; skip cap_mode; LAST_RESULT="skipped"
     # A request in cap mode is acknowledged (removed) and ignored.
     [ "$flag" = 1 ] && rm -f "$FLAG" 2>/dev/null
-  elif [ "$marker" != "balance" ]; then
-    MODE="${marker:-unknown}"; [ "$MODE" = "balance" ] || MODE="cap"
+  elif [ "$exact" != 1 ]; then
+    MODE="cap"
     [ "$marker" = "ceiling" ] && MODE="ceiling"
     SOURCE="$MODE"; skip marker; LAST_RESULT="skipped"
     [ "$flag" = 1 ] && rm -f "$FLAG" 2>/dev/null

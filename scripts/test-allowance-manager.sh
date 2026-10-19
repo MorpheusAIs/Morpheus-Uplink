@@ -68,7 +68,7 @@ for v in "0" "007" "1e18" " " "abc"; do
   echo "OK no write with UPLINK_MOR_ALLOWANCE_WEI=[$v]"
 done
 cp "$d/mgr/mode" "$W/mode.bak"
-for m in absent cap ceiling "balance " "Balance" "" 'balance\n' 'balance\r' 'balance\r\n'; do
+for m in absent cap ceiling "balance " "Balance" "" 'balance\n' 'balance\r' 'balance\r\n' 'balance\0' 'bal\0ance'; do
   if [ "$m" = absent ]; then rm -f "$d/mgr/mode"; else printf "$m" > "$d/mgr/mode"; fi
   manage "$d" 3
   [ "$(confirms)" = "$base" ] || { echo "A1: wrote with marker=[$m]" >&2; exit 1; }
