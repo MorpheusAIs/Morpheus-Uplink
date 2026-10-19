@@ -6,7 +6,7 @@
 #
 # Operator fillables (Encrypted Secrets): ADMIN_PASSWORD, API_KEY_SEED,
 # COOKIE_CONTENT, WALLET_PRIVATE_KEY, ETH_NODE_ADDRESS, WEB_PUBLIC_URL,
-# UPLINK_MOR_ALLOWANCE_WEI.
+# UPLINK_MOR_ALLOWANCE_WEI (optional manual cap; auto from balance if empty).
 #
 # Lumerin pin: v7.15.0 digest. Uplink image TODO digest until release pin.
 # H2/H3: see deploy/secretvm/README.md.
@@ -18,25 +18,24 @@ x-logging: &default-logging
 
 services:
   router-user-init:
-    image: curlimages/curl:8.12.1@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    # Same Uplink image (digest-pinned at release). Script is baked at
+    # /usr/local/bin/router-user-init.sh - single-file paste deploys work.
+    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
     # Root so named-volume /shared is writable and file can be chowned to 10001.
     user: "0:0"
     restart: "no"
     logging: *default-logging
     environment:
       - COOKIE_CONTENT=${COOKIE_CONTENT}
+      # Optional manual cap; empty/unset => auto from wallet MOR balance at boot.
       - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}
-    configs:
-      - source: router_user_init
-        target: /init.sh
-        mode: 0555
     volumes:
       - router_auth:/shared
     networks:
       - web
     depends_on:
       - proxy-router
-    entrypoint: ["/bin/sh", "/init.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/router-user-init.sh"]
 
   uplink:
     # TODO digest: pin at release (CI release check fails if still :latest or TODO)
@@ -153,6 +152,7 @@ configs:
       HOUSEKEEPING=true
       ROUTER_URL=http://proxy-router:8082
       ROUTER_AUTH_FILE=/shared/router.auth
+      UPLINK_MOR_ALLOWANCE_FILE=/shared/router.mor-allowance.json
       DATA_DIR=/data
       TRUSTED_PROXY_CIDR=172.28.0.0/16
   router_network_env:
@@ -170,9 +170,6 @@ configs:
       LOG_LEVEL_APP=warn
       LOG_LEVEL_TCP=warn
       LOG_LEVEL_ETH_RPC=warn
-  router_user_init:
-    file: ../init/router-user-init.sh
-
   tls_config:
     content: |-
       tls:

@@ -158,28 +158,15 @@ jobs:
       - name: Templates must not publish router ports 8082 or 3333
         run: |
           bash scripts/check-router-ports.sh
-          # Fixture: bad file must fail
-          if bash scripts/check-router-ports.sh 2>/dev/null; then
-            :
-          fi
-          # Unit-style: pattern must catch bad publishes
-          if ! grep -nE '^[[:space:]]*-[[:space:]]*"?([0-9.]+:)?(8082|3333):' scripts/testdata/ports-bad.yml >/dev/null; then
-            echo "port guard regex missed bad fixture"
-            exit 1
-          fi
-          if ! grep -nE 'published:[[:space:]]*"?(8082|3333)"?' scripts/testdata/ports-bad.yml >/dev/null; then
-            echo "port guard regex missed published: fixture"
-            exit 1
-          fi
-          if grep -nE '^[[:space:]]*-[[:space:]]*"?([0-9.]+:)?(8082|3333):' scripts/testdata/ports-ok.yml | grep -v '127\.0\.0\.1:8082'; then
-            echo "port guard regex false-positive on ok fixture"
-            exit 1
-          fi
-          echo "OK: port guard regex fixtures"
+          bash scripts/check-router-ports.sh scripts/testdata/ports-bad.yml
+          bash scripts/check-router-ports.sh --ok scripts/testdata/ports-ok.yml
+          echo "OK: port guard JSON fixtures"
       - name: Router image digest must stay pinned
         run: bash scripts/check-router-digest.sh
       - name: Compose templates must render
         run: bash scripts/check-compose-config.sh
+      - name: Router-user-init allowance resolution
+        run: bash scripts/test-router-user-init.sh
       - name: GUI script must parse
         run: bash scripts/check-gui-js.sh
       - name: Uplink image lines must not be :latest without TODO (script self-check)

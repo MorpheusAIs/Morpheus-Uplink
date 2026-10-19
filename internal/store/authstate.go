@@ -8,14 +8,14 @@ import (
 
 // AuthState persists 2FA material (no plaintext secrets except pending brief window in memory).
 type AuthState struct {
-	TOTPBlob            string    `json:"totpBlob,omitempty"`            // base64(v1||nonce||ct)
-	TOTPSalt            string    `json:"totpSalt,omitempty"`            // base64 16 bytes
-	RecoveryHashes      []string  `json:"recoveryHashes,omitempty"`      // sha256 hex
+	TOTPBlob            string    `json:"totpBlob,omitempty"`       // base64(v1||nonce||ct)
+	TOTPSalt            string    `json:"totpSalt,omitempty"`       // base64 16 bytes
+	RecoveryHashes      []string  `json:"recoveryHashes,omitempty"` // sha256 hex
 	PasswordFingerprint string    `json:"passwordFingerprint,omitempty"`
 	Enrolled            bool      `json:"enrolled,omitempty"`
 	LastTOTPStep        int64     `json:"lastTotpStep,omitempty"`
-	BreakGlassDone      bool      `json:"breakGlassDone,omitempty"`      // marker: wipe already ran
-	PendingSecretEnc    string    `json:"pendingSecretEnc,omitempty"`    // encrypted pending enroll
+	BreakGlassDone      bool      `json:"breakGlassDone,omitempty"`   // marker: wipe already ran
+	PendingSecretEnc    string    `json:"pendingSecretEnc,omitempty"` // encrypted pending enroll
 	PendingExpires      time.Time `json:"pendingExpires,omitempty"`
 }
 

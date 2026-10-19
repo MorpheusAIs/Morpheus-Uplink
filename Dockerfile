@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /uplin
 
 FROM alpine:3.24
 # Runtime user uid 10001 (CI PR smoke asserts non-root drop via su-exec).
-# curl: Railway / no-sidecar scoped-user init (sidecar path uses curlimages/curl).
+# curl: scoped-user init (router-user-init service + Railway entrypoint).
 RUN apk add --no-cache ca-certificates su-exec curl \
   && adduser -D -u 10001 uplink \
   && mkdir -p /data && chown uplink:uplink /data

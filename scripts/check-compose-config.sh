@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # docker compose config must render for every template (catches ${#PASS} etc).
+# Also: single-file deploy templates must render from an empty temp dir with
+# no file: configs or relative bind mounts.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export ADMIN_PASSWORD='test-admin-pass-ok-xx'
@@ -24,4 +26,56 @@ render deploy/generic docker-compose.yml
 render deploy/secretvm docker-compose.yml
 render deploy/railway docker-compose.yml
 render . docker-compose.local.yml
+
+check_single_file() {
+  local src="$1"
+  local tmp name jsonfile
+  name="$(basename "$(dirname "$src")")"
+  tmp=$(mktemp -d)
+  jsonfile="$tmp/rendered.json"
+  cp "$src" "$tmp/docker-compose.yml"
+  echo "== single-file ${name}/$(basename "$src") =="
+  if grep -nE '^\s+file:\s' "$tmp/docker-compose.yml"; then
+    echo "BAD: file: config reference breaks paste-only deploy" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  if grep -nE '^\s+-[[:space:]]+(\./|\.\./)' "$tmp/docker-compose.yml"; then
+    echo "BAD: relative bind mount breaks paste-only deploy" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  (cd "$tmp" && docker compose -f docker-compose.yml config --format json > "$jsonfile")
+  if ! python3 - "$jsonfile" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+bad = []
+for sname, svc in (data.get("services") or {}).items():
+    for v in svc.get("volumes") or []:
+        if not isinstance(v, dict):
+            continue
+        if v.get("type") == "bind":
+            src = v.get("source") or ""
+            if src.startswith("./") or src.startswith("../"):
+                bad.append("%s bind %s" % (sname, src))
+for cname, cfg in (data.get("configs") or {}).items():
+    if cfg.get("file"):
+        bad.append("config %s file=%s" % (cname, cfg.get("file")))
+if bad:
+    print("BAD single-file refs:", file=sys.stderr)
+    for b in bad:
+        print("  " + b, file=sys.stderr)
+    sys.exit(1)
+PY
+  then
+    rm -rf "$tmp"
+    exit 1
+  fi
+  (cd "$tmp" && docker compose -f docker-compose.yml config >/dev/null)
+  rm -rf "$tmp"
+  echo "OK single-file ${name}"
+}
+
+check_single_file "$ROOT/deploy/secretvm/docker-compose.yml"
+check_single_file "$ROOT/deploy/generic/docker-compose.yml"
 echo "OK: all compose configs render"

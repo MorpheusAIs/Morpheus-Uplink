@@ -28,7 +28,7 @@ type Config struct {
 	// Router performs on-hold reads and withdraw (scoped perms).
 	Router *router.Client
 	// Minute-of-day UTC after which the daily run may fire (default 00:05).
-	AfterUTCMinute int
+	AfterUTCMinute     int
 	WithdrawThreshold  *big.Int // wei; skip dust
 	WithdrawIterations uint8
 	MaxWithdrawRounds  int

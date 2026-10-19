@@ -93,7 +93,7 @@ func TestRevokeKeyTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, rec, err := keymaker.NewKey("gary")
+	full, rec, err := keymaker.NewKey("operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestRevokeKeyTombstone(t *testing.T) {
 	if keys[0].Secret != "" {
 		t.Fatalf("secret should be cleared, got %q", keys[0].Secret)
 	}
-	if keys[0].Name != "gary" || keys[0].ID != rec.ID || keys[0].Hash != rec.Hash {
+	if keys[0].Name != "operator" || keys[0].ID != rec.ID || keys[0].Hash != rec.Hash {
 		t.Fatalf("tombstone fields mutated: %+v", keys[0])
 	}
 	if id := s.LookupKey(full); id != "" {

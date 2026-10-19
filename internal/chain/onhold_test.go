@@ -29,4 +29,3 @@ func TestNextUTCMidnight(t *testing.T) {
 		t.Fatalf("got %v", next)
 	}
 }
-

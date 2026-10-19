@@ -208,9 +208,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // handleUsageV1 returns usage rows for the calling API key.
 //
-// WARN: Master Bearer is an intentional full-instance usage reader (ops:
-// Seraph can poll without admin Basic). Prompt and generated keys never see
-// other keys' rows — filter is keyId == caller. keyId is a public identifier
+// WARN: Master Bearer is an intentional full-instance usage reader (ops may
+// poll without admin session). Prompt and generated keys never see other
+// keys' rows — filter is keyId == caller. keyId is a public identifier
 // (master / prompt / generated id), never an sk- secret.
 func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
 	caller := r.Header.Get("X-Uplink-Key-Id")

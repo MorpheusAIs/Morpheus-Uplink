@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -43,9 +44,16 @@ type Config struct {
 	Housekeeping   bool
 	// Retention for admin usage-history prune (POST /admin/disk/prune-usage).
 	UsagePruneDays int
-	// Required MOR agent allowance (wei) for scoped router user init.
-	// Validated in later hardening; optional here until C4 enforces boot refuse.
+	// Optional MOR agent allowance override (wei). Empty = use init-time
+	// balance / allowance file. When set must be a non-negative integer (0 OK).
 	UplinkMORAllowanceWei string
+	// Path to allowance metadata JSON written by router-user-init
+	// (wei, source, warning). Defaults beside ROUTER_AUTH_FILE.
+	MORAllowanceFile string
+	// Effective allowance from file (or env override when no file).
+	MORAllowanceWei     string
+	MORAllowanceSource  string // balance | override | zero | ""
+	MORAllowanceWarning string
 	// Optional path to a file containing "user:password" for ROUTER_AUTH
 	// (written by the init sidecar, mode 0400).
 	RouterAuthFile string
@@ -82,7 +90,8 @@ func FromEnv() (*Config, error) {
 		EthNodeChainID:        int64(getenvInt("ETH_NODE_CHAIN_ID", 8453)),
 		Housekeeping:          getenvBool("HOUSEKEEPING", true),
 		UsagePruneDays:        getenvInt("USAGE_PRUNE_DAYS", 30),
-		UplinkMORAllowanceWei: os.Getenv("UPLINK_MOR_ALLOWANCE_WEI"),
+		UplinkMORAllowanceWei: strings.TrimSpace(os.Getenv("UPLINK_MOR_ALLOWANCE_WEI")),
+		MORAllowanceFile:      strings.TrimSpace(os.Getenv("UPLINK_MOR_ALLOWANCE_FILE")),
 		RouterAuthFile:        os.Getenv("ROUTER_AUTH_FILE"),
 		EthRPCURL:             firstNonEmpty(os.Getenv("ETH_RPC_URL"), os.Getenv("ETH_NODE_ADDRESS")),
 		WebPublicURL:          strings.TrimRight(os.Getenv("WEB_PUBLIC_URL"), "/"),
@@ -111,7 +120,10 @@ func FromEnv() (*Config, error) {
 	if c.RouterUser == "" || c.RouterPass == "" {
 		missing = append(missing, "ROUTER_AUTH_FILE or ROUTER_AUTH (user:password)")
 	}
-	if err := requirePositiveWei("UPLINK_MOR_ALLOWANCE_WEI", c.UplinkMORAllowanceWei); err != nil {
+	if err := requireNonNegativeWei("UPLINK_MOR_ALLOWANCE_WEI", c.UplinkMORAllowanceWei); err != nil {
+		return nil, err
+	}
+	if err := loadMORAllowance(c); err != nil {
 		return nil, err
 	}
 	if len(missing) > 0 {
@@ -131,6 +143,51 @@ func FromEnv() (*Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// loadMORAllowance reads the init-written allowance file (if present) and
+// fills MORAllowance* fields. Env override is used when the file is absent.
+func loadMORAllowance(c *Config) error {
+	path := c.MORAllowanceFile
+	if path == "" && c.RouterAuthFile != "" {
+		if strings.HasSuffix(c.RouterAuthFile, ".auth") {
+			path = strings.TrimSuffix(c.RouterAuthFile, ".auth") + ".mor-allowance.json"
+		} else {
+			path = c.RouterAuthFile + ".mor-allowance.json"
+		}
+		c.MORAllowanceFile = path
+	}
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			var meta struct {
+				Wei     string `json:"wei"`
+				Source  string `json:"source"`
+				Warning string `json:"warning"`
+			}
+			if json.Unmarshal(b, &meta) != nil {
+				return fmt.Errorf("UPLINK_MOR_ALLOWANCE_FILE %s: invalid JSON", path)
+			}
+			c.MORAllowanceWei = strings.TrimSpace(meta.Wei)
+			c.MORAllowanceSource = strings.TrimSpace(meta.Source)
+			c.MORAllowanceWarning = strings.TrimSpace(meta.Warning)
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("UPLINK_MOR_ALLOWANCE_FILE %s: %w", path, err)
+		}
+	}
+	// No file: surface env override (including "0") for status/Security.
+	if c.UplinkMORAllowanceWei != "" {
+		c.MORAllowanceWei = c.UplinkMORAllowanceWei
+		if c.UplinkMORAllowanceWei == "0" {
+			c.MORAllowanceSource = "zero"
+			c.MORAllowanceWarning = "MOR allowance is zero; sessions will not open until funded and Uplink is restarted."
+		} else {
+			c.MORAllowanceSource = "override"
+		}
+	}
+	return nil
 }
 
 // loadRouterAuth prefers ROUTER_AUTH_FILE, then ROUTER_AUTH env.
@@ -171,18 +228,19 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// requirePositiveWei refuses boot when name is missing, empty, or zero.
-func requirePositiveWei(name, raw string) error {
+// requireNonNegativeWei validates optional wei: empty OK; when set must be
+// a base-10 integer >= 0 (zero allowed for fail-closed boot).
+func requireNonNegativeWei(name, raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fmt.Errorf("%s is required (positive wei budget for scoped router user)", name)
+		return nil
 	}
 	n := new(big.Int)
 	if _, ok := n.SetString(raw, 10); !ok {
 		return fmt.Errorf("%s must be a base-10 integer (wei)", name)
 	}
-	if n.Sign() <= 0 {
-		return fmt.Errorf("%s must be > 0 (got %s)", name, raw)
+	if n.Sign() < 0 {
+		return fmt.Errorf("%s must be >= 0 (got %s)", name, raw)
 	}
 	return nil
 }

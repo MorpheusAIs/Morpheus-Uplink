@@ -15,7 +15,8 @@ func setRequired(t *testing.T) {
 	t.Setenv("COOKIE_CONTENT", "")
 	t.Setenv("ROUTER_AUTH_FILE", "")
 	t.Setenv("UPLINK_DEV_HTTP", "")
-	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "1000000000000000000")
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "")
+	t.Setenv("UPLINK_MOR_ALLOWANCE_FILE", "")
 }
 
 func TestRouterAuthFilePreferred(t *testing.T) {
@@ -104,20 +105,101 @@ func TestCatalogURLDefaults(t *testing.T) {
 	}
 }
 
-func TestAllowanceRequired(t *testing.T) {
+func TestAllowanceOptional(t *testing.T) {
 	setRequired(t)
 	t.Setenv("ROUTER_AUTH", "uplink:secret")
 	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "")
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("expected error when UPLINK_MOR_ALLOWANCE_WEI missing")
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatalf("missing allowance env must boot: %v", err)
+	}
+	if c.UplinkMORAllowanceWei != "" {
+		t.Fatalf("expected empty override, got %q", c.UplinkMORAllowanceWei)
 	}
 	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "0")
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("expected error when UPLINK_MOR_ALLOWANCE_WEI is zero")
+	c, err = FromEnv()
+	if err != nil {
+		t.Fatalf("zero allowance env must boot: %v", err)
+	}
+	if c.MORAllowanceWei != "0" || c.MORAllowanceSource != "zero" {
+		t.Fatalf("zero env: wei=%q source=%q", c.MORAllowanceWei, c.MORAllowanceSource)
+	}
+	if c.MORAllowanceWarning == "" {
+		t.Fatal("expected warning for zero allowance")
 	}
 	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "1000000000000000000")
-	if _, err := FromEnv(); err != nil {
+	c, err = FromEnv()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if c.MORAllowanceSource != "override" || c.MORAllowanceWei != "1000000000000000000" {
+		t.Fatalf("override: wei=%q source=%q", c.MORAllowanceWei, c.MORAllowanceSource)
+	}
+}
+
+func TestAllowanceInvalid(t *testing.T) {
+	setRequired(t)
+	t.Setenv("ROUTER_AUTH", "uplink:secret")
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "not-a-number")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected error for non-integer wei")
+	}
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "-1")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected error for negative wei")
+	}
+}
+
+func TestAllowanceFileLoad(t *testing.T) {
+	setRequired(t)
+	dir := t.TempDir()
+	auth := filepath.Join(dir, "router.auth")
+	if err := os.WriteFile(auth, []byte("uplink:fromfile\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	allowPath := filepath.Join(dir, "router.mor-allowance.json")
+	meta := `{"wei":"5000000000000000000","source":"balance","warning":""}`
+	if err := os.WriteFile(allowPath, []byte(meta), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ROUTER_AUTH_FILE", auth)
+	// Env override must not replace file metadata for status.
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "999")
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MORAllowanceWei != "5000000000000000000" || c.MORAllowanceSource != "balance" {
+		t.Fatalf("file should win: wei=%q source=%q", c.MORAllowanceWei, c.MORAllowanceSource)
+	}
+	if c.MORAllowanceFile != allowPath {
+		t.Fatalf("derived path: got %q want %q", c.MORAllowanceFile, allowPath)
+	}
+}
+
+func TestAllowanceFileZeroWarning(t *testing.T) {
+	setRequired(t)
+	dir := t.TempDir()
+	auth := filepath.Join(dir, "router.auth")
+	if err := os.WriteFile(auth, []byte("uplink:fromfile\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	allowPath := filepath.Join(dir, "router.mor-allowance.json")
+	warn := "MOR wallet balance is zero; sessions will not open until funded and Uplink is restarted."
+	meta := `{"wei":"0","source":"zero","warning":"` + warn + `"}`
+	if err := os.WriteFile(allowPath, []byte(meta), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ROUTER_AUTH_FILE", auth)
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MORAllowanceWei != "0" || c.MORAllowanceSource != "zero" {
+		t.Fatalf("got wei=%q source=%q", c.MORAllowanceWei, c.MORAllowanceSource)
+	}
+	if c.MORAllowanceWarning != warn {
+		t.Fatalf("warning: got %q", c.MORAllowanceWarning)
 	}
 }
 

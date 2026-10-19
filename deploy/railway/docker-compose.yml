@@ -1,12 +1,13 @@
 # Railway overlay scaffold - same GHCR image pair as SecretVM/generic.
 #
 # No init sidecar on Railway: uplink entrypoint mints the scoped router user
-# when COOKIE_CONTENT + UPLINK_MOR_ALLOWANCE_WEI are set, writes ROUTER_AUTH
-# under DATA_DIR, then unsets COOKIE_CONTENT before exec.
+# when COOKIE_CONTENT is set (allowance auto from wallet balance unless
+# UPLINK_MOR_ALLOWANCE_WEI override is set), writes ROUTER_AUTH under
+# DATA_DIR, then unsets COOKIE_CONTENT before exec.
 #
 # Operator fillables (H4) in Railway Secrets / vars, never in this file:
 # WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED, COOKIE_CONTENT,
-# ETH_NODE_ADDRESS, WEB_PUBLIC_URL, UPLINK_MOR_ALLOWANCE_WEI.
+# ETH_NODE_ADDRESS, WEB_PUBLIC_URL; UPLINK_MOR_ALLOWANCE_WEI optional cap.
 #
 # H3: single replica for wallet-bearing proxy-router.
 # Lumerin pin: v7.15.0 digest. Uplink image TODO digest until release pin.

@@ -48,7 +48,9 @@ services:
       - uplink
 
   router-user-init:
-    image: curlimages/curl:8.12.1@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    # Same Uplink image (digest-pinned at release). Script is baked at
+    # /usr/local/bin/router-user-init.sh - single-file paste deploys work.
+    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
     # Root so named-volume /shared is writable and file can be chowned to 10001.
     user: "0:0"
     restart: "no"
@@ -56,20 +58,18 @@ services:
     environment:
       - ROUTER_URL=http://proxy-router:8082
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to admin:password}
-      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI:?set UPLINK_MOR_ALLOWANCE_WEI (wei)}
+      # Optional manual cap; empty/unset => auto from wallet MOR balance at boot.
+      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI:-}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - ROUTER_AUTH_OUT=/shared/router.auth
-    configs:
-      - source: router_user_init
-        target: /init.sh
-        mode: 0555
+      - UPLINK_MOR_ALLOWANCE_FILE=/shared/router.mor-allowance.json
     volumes:
       - router_auth:/shared
     networks:
       - web
     depends_on:
       - proxy-router
-    entrypoint: ["/bin/sh", "/init.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/router-user-init.sh"]
 
   uplink:
     # TODO digest: pin at release (CI release check fails if still :latest or TODO)
@@ -100,7 +100,8 @@ services:
       - API_KEY_SEED=${API_KEY_SEED}
       - ROUTER_URL=http://proxy-router:8082
       - ROUTER_AUTH_FILE=/shared/router.auth
-      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI:?set UPLINK_MOR_ALLOWANCE_WEI (wei)}
+      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI:-}
+      - UPLINK_MOR_ALLOWANCE_FILE=/shared/router.mor-allowance.json
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
       - SESSION_DURATION_SECONDS=600
       - SESSION_FAILOVER=true
@@ -192,5 +193,3 @@ configs:
           respond 404
         }
       }
-  router_user_init:
-    file: ../init/router-user-init.sh

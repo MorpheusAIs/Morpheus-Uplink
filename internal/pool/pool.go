@@ -39,10 +39,10 @@ type Pool struct {
 	onClosed OnSessionClosed
 
 	// Last on-chain open-session scan (for GUI), refreshed by Rehydrate.
-	chainMu       sync.Mutex
-	chainOpen     []ChainSession
-	chainFetched  time.Time
-	rehydrateErr  string
+	chainMu      sync.Mutex
+	chainOpen    []ChainSession
+	chainFetched time.Time
+	rehydrateErr string
 }
 
 // ChainSession is an open (ClosedAt==0) on-chain session for display.

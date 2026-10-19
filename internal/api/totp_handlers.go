@@ -28,7 +28,8 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		raw := adminauth.ReadSessionCookie(r, s.cfg.DevHTTP)
-		if _, ok := s.sessions.Lookup(raw, true); !ok {
+		poll := r.Header.Get("X-Uplink-Poll") == "1"
+		if _, ok := s.sessions.Lookup(raw, !poll); !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

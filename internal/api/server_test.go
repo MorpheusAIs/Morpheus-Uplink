@@ -849,3 +849,80 @@ func TestHandleUsageV1EmptyKeyIdFailClosed(t *testing.T) {
 		t.Fatalf("must not include usage array on fail-closed: %s", body)
 	}
 }
+
+func TestAdminStatusIncludesMORAllowance(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	cfg.MORAllowanceWei = "12345"
+	cfg.MORAllowanceSource = "balance"
+	cfg.MORAllowanceWarning = ""
+	ac := adminClient(t, ts, cfg)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/status", nil)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var body struct {
+		MORAllowance struct {
+			Wei     string `json:"wei"`
+			Source  string `json:"source"`
+			Warning string `json:"warning"`
+		} `json:"morAllowance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.MORAllowance.Wei != "12345" || body.MORAllowance.Source != "balance" {
+		t.Fatalf("morAllowance: %+v", body.MORAllowance)
+	}
+}
+
+func TestAdminSecuritySurfacesAllowanceWarning(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	warn := "MOR wallet balance is zero; sessions will not open until funded and Uplink is restarted."
+	cfg.MORAllowanceWei = "0"
+	cfg.MORAllowanceSource = "zero"
+	cfg.MORAllowanceWarning = warn
+	ac := adminClient(t, ts, cfg)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/security", nil)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("security: %d", resp.StatusCode)
+	}
+	var body struct {
+		MORAllowance struct {
+			Wei     string `json:"wei"`
+			Source  string `json:"source"`
+			Warning string `json:"warning"`
+		} `json:"morAllowance"`
+		Alerts []struct {
+			Kind    string `json:"kind"`
+			Message string `json:"message"`
+		} `json:"alerts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.MORAllowance.Warning != warn || body.MORAllowance.Source != "zero" {
+		t.Fatalf("morAllowance: %+v", body.MORAllowance)
+	}
+	found := false
+	for _, a := range body.Alerts {
+		if a.Kind == "allowance" && a.Message == warn {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected allowance alert, got %+v", body.Alerts)
+	}
+}

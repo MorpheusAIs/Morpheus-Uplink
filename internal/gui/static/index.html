@@ -957,6 +957,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           Forward container logs to your log stack (json-file / journald / SIEM);
           Uplink does not dump secrets at boot.
         </p>
+        <div id="allowanceWarning" class="note" style="display:none;border:1px solid var(--warn, #c90);padding:10px;border-radius:8px;margin-bottom:10px"></div>
         <div id="securityAlerts" class="note">Loading…</div>
         <div class="row" style="margin-top:12px">
           <button type="button" class="ghost" onclick="refreshSecurity()">Refresh</button>
@@ -1258,8 +1259,9 @@ function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta,
 }
 
 function showTab(id) {
-  if (id === 'security') refreshSecurity();
+  const switchingToSecurity = (id === 'security' && activeTab !== 'security');
   activeTab = id || 'status';
+  if (switchingToSecurity) refreshSecurity();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
@@ -1340,7 +1342,7 @@ async function refreshSecurity() {
   const enrollBox = document.getElementById('twoFactorEnroll');
   if (stEl) {
     try {
-      const res = await fetch('/admin/2fa/status', { credentials: 'same-origin' });
+      const res = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
       if (res.status === 401) { showLogin(); return; }
       if (!res.ok) throw new Error(await res.text() || res.statusText);
       const tf = await res.json();
@@ -1349,14 +1351,14 @@ async function refreshSecurity() {
       if (tf.breakGlassWarn) msg += ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.';
       stEl.textContent = msg;
       if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
-      if (tf.need2fa) showTab('security');
+      if (tf.need2fa && activeTab !== 'security') showTab('security');
     } catch (e) {
       stEl.textContent = 'Could not load 2FA status.';
     }
   }
   if (box) {
     try {
-      const res = await fetch('/admin/security', { credentials: 'same-origin' });
+      const res = await fetch('/admin/security', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
       if (res.status === 401) { showLogin(); return; }
       if (res.status === 403) {
         box.textContent = 'Security alerts available after 2FA enrollment.';
@@ -1364,6 +1366,17 @@ async function refreshSecurity() {
         box.textContent = 'Failed to load: ' + (await res.text() || res.statusText);
       } else {
         const data = await res.json();
+        const aw = document.getElementById('allowanceWarning');
+        if (aw) {
+          const warn = (data.morAllowance && data.morAllowance.warning) || '';
+          if (warn) {
+            aw.style.display = 'block';
+            aw.textContent = warn + ' (source: ' + ((data.morAllowance && data.morAllowance.source) || 'unknown') + '; wei: ' + ((data.morAllowance && data.morAllowance.wei) || '0') + ')';
+          } else {
+            aw.style.display = 'none';
+            aw.textContent = '';
+          }
+        }
         const alerts = data.alerts || [];
         if (!alerts.length) {
           box.textContent = 'No recent alerts.';
@@ -1457,7 +1470,6 @@ async function login() {
     if (data.need2fa) {
       msg.textContent = 'Enroll 2FA from the Security tab before other admin actions.';
       showTab('security');
-      refreshSecurity();
       return;
     }
     refresh();
@@ -1468,7 +1480,7 @@ async function login() {
 
 async function tryRestoreSession() {
   try {
-    const res = await fetch('/admin/status', { credentials: 'same-origin' });
+    const res = await fetch('/admin/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
     if (res.ok) {
       authed = true;
       setLoggedIn(true);
@@ -1477,14 +1489,13 @@ async function tryRestoreSession() {
     }
     // 403 with ADMIN_2FA_REQUIRED: session may be valid but enroll pending.
     if (res.status === 403) {
-      const st = await fetch('/admin/2fa/status', { credentials: 'same-origin' });
+      const st = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
       if (st.ok) {
         const tf = await st.json();
         authed = true;
         setLoggedIn(true);
         if (tf.need2fa) {
           showTab('security');
-          refreshSecurity();
           return;
         }
         refresh();
@@ -1987,7 +1998,7 @@ function todayUTC() {
   return utcDayString(new Date());
 }
 
-/** Josh residual: custom dates must be YYYY-MM-DD UTC only; from <= to. */
+/** Custom usage dates must be YYYY-MM-DD UTC only; from <= to. */
 function isValidUTCDate(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split('-').map(Number);

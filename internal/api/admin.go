@@ -209,6 +209,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"required":       s.cfg.Admin2FARequired,
 		"breakGlassWarn": s.breakGlassWarn(),
 	}
+	status["morAllowance"] = map[string]any{
+		"wei":     s.cfg.MORAllowanceWei,
+		"source":  s.cfg.MORAllowanceSource,
+		"warning": s.cfg.MORAllowanceWarning,
+	}
 
 	writeJSON(w, http.StatusOK, status)
 }
