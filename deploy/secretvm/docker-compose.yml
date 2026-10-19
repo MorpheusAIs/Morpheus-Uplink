@@ -18,13 +18,17 @@
 #   - Operator fillables (6): the dollar-brace substitutions below
 #   - Uplink bake (uplink_bake_env): session / catalog / housekeeping
 #   - Router bake (router_network_env): PROXY_* / LOG_LEVEL_* / chain /
-#     Diamond / MOR / Blockscout (NOT prompted; never mix into uplink bake)
+#     Diamond / MOR / Blockscout / auth paths / ENVIRONMENT
+#     (NOT prompted; never mix into uplink bake)
+#
+# Per-container environment only -- no shared env_file (secrets must not
+# land in Traefik or every service). Traefik gets zero secrets.
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* live in router_network_env and are
-# believed honored on pinned v7.14.0; live acceptance pending. Do not
+# believed honored on pinned v7.15.0; live acceptance pending. Do not
 # market as TEE privacy until verified on the pinned digest.
 #
-# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
+# Lumerin pin note: tag v7.15.0 is Lumerin main (scoped auth + gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
 # Diamond / MOR below).
 #
@@ -44,7 +48,8 @@ services:
     # Template only - for real deployments use the digest-pinned
     # docker-compose.secretvm.deployed.yml attached to each GitHub release.
     # ROUTER_URL and DATA_DIR defaults are baked into the image.
-    image: ghcr.io/morpheusais/uplink:latest
+    # TODO digest: pin after Alan build go (CI release check fails if still :latest or TODO)
+    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AFTER_ALAN_BUILD
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -75,8 +80,6 @@ services:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       # Public HTTPS origin (GUI / swagger). Fill with https://<vm-host>.
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-    env_file:
-      - usr/.env
     configs:
       - source: uplink_bake_env
         target: /etc/uplink/bake.env
@@ -86,7 +89,7 @@ services:
       - web
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -108,8 +111,6 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
     # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
-    env_file:
-      - usr/.env
     configs:
       - source: router_network_env
         target: /app/.env
@@ -173,6 +174,9 @@ configs:
       BLOCKSCOUT_API_URL=https://base.blockscout.com/api/v2
       DIAMOND_CONTRACT_ADDRESS=0x6aBE1d282f72B474E54527D93b979A4f64d3030a
       MOR_TOKEN_ADDRESS=0x7431ada8a591c955a994a21710752ef9b882b8e3
+      AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
+      COOKIE_FILE_PATH=/app/data/.cookie
+      ENVIRONMENT=production
       PROXY_STORE_CHAT_CONTEXT=false
       PROXY_FORWARD_CHAT_CONTEXT=false
       LOG_LEVEL_APP=warn

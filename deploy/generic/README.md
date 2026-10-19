@@ -27,7 +27,7 @@ unsupported on stock 7.11.
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked

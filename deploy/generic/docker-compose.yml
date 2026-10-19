@@ -13,9 +13,9 @@
 # Only :80 and :443 need to be public. Router :8082 stays internal.
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* are set and believed honored on
-# pinned v7.14.0; live acceptance pending. Do not market as TEE privacy.
+# pinned v7.15.0; live acceptance pending. Do not market as TEE privacy.
 #
-# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
+# Lumerin pin note: tag v7.15.0 is Lumerin main (scoped auth + gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
 # Diamond / MOR below).
 #
@@ -28,7 +28,7 @@ x-logging: &default-logging
 
 services:
   caddy:
-    image: caddy:2.8-alpine
+    image: caddy:2.9.1-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
     restart: unless-stopped
     logging: *default-logging
     ports:
@@ -48,7 +48,8 @@ services:
       - uplink
 
   uplink:
-    image: ghcr.io/morpheusais/uplink:latest
+    # TODO digest: pin after Alan build go (CI release check fails if still :latest or TODO)
+    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AFTER_ALAN_BUILD
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -92,7 +93,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -117,6 +118,10 @@ services:
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Persist auth files across container recreate (Badger already under /app/data).
+      - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
+      - COOKIE_FILE_PATH=/app/data/.cookie
+      - ENVIRONMENT=production
       # Privacy (L1: set / believed honored; live acceptance pending).
       - PROXY_STORE_CHAT_CONTEXT=false
       - PROXY_FORWARD_CHAT_CONTEXT=false

@@ -8,9 +8,9 @@
 # H3: single replica for wallet-bearing proxy-router (multi-replica unsupported).
 # H2 blast radius / operator notes: see deploy/railway/README.md.
 #
-# Privacy (L1): set / believed honored on pinned v7.14.0; live acceptance pending.
+# Privacy (L1): set / believed honored on pinned v7.15.0; live acceptance pending.
 #
-# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
+# Lumerin pin note: tag v7.15.0 is Lumerin main (scoped auth + gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
 # Diamond / MOR below).
 x-logging: &default-logging
@@ -21,7 +21,8 @@ x-logging: &default-logging
 
 services:
   uplink:
-    image: ghcr.io/morpheusais/uplink:latest
+    # TODO digest: pin after Alan build go (CI release check fails if still :latest or TODO)
+    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AFTER_ALAN_BUILD
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -64,7 +65,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -90,6 +91,9 @@ services:
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
+      - COOKIE_FILE_PATH=/app/data/.cookie
+      - ENVIRONMENT=production
       - PROXY_STORE_CHAT_CONTEXT=false
       - PROXY_FORWARD_CHAT_CONTEXT=false
       - LOG_LEVEL_APP=warn

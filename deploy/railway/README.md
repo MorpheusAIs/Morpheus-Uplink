@@ -2,7 +2,7 @@
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.14.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.15.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -20,7 +20,7 @@ Production path: download digest-pinned release assets from
 (`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
 this scaffold when you cut a real deploy. Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4`
 
 ## Services
 
@@ -61,7 +61,7 @@ cross-replica wallet lock on stock 7.11).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.15.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -83,7 +83,7 @@ Compose sets on `proxy-router`:
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.14.0 digest until verified.
+privacy on the pinned v7.15.0 digest until verified.
 
 ## M1 / keep list
 
