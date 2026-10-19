@@ -93,6 +93,28 @@ func main() {
 
 	srv := api.NewServer(cfg, st, cat, pl, rc, hk)
 
+	// Boot session reconcile: gate session opens until the wallet's open
+	// sessions were listed once, adopting usable ones and closing expired,
+	// duplicate and unconfigured ones (see internal/pool/reconcile.go).
+	pl.Gate()
+	reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
+	defer reconcileCancel()
+	go pl.StartupReconcile(reconcileCtx, func() (map[string]bool, bool) {
+		models, err := cat.List()
+		if err != nil {
+			log.Printf("pool: reconcile: catalog unavailable, not closing sessions by model: %v", err)
+			return nil, false
+		}
+		ids := make(map[string]bool, len(models))
+		for _, m := range models {
+			ids[m.ID] = true
+		}
+		return ids, true
+	}, pool.ReconcileConfig{
+		OnReconcile: srv.AuditSessionReconcile,
+		OnGiveUp:    srv.AuditSessionReconcileDeferred,
+	})
+
 	hkCtx, hkCancel := context.WithCancel(context.Background())
 	defer hkCancel()
 	go hk.Start(hkCtx)
@@ -131,12 +153,17 @@ func main() {
 	<-stop
 
 	log.Println("shutting down…")
+	t0 := time.Now()
 	hkCancel()
+	reconcileCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
+	log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
 	if cfg.CloseSessionsOnExit {
-		pl.CloseAll()
+		r := pl.CloseAll()
+		log.Printf("shutdown: closed %d/%d session(s), %d failed, total %s",
+			r.Closed, r.Attempted, r.Failed, time.Since(t0).Round(time.Millisecond))
 	}
 }
 

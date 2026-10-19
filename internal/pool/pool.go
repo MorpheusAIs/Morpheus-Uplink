@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/router"
@@ -36,6 +37,14 @@ type Pool struct {
 	opening map[string]*sync.Mutex // per-model open lock
 
 	onClosed OnSessionClosed
+
+	// Boot reconcile: opens wait on gate (nil = open) and are refused until
+	// some session list succeeded (stateKnown), so a restart never
+	// double-opens next to a session it could not see.
+	gate        chan struct{}
+	reconcileMu sync.Mutex
+	stateKnown  atomic.Bool
+	gated       atomic.Bool
 
 	// Last on-chain open-session scan (for GUI), refreshed by Rehydrate.
 	chainMu      sync.Mutex
@@ -115,6 +124,7 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	}
 	p.mu.Unlock()
 
+	p.waitGate()
 	lock.Lock()
 	defer lock.Unlock()
 
@@ -126,6 +136,9 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	// already-staked on-chain session over opening another and double-locking MOR.
 	if err := p.RehydrateForce(); err != nil {
 		log.Printf("pool: rehydrate before open for %s: %v", modelID, err)
+		if p.gated.Load() && !p.stateKnown.Load() {
+			return EnsureResult{}, ErrSessionStateUnknown
+		}
 	}
 	if res, ok := p.cachedSession(modelID, durationSec); ok {
 		log.Printf("pool: adopted on-chain session %s for model %s", res.SessionID, modelID)
@@ -227,6 +240,14 @@ func (p *Pool) RehydrateForce() error {
 }
 
 func (p *Pool) rehydrate(force bool) error {
+	// While the boot reconcile runs, it owns the first scan: a status poll
+	// returns the (empty) last scan, a forced scan (housekeep, close) waits.
+	if p.gateClosed() {
+		if !force {
+			return nil
+		}
+		p.waitGate()
+	}
 	if !force {
 		p.chainMu.Lock()
 		fresh := time.Since(p.chainFetched) < 20*time.Second && p.rehydrateErr == ""
@@ -315,6 +336,7 @@ func (p *Pool) rehydrate(force bool) error {
 	p.chainFetched = now
 	p.rehydrateErr = ""
 	p.chainMu.Unlock()
+	p.stateKnown.Store(true)
 
 	log.Printf("pool: rehydrated %d open on-chain session(s), adopted %d into reuse pool (wallet %s)",
 		len(open), adopted, addr)
