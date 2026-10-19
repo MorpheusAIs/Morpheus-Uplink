@@ -156,6 +156,26 @@ jobs:
             fi
           done
           echo "✅ SecretVM compose prompts for seven secrets only; non-secrets stay in configs:"
+      - name: Templates must not publish router ports 8082 or 3333
+        run: |
+          # Public host port mappings only (left side of host:container).
+          # Internal healthchecks and ROUTER_URL strings mentioning :8082 are OK.
+          if grep -nE '^[[:space:]]*-[[:space:]]*("?)([0-9.:\\[\\]]*):(8082|3333)\1' \
+              deploy/*/docker-compose.yml docker-compose.local.yml 2>/dev/null \
+            | grep -vE '127\.0\.0\.1:8082'; then
+            echo "❌ Router ports 8082/3333 must not be published (except local 127.0.0.1:8082)"
+            exit 1
+          fi
+          # Also catch unquoted forms and 3333 anywhere as host publish
+          if grep -nE '^[[:space:]]*-[[:space:]]*[\'\''"]?[0-9.*:]*3333' deploy/*/docker-compose.yml; then
+            echo "❌ Port 3333 must not be published"
+            exit 1
+          fi
+          echo "✅ No public 8082/3333 publishes in deploy templates"
+      - name: Uplink image lines must not be :latest without TODO (script self-check)
+        run: |
+          bash scripts/check-uplink-image-pins.sh --allow-todo
+
 
   pr-image-smoke:
     name: PR image smoke
@@ -327,6 +347,10 @@ jobs:
             env.secretvm.example
             env.generic.example
 
+      - name: Fail release if Uplink image still :latest or TODO digest
+        if: env.IS_RELEASE == 'true'
+        run: |
+          bash scripts/check-uplink-image-pins.sh --fail-todo --fail-latest
       - name: Create GitHub release
         if: env.IS_RELEASE == 'true'
         env:
