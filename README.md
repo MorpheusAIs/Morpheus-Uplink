@@ -35,7 +35,7 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 - Same shape clients already know: `POST /v1/chat/completions`, embeddings,
   `GET /v1/models`, Bearer `sk-…` keys
 - Sessions open and reuse automatically (model name → on-chain session)
-- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any; on `docker stop` it closes its sessions before exiting. Use a dedicated wallet: this acts on every session of the wallet ([details](docs/06-developers.md#sessions-across-restarts))
+- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a dedicated wallet ([details](docs/06-developers.md#sessions-across-restarts))
 - Admin GUI at `/gui` — balances, keys, Probe, usage
 - You pay providers in MOR from the wallet you fund — no multi-tenant credits
 

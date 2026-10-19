@@ -904,6 +904,7 @@
           <p style="margin:4px 0">Empty <code>UPLINK_MOR_ALLOWANCE_WEI</code>: the gateway may lock up to the live wallet MOR balance (new deposits are included within ~2 min). Set a value in wei to cap how much MOR it can lock in total; <code>0</code> disables session opening.</p>
           <p style="margin:4px 0">Note: the router also supports "direct payment" sessions, where the provider is paid from the stake (at most <code>getTodaysBudget / totalMORSupply</code> of it, about 0.3% today). The gateway itself never uses it, but whoever holds the router credential could. A cap bounds that worst case to the same fraction of the cap.</p>
           <p style="margin:4px 0">For high-value wallets, set a cap.</p>
+          <p style="margin:4px 0"><strong>Stopping Uplink.</strong> A graceful <code>docker stop</code> closes every open session on this wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions. The stake is returned (a lock, not a loss). <code>CLOSE_SESSIONS_ON_EXIT=false</code> opts out. Use a dedicated wallet.</p>
         </details>
         <p class="note" id="sessionReconcileLine" style="margin-top:4px"></p>
         <div class="note" id="allowanceResyncBox" style="margin-top:4px">

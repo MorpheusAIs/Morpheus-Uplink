@@ -130,7 +130,7 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 | `UPLINK_ALLOWANCE_STATUS_FILE` | unset | Allowance manager status file (read-only to Uplink; never under `DATA_DIR`) |
 | `UPLINK_ALLOWANCE_CTL_DIR` | unset | Dir for the presence-only resync request flag (never under `DATA_DIR`) |
 | `UPLINK_ALLOWANCE_POLL_SECONDS` | `60` | Manager poll interval; resync shows as available while its heartbeat is newer than 3 polls |
-| `CLOSE_SESSIONS_ON_EXIT` | `true` | Close pooled sessions on shutdown |
+| `CLOSE_SESSIONS_ON_EXIT` | `true` | On a graceful stop, close every open session on the wallet (as of the last scan, including uncatalogued models and other clients' sessions); `false` leaves them for the next boot reconcile |
 | `UPLINK_RECONCILE_GATE_SECONDS` | `60` | Boot reconcile: how long session opens wait for the first session list |
 | `UPLINK_RECONCILE_RETRY_SECONDS` | `30` | Boot reconcile: background retry interval after that |
 
@@ -196,10 +196,20 @@ and the compose e2e `scripts/e2e-secretvm-handoff.sh`.
 **Stop.** The `uplink` service has no `init: true`: the entrypoint `exec`s
 `su-exec uplink /usr/local/bin/uplink`, so the app is PID 1 and receives
 `docker stop`'s SIGTERM itself (no CAP_KILL needed). It stops accepting
-requests, lets in-flight ones finish for up to 30 s, then closes every pooled
-and on-chain open session (`CLOSE_SESSIONS_ON_EXIT`, default on).
-`stop_grace_period: 45s` leaves room for those 30 s plus the closes. CI
-checks every template for this (`check-allowance-manager-policy.sh`, rule S).
+requests, lets in-flight ones finish for up to 30 s, then closes sessions
+(`CLOSE_SESSIONS_ON_EXIT`, default `true`). The whole stop is bounded to
+40 s from SIGTERM, with at most 8 s per close; a session not closed in time
+is logged as "left for boot reconcile". `stop_grace_period: 45s` leaves
+room for this. CI checks every template for it
+(`check-allowance-manager-policy.sh`, rule S).
+
+A graceful `docker stop` closes every open session on the wallet, as of
+Uplink's most recent session scan: its own pooled sessions, sessions for
+models that are not in the catalog, and, on a shared wallet, the other
+client's sessions. Closing returns the stake (on hold at most until the next
+UTC day); it is a lock, not a loss, and costs gas per close. Set
+`CLOSE_SESSIONS_ON_EXIT=false` to opt out: sessions then stay open across a
+stop and the next boot reconcile adopts or closes them.
 
 **Boot reconcile.** A close on stop is best-effort; a crash, `docker kill`
 or a VM wipe leaves sessions open with their stake locked. So on every boot,
@@ -216,9 +226,13 @@ before any request may open a session:
   lost volume, the case the reconcile exists for, would lose that record
   too and leave every session orphaned. If the wallet is shared with
   another client, that client's expired sessions, and its second session
-  for a model Uplink also adopts, may be closed. Closing returns the
-  stake (on hold at most until the next UTC day) and costs gas; it is a
-  liveness issue for that client, not a loss.
+  for a model Uplink also adopts, may be closed at boot, and a graceful
+  `docker stop` closes all of its open sessions (see *Stop* above).
+  Closing returns the stake (on hold at most until the next UTC day) and
+  costs gas; it is a liveness issue for that client, not a loss.
+- *Listing window:* the list is read newest first and stops after three
+  pages of only closed sessions. A very old open session beyond that is
+  neither adopted nor closed by the reconcile; it expires on its own.
 - *Adopted:* the latest-ending session per model that is not closed and
   has more than the pool's 90 s expiry buffer left. Never extended; no
   session is opened by the reconcile.
@@ -227,7 +241,8 @@ before any request may open a session:
   adopted one).
 - *Never closed:* a session whose model is not in the catalog is skipped
   (counted as `skipped`) and left to expire. Model ids are compared
-  case-insensitively. An empty catalog (`{"models":[]}` or `{}`) or one
+  case-insensitively, and the pool keys sessions by the lowercase model
+  id, so a session adopted under a differently cased id is reused. An empty catalog (`{"models":[]}` or `{}`) or one
   that cannot be read is treated as unknown: nothing is skipped for it and
   usable sessions are adopted.
 - *Cap:* at most 20 closes per pass (`MaxBootCloses`), expired first. The
@@ -249,9 +264,10 @@ before any request may open a session:
   (`UPLINK_RECONCILE_RETRY_SECONDS`); such a late pass closes expired
   sessions only, because the pool may already be serving a "duplicate".
 - *Failed closes:* counted as `failed`. An expired session whose close
-  failed is closed by a later scan (housekeeping and the pool close
-  expired sessions they see); a duplicate whose close failed is left to
-  expire.
+  failed, or that the cap deferred, is closed by a later scan
+  (housekeeping and the pool close expired sessions they see), with the
+  same `session_reconcile_close` audit event marked `"source":"rescan"`;
+  a duplicate whose close failed is left to expire.
 - *Idempotent:* re-running it adopts the same sessions and closes nothing
   new.
 - *Audit:* one `session_reconcile_adopt` event per adopted session, one
@@ -259,7 +275,8 @@ before any request may open a session:
   `duplicate`, result, first 10 characters of the session id), a
   `session_reconcile_cap` event when the cap is hit, and one
   `session_reconcile` summary line per pass (`open`, `adopted`, `closed`,
-  `failed`, `skipped`, `deferred`, `attempts`, `late`); a
+  `failed`, `skipped`, `deferred`, `attempts`, `late`, and `catalog`, the
+  number of catalog models, `-1` when unknown); a
   `"result":"deferred"` line when the gate opened before a list succeeded.
   No secrets; no full session ids.
 - *Visibility:* `/admin/status` (`sessionReconcile`), the GUI Status tab,
