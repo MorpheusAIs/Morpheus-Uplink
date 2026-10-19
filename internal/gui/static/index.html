@@ -818,6 +818,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="status" onclick="showTab('status')">Status</button>
     <button class="tab" data-tab="keys" onclick="showTab('keys')">API Keys</button>
+    <button class="tab" data-tab="security" onclick="showTab('security')">Security</button>
     <button class="tab" data-tab="playground" onclick="showTab('playground')">Probe</button>
     <button class="tab" data-tab="activity" onclick="showTab('activity')">Sessions &amp; Usage</button>
   </nav>
@@ -926,6 +927,22 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
       </section>
     </div>
 
+
+    <div class="panel" id="tab-security">
+      <section>
+        <h2>Security alerts</h2>
+        <p class="note" style="margin-top:0">
+          Recent login failures, lockouts, key ops, and balance-drop signals.
+          Forward container logs to your log stack (json-file / journald / SIEM);
+          Uplink does not dump secrets at boot.
+        </p>
+        <div id="securityAlerts" class="note">Loading…</div>
+        <div class="row" style="margin-top:12px">
+          <button type="button" class="ghost" onclick="refreshSecurity()">Refresh</button>
+        </div>
+      </section>
+    </div>
+
     <!-- KEYS -->
     <div class="panel" id="tab-keys">
       <section>
@@ -935,6 +952,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <code>API_KEY_SEED</code> in your env settings and restart.
         </p>
         <div id="builtinKeys" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="ghost" onclick="refreshKeys(true).then(() => renderBuiltinKeys())">Reveal full keys</button>
+          <span class="note">Masked by default</span>
+        </div>
       </section>
 
       <section>
@@ -1216,6 +1237,7 @@ function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta,
 }
 
 function showTab(id) {
+  if (id === 'security') refreshSecurity();
   activeTab = id || 'status';
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
@@ -1277,6 +1299,27 @@ function logout() {
   sessionStorage.removeItem('uplink_auth');
   auth = '';
   setLoggedIn(false);
+}
+
+
+async function refreshSecurity() {
+  const box = document.getElementById('securityAlerts');
+  if (!box) return;
+  try {
+    const data = await api('/admin/security');
+    const alerts = data.alerts || [];
+    if (!alerts.length) {
+      box.textContent = 'No recent alerts.';
+      return;
+    }
+    box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
+      const when = a.at ? new Date(a.at).toLocaleString() : '';
+      return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
+        + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
+    }).join('') + '</ul>';
+  } catch (e) {
+    box.textContent = 'Failed to load: ' + e.message;
+  }
 }
 
 async function login() {
@@ -1572,8 +1615,9 @@ function renderSessions(sessions, sessionsError) {
   }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
 }
 
-async function refreshKeys() {
-  const ks = await api('/admin/keys');
+async function refreshKeys(reveal) {
+  const qs = reveal ? '?reveal=1' : '';
+  const ks = await api('/admin/keys' + qs);
   secrets.master = ks.masterKey || '';
   secrets.prompt = ks.promptKey || '';
   promptKey = secrets.prompt;

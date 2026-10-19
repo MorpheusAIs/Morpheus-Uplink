@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -33,6 +34,9 @@ type Server struct {
 	housekeep *housekeep.Runner
 	masterKey string
 	promptKey string
+	guard     *loginGuard
+	audit     *AuditLog
+	outflow   *OutflowAlert
 }
 
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
@@ -45,6 +49,9 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		housekeep: hk,
 		masterKey: keymaker.MasterKey(cfg.APIKeySeed),
 		promptKey: keymaker.PromptKey(cfg.APIKeySeed),
+		guard:     newLoginGuard(),
+		audit:     NewAuditLog(256),
+		outflow:   &OutflowAlert{},
 	}
 }
 
@@ -70,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/estimate-stake", s.requireAdmin(s.handleEstimateStake))
 	mux.HandleFunc("GET /admin/estimate-stakes", s.requireAdmin(s.handleEstimateStakes))
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
+	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))
@@ -131,10 +139,33 @@ func (s *Server) checkAdmin(r *http.Request) bool {
 
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		key := clientKey(r)
+		_, _, basic := r.BasicAuth()
+		if basic {
+			if ok, retry := s.guard.allow(key); !ok {
+				s.audit.Record("lockout", key, "admin auth blocked")
+				w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+				http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+				return
+			}
+		}
 		if !s.checkAdmin(r) {
+			if basic {
+				d := s.guard.failure(key)
+				msg := "admin auth failed"
+				if d > 0 {
+					msg += "; backoff " + d.String()
+					w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+				}
+				s.audit.Record("login_failure", key, msg)
+			}
 			w.Header().Set("WWW-Authenticate", `Basic realm="uplink-admin"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		if basic {
+			s.guard.success(key)
+			s.audit.Record("login_ok", key, "admin basic auth ok")
 		}
 		next(w, r)
 	}

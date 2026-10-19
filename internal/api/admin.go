@@ -27,13 +27,42 @@ func recordsForAdminJSON(recs []keymaker.Record) []keymaker.Record {
 }
 
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		// Both derived keys are re-derivable from the seed, so showing them
-		// to the authenticated admin does not widen the secret surface.
-		"masterKey": s.masterKey, // full access: prompt + admin
-		"promptKey": s.promptKey, // inference only
-		"keys":      recordsForAdminJSON(s.store.ListKeys()),
-	})
+	reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
+	out := map[string]any{
+		"keys":   recordsForAdminJSON(s.store.ListKeys()),
+		"masked": !reveal,
+	}
+	if reveal {
+		// Explicit reveal only — master key is never returned by default.
+		out["masterKey"] = s.masterKey
+		out["promptKey"] = s.promptKey
+		s.audit.Record("key_reveal", clientKey(r), "admin revealed master/prompt keys")
+	} else {
+		out["masterKey"] = maskSecret(s.masterKey)
+		out["promptKey"] = maskSecret(s.promptKey)
+		// Mask stored secrets on key records by default.
+		if keys, ok := out["keys"].([]keymaker.Record); ok {
+			masked := make([]keymaker.Record, len(keys))
+			copy(masked, keys)
+			for i := range masked {
+				if masked[i].Secret != "" {
+					masked[i].Secret = maskSecret(masked[i].Secret)
+				}
+			}
+			out["keys"] = masked
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func maskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 8 {
+		return "********"
+	}
+	return s[:4] + "…" + s[len(s)-4:]
 }
 
 func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
@@ -50,10 +79,11 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.AddKey(rec); err != nil {
-		// id/hash collision (incl. tombstones) — same style as import
+		// id/hash collision (incl. tombstones) - same style as import
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.audit.Record("key_create", clientKey(r), "created key "+rec.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"key":    full, // shown once; only the hash is stored
 		"record": rec,
@@ -102,6 +132,7 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
 	}
+	s.audit.Record("key_revoke", clientKey(r), "revoked key "+id)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 

@@ -101,6 +101,9 @@ func FromEnv() (*Config, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
+	if err := ValidateAdminPassword(c.AdminPassword, os.Getenv("COOKIE_CONTENT")); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -152,4 +155,41 @@ func getenvBool(key string, def bool) bool {
 		}
 	}
 	return def
+}
+
+var weakPasswords = map[string]struct{}{
+	"": {}, "password": {}, "admin": {}, "admin123": {}, "changeme": {},
+	"secret": {}, "123456": {}, "12345678": {}, "password123": {},
+	"letmein": {}, "qwerty": {}, "uplink": {}, "morpheus": {},
+	"YOUR_STRONG_PASSWORD": {}, "<gui_admin_password>": {}, "<strong_password>": {},
+	"YOUR_STRONG_PASSWORD_HERE": {},
+}
+
+// ValidateAdminPassword refuses weak, template, or cookie-equal admin passwords.
+func ValidateAdminPassword(adminPass, cookieContent string) error {
+	p := strings.TrimSpace(adminPass)
+	if len(p) < 12 {
+		return fmt.Errorf("ADMIN_PASSWORD must be at least 12 characters")
+	}
+	low := strings.ToLower(p)
+	if _, bad := weakPasswords[low]; bad {
+		return fmt.Errorf("ADMIN_PASSWORD is a known-weak or template value")
+	}
+	if _, bad := weakPasswords[p]; bad {
+		return fmt.Errorf("ADMIN_PASSWORD is a known-weak or template value")
+	}
+	for w := range weakPasswords {
+		if w != "" && (low == w || strings.ReplaceAll(low, w, "") == "") {
+			return fmt.Errorf("ADMIN_PASSWORD is a known-weak or template value")
+		}
+	}
+	if cookieContent != "" {
+		if _, pass, ok := strings.Cut(cookieContent, ":"); ok && pass == p {
+			return fmt.Errorf("ADMIN_PASSWORD must not equal COOKIE_CONTENT password")
+		}
+		if cookieContent == p {
+			return fmt.Errorf("ADMIN_PASSWORD must not equal COOKIE_CONTENT")
+		}
+	}
+	return nil
 }
