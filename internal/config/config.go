@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -94,10 +95,29 @@ func FromEnv() (*Config, error) {
 	if c.RouterUser == "" || c.RouterPass == "" {
 		missing = append(missing, "ROUTER_AUTH or ROUTER_AUTH_FILE (user:password)")
 	}
+	if err := requirePositiveWei("UPLINK_MOR_ALLOWANCE_WEI", c.UplinkMORAllowanceWei); err != nil {
+		return nil, err
+	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
 	return c, nil
+}
+
+// requirePositiveWei refuses boot when name is missing, empty, or zero.
+func requirePositiveWei(name, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("%s is required (positive wei budget for scoped router user)", name)
+	}
+	n := new(big.Int)
+	if _, ok := n.SetString(raw, 10); !ok {
+		return fmt.Errorf("%s must be a base-10 integer (wei)", name)
+	}
+	if n.Sign() <= 0 {
+		return fmt.Errorf("%s must be > 0 (got %s)", name, raw)
+	}
+	return nil
 }
 
 func firstNonEmpty(vals ...string) string {

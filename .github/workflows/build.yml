@@ -116,11 +116,11 @@ jobs:
       - name: SecretVM compose prompts only for real secrets
         run: |
           # SecretVM scrapes ALL environment: keys (literals too), not only
-          # dollar-brace substitutions. Allowlist is the six operator
+          # dollar-brace substitutions. Allowlist is the seven operator
           # fillables only. Behavior bake (SESSION_*/ACTIVE_*/GATEWAY_*/
           # HOUSEKEEPING/PROXY_*/LOG_LEVEL_*) and chain/Diamond/MOR must
           # live in configs: only.
-          ALLOWED='ADMIN_PASSWORD|API_KEY_SEED|COOKIE_CONTENT|WALLET_PRIVATE_KEY|ETH_NODE_ADDRESS|WEB_PUBLIC_URL'
+          ALLOWED='ADMIN_PASSWORD|API_KEY_SEED|COOKIE_CONTENT|WALLET_PRIVATE_KEY|ETH_NODE_ADDRESS|WEB_PUBLIC_URL|UPLINK_MOR_ALLOWANCE_WEI'
           FORBIDDEN='ETH_NODE_CHAIN_ID|ETH_NODE_USE_SUBSCRIPTIONS|BLOCKSCOUT_API_URL|DIAMOND_CONTRACT_ADDRESS|MOR_TOKEN_ADDRESS|SESSION_DURATION_SECONDS|SESSION_FAILOVER|ACTIVE_MODELS_URL|GATEWAY_BIDS_URL|HOUSEKEEPING|PROXY_STORE_CHAT_CONTEXT|PROXY_FORWARD_CHAT_CONTEXT|LOG_LEVEL_APP|LOG_LEVEL_TCP|LOG_LEVEL_ETH_RPC'
           # Any forbidden key appearing as an environment assignment (literal or sub).
           if grep -nE "^\s+- (${FORBIDDEN})=" deploy/secretvm/docker-compose.yml; then
@@ -133,7 +133,7 @@ jobs:
             key=$(echo "$line" | sed -nE 's/^[[:space:]]*-[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p')
             [ -z "$key" ] && continue
             if ! echo "$key" | grep -qE "^(${ALLOWED})$"; then
-              echo "❌ environment: key not in six-secret allowlist: $line"
+              echo "❌ environment: key not in seven-secret allowlist: $line"
               exit 1
             fi
           done < <(grep -nE '^[[:space:]]+-[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
@@ -148,14 +148,14 @@ jobs:
             fi
           done < <(grep -nF '${' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
           # Required fillables must be prompted.
-          for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS WEB_PUBLIC_URL; do
+          for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS WEB_PUBLIC_URL UPLINK_MOR_ALLOWANCE_WEI; do
             needle='${'"${req}"'}'
             if ! grep -qF "$needle" deploy/secretvm/docker-compose.yml; then
               echo "❌ Missing required secret prompt: $req"
               exit 1
             fi
           done
-          echo "✅ SecretVM compose prompts for six secrets only; non-secrets stay in configs:"
+          echo "✅ SecretVM compose prompts for seven secrets only; non-secrets stay in configs:"
 
   pr-image-smoke:
     name: PR image smoke

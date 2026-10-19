@@ -1,18 +1,15 @@
 # Railway overlay scaffold - same GHCR image pair as SecretVM/generic.
 #
-# Images are stock digests only. Do NOT docker build the Lumerin node here.
-# Operator fillables (H4) belong in Railway Secrets / vars, never in this
-# file or railway.toml: WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED,
-# COOKIE_CONTENT, ETH_NODE_ADDRESS (RPC), WEB_PUBLIC_URL.
+# No init sidecar on Railway: uplink entrypoint mints the scoped router user
+# when COOKIE_CONTENT + UPLINK_MOR_ALLOWANCE_WEI are set, writes ROUTER_AUTH
+# under DATA_DIR, then unsets COOKIE_CONTENT before exec.
 #
-# H3: single replica for wallet-bearing proxy-router (multi-replica unsupported).
-# H2 blast radius / operator notes: see deploy/railway/README.md.
+# Operator fillables (H4) in Railway Secrets / vars, never in this file:
+# WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED, COOKIE_CONTENT,
+# ETH_NODE_ADDRESS, WEB_PUBLIC_URL, UPLINK_MOR_ALLOWANCE_WEI.
 #
-# Privacy (L1): set / believed honored on pinned v7.15.0; live acceptance pending.
-#
-# Lumerin pin note: tag v7.15.0 is Lumerin main (scoped auth + gateway caps).
-# NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
-# Diamond / MOR below).
+# H3: single replica for wallet-bearing proxy-router.
+# Lumerin pin: v7.15.0 digest. Uplink image TODO digest until Alan build go.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -30,7 +27,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # su-exec needs these after cap_drop ALL
     cap_add:
       - CHOWN
       - SETUID
@@ -41,16 +37,16 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     ports:
       - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
+      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Behavior bake (change via compose/code only -- not Railway vars forms).
       - SESSION_DURATION_SECONDS=600
       - SESSION_FAILOVER=true
       - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
@@ -78,7 +74,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    # No public port on router - only uplink reaches :8082 on the private network.
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
@@ -99,7 +94,6 @@ services:
       - LOG_LEVEL_ETH_RPC=warn
     volumes:
       - router_data:/app/data
-    # H3: deploy with replicas=1 for this wallet-bearing service.
 
 volumes:
   uplink_data:

@@ -9,6 +9,8 @@ func setRequired(t *testing.T) {
 	// Clear auth vars so a developer's exported shell/.env cannot leak in.
 	t.Setenv("ROUTER_AUTH", "")
 	t.Setenv("COOKIE_CONTENT", "")
+	t.Setenv("ROUTER_AUTH_FILE", "")
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "1000000000000000000")
 }
 
 func TestRouterAuthPrimary(t *testing.T) {
@@ -63,5 +65,22 @@ func TestCatalogURLDefaults(t *testing.T) {
 	}
 	if c.GatewayBidsURL != wantBids {
 		t.Fatalf("GatewayBidsURL default: got %q want %q", c.GatewayBidsURL, wantBids)
+	}
+}
+
+func TestAllowanceRequired(t *testing.T) {
+	setRequired(t)
+	t.Setenv("ROUTER_AUTH", "uplink:secret")
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected error when UPLINK_MOR_ALLOWANCE_WEI missing")
+	}
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "0")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected error when UPLINK_MOR_ALLOWANCE_WEI is zero")
+	}
+	t.Setenv("UPLINK_MOR_ALLOWANCE_WEI", "1000000000000000000")
+	if _, err := FromEnv(); err != nil {
+		t.Fatal(err)
 	}
 }

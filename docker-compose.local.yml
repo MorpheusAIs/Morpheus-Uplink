@@ -87,7 +87,9 @@ services:
       - proxy-router
     environment:
       - ROUTER_URL=http://proxy-router:8082
-      - ROUTER_AUTH=${ROUTER_AUTH}
+      - ROUTER_AUTH=${ROUTER_AUTH:-}
+      - COOKIE_CONTENT=${ROUTER_AUTH}
+      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI:-1000000000000000000000}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
       - WEB_PUBLIC_URL=http://localhost:8080

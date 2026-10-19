@@ -1,42 +1,15 @@
 # UPLINK on SecretVM - Personal API Gateway for Morpheus
 #
-# Pattern mirrors the provider TEE compose (Morpheus-Lumerin-Node
-# proxy-router/docker-compose.tee.yml): Traefik terminates TLS on :443 with
-# SecretVM's auto-generated certs; everything routes to uplink, which wraps
-# the consumer-mode proxy-router. No other ports face the internet - a
-# consumer node needs no inbound :3333.
+# Traefik terminates TLS; scoped router user is minted by router-user-init
+# (COOKIE_CONTENT only on init + proxy-router). Uplink reads ROUTER_AUTH from
+# a shared volume (mode 0400); Traefik gets zero secrets.
 #
-# Routing is static (configs routes_config). SecretVM rejects a docker.sock
-# bind ("directives that would break VM isolation"), so Traefik does not use
-# the Docker provider or service labels.
+# Operator fillables (Encrypted Secrets): ADMIN_PASSWORD, API_KEY_SEED,
+# COOKIE_CONTENT, WALLET_PRIVATE_KEY, ETH_NODE_ADDRESS, WEB_PUBLIC_URL,
+# UPLINK_MOR_ALLOWANCE_WEI.
 #
-# Paste this as the VM's Docker Compose, and fill Encrypted Secrets
-# (SecretVM auto-prompts from the substitutions below).
-#
-# Split for a clean secrets form (SecretVM scrapes ALL environment: keys,
-# literals included -- not only dollar-brace substitutions):
-#   - Operator fillables (6): the dollar-brace substitutions below
-#   - Uplink bake (uplink_bake_env): session / catalog / housekeeping
-#   - Router bake (router_network_env): PROXY_* / LOG_LEVEL_* / chain /
-#     Diamond / MOR / Blockscout / auth paths / ENVIRONMENT
-#     (NOT prompted; never mix into uplink bake)
-#
-# Per-container environment only -- no shared env_file (secrets must not
-# land in Traefik or every service). Traefik gets zero secrets.
-#
-# Privacy env (L1): PROXY_* and LOG_LEVEL_* live in router_network_env and are
-# believed honored on pinned v7.15.0; live acceptance pending. Do not
-# market as TEE privacy until verified on the pinned digest.
-#
-# Lumerin pin note: tag v7.15.0 is Lumerin main (scoped auth + gateway caps).
-# NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
-# Diamond / MOR below).
-#
-# Traefik SSE buffering: do not invent Traefik flags that break TEE TLS.
-# Prefer documented middleware only after Josh/ops confirm. Generic overlay
-# uses Caddy flush_interval -1; SecretVM Traefik buffering check is pending.
-#
-# H2 blast radius / H3 single-replica: see deploy/secretvm/README.md.
+# Lumerin pin: v7.15.0 digest. Uplink image TODO digest until Alan build go.
+# H2/H3: see deploy/secretvm/README.md.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -44,10 +17,26 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  router-user-init:
+    image: curlimages/curl:8.12.1@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    restart: "no"
+    logging: *default-logging
+    environment:
+      - COOKIE_CONTENT=${COOKIE_CONTENT}
+      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}
+    configs:
+      - source: router_user_init
+        target: /init.sh
+        mode: 0555
+    volumes:
+      - router_auth:/shared
+    networks:
+      - web
+    depends_on:
+      - proxy-router
+    entrypoint: ["/bin/sh", "/init.sh"]
+
   uplink:
-    # Template only - for real deployments use the digest-pinned
-    # docker-compose.secretvm.deployed.yml attached to each GitHub release.
-    # ROUTER_URL and DATA_DIR defaults are baked into the image.
     # TODO digest: pin after Alan build go (CI release check fails if still :latest or TODO)
     image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AFTER_ALAN_BUILD
     restart: unless-stopped
@@ -57,7 +46,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # su-exec needs these after cap_drop ALL
     cap_add:
       - CHOWN
       - SETUID
@@ -68,23 +56,23 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     environment:
-      # Encrypted Secrets form scrapes every environment: key -- keep ONLY the six operator fillables.
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
-      - COOKIE_CONTENT=${COOKIE_CONTENT}
-      # Same Base RPC + wallet as the router - daylocked MOR reads + post-midnight reclaim.
-      # Public HTTPS origin (GUI / swagger). Fill with https://<vm-host>.
+      - UPLINK_MOR_ALLOWANCE_WEI=${UPLINK_MOR_ALLOWANCE_WEI}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
     configs:
       - source: uplink_bake_env
         target: /etc/uplink/bake.env
     volumes:
       - uplink_data:/data
+      - router_auth:/shared:ro
     networks:
       - web
+    depends_on:
+      router-user-init:
+        condition: service_completed_successfully
 
   proxy-router:
     image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
@@ -103,12 +91,10 @@ services:
       retries: 3
       start_period: 60s
     environment:
-      # Encrypted Secrets form scrapes every environment: key -- keep ONLY operator fillables.
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-    # Consumer mode: no MODELS_CONFIG_CONTENT, no provider registration.
     configs:
       - source: router_network_env
         target: /app/.env
@@ -116,8 +102,6 @@ services:
       - router_data:/app/data
     networks:
       - web
-    # Intentionally no ports: only uplink (and traefik) can reach :8082.
-    # H3: single replica for this wallet-bearing proxy-router (multi-replica unsupported).
 
   traefik:
     image: traefik:v2.10
@@ -132,7 +116,6 @@ services:
     ports:
       - 443:443
     volumes:
-      # Cert mount only. Do not add /var/run/docker.sock -- SecretVM rejects it.
       - /mnt/secure/cert:/certs:ro
     networks:
       - web
@@ -145,15 +128,13 @@ services:
 volumes:
   uplink_data:
   router_data:
+  router_auth:
 
 networks:
   web:
     driver: bridge
 
 configs:
-  # Uplink non-secret behavior bake (entrypoint sources /etc/uplink/bake.env).
-  # Kept out of environment: so SecretVM does not put these in Encrypted Secrets.
-  # Change later via code / compose only -- not operator forms.
   uplink_bake_env:
     content: |-
       SESSION_DURATION_SECONDS=600
@@ -161,10 +142,9 @@ configs:
       ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
       GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
       HOUSEKEEPING=true
-  # Non-secret runtime + Base mainnet config (Morpheus-Lumerin-Node main.env).
-  # Kept out of environment: so SecretVM does not put these in Encrypted Secrets.
-  # Loaded by the router's godotenv.Load(".env"); process env wins over this file.
-  # Privacy (L1: set / believed honored; live acceptance pending).
+      ROUTER_URL=http://proxy-router:8082
+      ROUTER_AUTH_FILE=/shared/router.auth
+      DATA_DIR=/data
   router_network_env:
     content: |-
       ETH_NODE_CHAIN_ID=8453
@@ -180,6 +160,81 @@ configs:
       LOG_LEVEL_APP=warn
       LOG_LEVEL_TCP=warn
       LOG_LEVEL_ETH_RPC=warn
+  router_user_init:
+    content: |-
+      #!/bin/sh
+      # Create scoped router user "uplink" with MOR allowance. Idempotent.
+      # Writes uplink:<password> to ROUTER_AUTH_OUT (mode 0400). Never logs the password.
+      set -eu
+
+      ROUTER_URL="${ROUTER_URL:-http://proxy-router:8082}"
+      AUTH_OUT="${ROUTER_AUTH_OUT:-/shared/router.auth}"
+      USER_NAME="${UPLINK_ROUTER_USER:-uplink}"
+      ALLOWANCE_WEI="${UPLINK_MOR_ALLOWANCE_WEI:?UPLINK_MOR_ALLOWANCE_WEI required}"
+      MOR_TOKEN="${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}"
+      # Lowercase token address (router allowance lookup is case-sensitive to lower).
+      MOR_TOKEN=$(printf '%s' "$MOR_TOKEN" | tr 'A-F' 'a-f')
+
+      if [ -z "$ALLOWANCE_WEI" ] || [ "$ALLOWANCE_WEI" = "0" ]; then
+        echo "router-user-init: UPLINK_MOR_ALLOWANCE_WEI missing or zero" >&2
+        exit 1
+      fi
+
+      COOKIE_CONTENT="${COOKIE_CONTENT:?COOKIE_CONTENT required for admin confirm}"
+      ADMIN_USER=$(printf '%s' "$COOKIE_CONTENT" | cut -d: -f1)
+      ADMIN_PASS=$(printf '%s' "$COOKIE_CONTENT" | cut -d: -f2-)
+
+      echo "router-user-init: waiting for router healthcheck..."
+      i=0
+      while [ "$i" -lt 90 ]; do
+        if curl -fsS "$ROUTER_URL/healthcheck" >/dev/null 2>&1; then
+          break
+        fi
+        i=$((i + 1))
+        sleep 2
+      done
+      if [ "$i" -ge 90 ]; then
+        echo "router-user-init: router healthcheck timeout" >&2
+        exit 1
+      fi
+
+      PASS=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+      if [ "${#PASS}" -lt 32 ]; then
+        echo "router-user-init: failed to generate password" >&2
+        exit 1
+      fi
+
+      PERMS='["chat","embeddings","open_session","close_session","get_sessions","get_wallet","get_balance","get_supply","get_budget","get_stakes_on_hold","withdraw_user_stakes"]'
+
+      echo "router-user-init: delete existing user (ignore errors)..."
+      curl -fsS -u "${ADMIN_USER}:${ADMIN_PASS}" -X DELETE \
+        -H 'Content-Type: application/json' \
+        -d "{\"username\":\"${USER_NAME}\"}" \
+        "$ROUTER_URL/auth/users" >/dev/null 2>&1 || true
+
+      echo "router-user-init: request agent user..."
+      # Build JSON without echoing password to logs - use env for curl data via printf to file
+      REQ_FILE=$(mktemp)
+      CONF_FILE=$(mktemp)
+      trap 'rm -f "$REQ_FILE" "$CONF_FILE"' EXIT
+      printf '{"username":"%s","password":"%s","perms":%s,"allowances":{"%s":"%s"}}' \
+        "$USER_NAME" "$PASS" "$PERMS" "$MOR_TOKEN" "$ALLOWANCE_WEI" > "$REQ_FILE"
+
+      curl -fsS -X POST -H 'Content-Type: application/json' \
+        --data-binary @"$REQ_FILE" \
+        "$ROUTER_URL/auth/users/request" >/dev/null
+
+      echo "router-user-init: confirm agent user..."
+      printf '{"username":"%s","confirm":true}' "$USER_NAME" > "$CONF_FILE"
+      curl -fsS -u "${ADMIN_USER}:${ADMIN_PASS}" -X POST \
+        -H 'Content-Type: application/json' \
+        --data-binary @"$CONF_FILE" \
+        "$ROUTER_URL/auth/users/confirm" >/dev/null
+
+      umask 077
+      printf '%s:%s\n' "$USER_NAME" "$PASS" > "$AUTH_OUT"
+      chmod 0400 "$AUTH_OUT"
+      echo "router-user-init: wrote ROUTER_AUTH file (mode 0400); done"
   tls_config:
     content: |-
       tls:
