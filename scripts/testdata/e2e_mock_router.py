@@ -12,7 +12,12 @@ unauthenticated (as upstream). Everything else needs any valid user.
 Test controls (no auth, test-only): GET /e2e/stats, POST /e2e/fund?mor=N,
 POST /e2e/forget-users, POST /e2e/fail?path=P&code=N (inject errors),
 POST /e2e/readback-skew?on=1 (make GET /auth/users report a wrong value),
-POST /e2e/consume?wei=N (simulate session holds lowering the allowance).
+POST /e2e/consume?wei=N (simulate session holds lowering the allowance),
+POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
+previous process), GET /e2e/sessions (every session with its open/close
+times and prompt count), GET /e2e/catalog (gateway model catalog).
+Sessions: list (/blockchain/sessions/user), open, close, detail, and
+POST /v1/chat/completions with a session_id header (open sessions only).
 Any request asking for direct payment is refused and counted
 (stats.direct_payment_requests).
 
@@ -26,6 +31,8 @@ import json
 import os
 import sys
 import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -38,13 +45,30 @@ S = {
     "pending": {},     # name -> request
     "allow_req": {},   # "name:token" -> allowance
     "stats": {"unauthorized": 0, "unauthorized_by_pw": {}, "ok_by_pw": {},
-              "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0},
+              "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0,
+              "session_opens": 0, "session_closes": 0},
     "fail": {},        # path -> code
+    "sessions": {},    # id -> session row (in memory; survives uplink restarts)
     "skew": False,
 }
 if STATE_FILE and os.path.exists(STATE_FILE):
     with open(STATE_FILE) as f:
         S["users"] = json.load(f).get("users", {})
+
+
+CATALOG = [
+    {"Name": "e2e-alpha", "Id": "0x" + "a1" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
+    {"Name": "e2e-beta", "Id": "0x" + "b2" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
+]
+
+
+def new_session(model, ends_at, opened_by):
+    sid = "0x" + uuid.uuid4().hex + uuid.uuid4().hex
+    S["sessions"][sid] = {"Id": sid, "ModelAgentId": model, "Stake": "1000",
+                          "OpenedAt": int(time.time()), "EndsAt": int(ends_at),
+                          "ClosedAt": 0, "OpenedBy": opened_by, "Prompts": 0,
+                          "ClosedAtMono": 0}
+    return sid
 
 
 def persist():
@@ -183,7 +207,40 @@ class H(BaseHTTPRequestHandler):
             if path == "/wallet":
                 return self._json(200, {"address": os.environ.get("MOCK_WALLET", "0x" + "ab" * 20)})
             if path == "/blockchain/sessions/user":
-                return self._json(200, {"sessions": []})
+                off = int(q.get("offset", ["0"])[0]); lim = int(q.get("limit", ["100"])[0])
+                rows = sorted(S["sessions"].values(), key=lambda x: x["OpenedAt"], reverse=True)
+                keys = ("Id", "ModelAgentId", "Stake", "OpenedAt", "EndsAt", "ClosedAt")
+                return self._json(200, {"sessions": [{k: r[k] for k in keys} for r in rows[off:off + lim]]})
+            if path.startswith("/blockchain/models/") and path.endswith("/session") and method == "POST":
+                model = path[len("/blockchain/models/"):-len("/session")]
+                dur = int(body.get("sessionDuration") or 600)
+                S["stats"]["session_opens"] += 1
+                return self._json(200, {"sessionID": new_session(model, time.time() + dur, "uplink")})
+            if path.startswith("/blockchain/sessions/") and path.endswith("/close") and method == "POST":
+                r = S["sessions"].get(path.split("/")[3])
+                if r is None:
+                    return self._json(404, {"error": "session not found"})
+                if not r["ClosedAt"]:
+                    r["ClosedAt"] = int(time.time())
+                    r["ClosedAtMono"] = time.time()
+                    S["stats"]["session_closes"] += 1
+                return self._json(200, {"result": True})
+            if path.startswith("/blockchain/sessions/0x") and method == "GET":
+                r = S["sessions"].get(path.split("/")[3])
+                if r is None:
+                    return self._json(404, {"error": "session not found"})
+                keys = ("Id", "ModelAgentId", "Stake", "OpenedAt", "EndsAt", "ClosedAt")
+                return self._json(200, {"session": {k: r[k] for k in keys}})
+            if path == "/v1/chat/completions" and method == "POST":
+                r = S["sessions"].get(self.headers.get("session_id", ""))
+                if r is None or r["ClosedAt"] or r["EndsAt"] <= time.time():
+                    return self._json(400, {"error": "session not found"})
+                r["Prompts"] += 1
+                return self._json(200, {"id": "chatcmpl-e2e", "object": "chat.completion",
+                                        "model": body.get("model", ""),
+                                        "choices": [{"index": 0, "finish_reason": "stop",
+                                                     "message": {"role": "assistant", "content": "ok"}}],
+                                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
             if path == "/blockchain/stakes/onhold":
                 return self._json(200, {"available": "0", "hold": "0"})
             return self._json(200, {})
@@ -195,7 +252,16 @@ class H(BaseHTTPRequestHandler):
             out["users"] = {n: {"pw": pw_tag(x["password"]), "allowances": x.get("allowances", {})}
                             for n, x in S["users"].items()}
             return self._json(200, out)
+        if path == "/e2e/sessions":
+            return self._json(200, {"now": time.time(), "sessions": list(S["sessions"].values())})
+        if path == "/e2e/catalog":
+            return self._json(200, {"models": CATALOG})
+        if path == "/e2e/bids":
+            return self._json(200, {})
         self._body()
+        if path == "/e2e/seed-session":
+            sid = new_session(q.get("model", [""])[0], time.time() + int(q.get("ends_in", ["3600"])[0]), "seed")
+            return self._json(200, {"id": sid})
         if path == "/e2e/fund":
             S["mor"] = q.get("mor", ["0"])[0]
         elif path == "/e2e/consume":
@@ -217,7 +283,8 @@ class H(BaseHTTPRequestHandler):
             S["skew"] = q.get("on", ["0"])[0] == "1"
         elif path == "/e2e/reset-stats":
             S["stats"] = {"unauthorized": 0, "unauthorized_by_pw": {}, "ok_by_pw": {},
-                          "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0}
+                          "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0,
+                          "session_opens": 0, "session_closes": 0}
         return self._json(200, {"ok": True})
 
     def do_GET(self):

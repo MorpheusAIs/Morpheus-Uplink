@@ -7,6 +7,10 @@
 #                modes; mounts and ownership of the manager volumes (T1);
 #                no admin credential in env/cmdline, no netrc, no core dumps
 #                (T5); manager network isolation (T8, bridge hosts only).
+#  sessions      SIGKILL with open sessions, restart: the boot reconcile
+#                adopts the usable ones, closes duplicate/expired/unconfigured
+#                ones, opens nothing new, inference works; then docker stop
+#                closes the sessions before exit (app is PID 1), timed.
 #  funding       allowance follows the wallet balance with the password
 #                unchanged (T2); GUI resync request path; rate limit.
 #  init re-run   init alone while uplink keeps running: credential kept,
@@ -288,6 +292,75 @@ allowance_is() { [ "$(mock_allowance)" = "$1" ]; }
 wait_for "allowance = balance" 30 allowance_is "$E2E_MOCK_MOR"
 [ "$(mock_allowance)" = "$E2E_MOCK_MOR" ] || fail "boot allowance $(mock_allowance) != balance $E2E_MOCK_MOR"
 
+echo "== sessions: SIGKILL then restart (boot reconcile) =="
+MA=0x$(printf 'a1%.0s' $(seq 1 32)); MB=0x$(printf 'b2%.0s' $(seq 1 32)); MX=0x$(printf 'ee%.0s' $(seq 1 32))
+APIKEY=$(uapi POST /admin/keys '{"name":"e2e"}' | jq -r .key)
+[ -n "$APIKEY" ] && [ "$APIKEY" != null ] || fail "could not create an API key"
+# chat MODEL -> HTTP code; the key goes to curl on stdin (-K -), never argv.
+chat() {
+  "${C:-dc}" exec -T uplink sh -c 'curl -sS -o /dev/null -w "%{http_code}" -K - -X POST \
+    -H "Content-Type: application/json" --data-binary "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+    http://127.0.0.1:8080/v1/chat/completions' _ "$1" <<<"header = \"Authorization: Bearer $APIKEY\""
+}
+sessions() { mockctl GET /e2e/sessions; }
+sess_field() { sessions | jq -r --arg id "$1" ".sessions[] | select(.Id == \$id) | .$2"; }
+opens() { stats | jq -r .session_opens; }
+[ "$(chat e2e-alpha)" = 200 ] || fail "chat e2e-alpha through uplink"
+SA=$(sessions | jq -r --arg m "$MA" '[.sessions[] | select(.ModelAgentId == $m and .OpenedBy == "uplink")][0].Id')
+[ -n "$SA" ] && [ "$SA" != null ] || fail "uplink opened no session for e2e-alpha"
+SB=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=3600" | jq -r .id)       # adoptable
+SDUP=$(mockctl POST "/e2e/seed-session?model=$MA&ends_in=300" | jq -r .id)      # duplicate of SA
+SEXP=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)       # inside expiry buffer
+SX=$(mockctl POST "/e2e/seed-session?model=$MX&ends_in=3600" | jq -r .id)       # model not configured
+nrec() { dc logs --no-color uplink | grep -c '"event":"session_reconcile"' || true; }
+nrec0=$(nrec)
+docker kill -s KILL "$(cid uplink)" >/dev/null
+open0=$(opens)
+[ "$(sess_field "$SA" ClosedAt)" = 0 ] || fail "SIGKILL closed a session (should be impossible)"
+dc up -d uplink >/dev/null
+wait_healthy uplink
+login
+reconciled() { [ "$(nrec)" -gt "$nrec0" ]; }
+wait_for "reconcile audit line" 60 reconciled
+line=$(dc logs --no-color uplink | grep '"event":"session_reconcile"' | tail -n 1)
+echo "reconcile: $(printf '%s' "$line" | jq -c '{result,open,adopted,closed,failed,attempts}' 2>/dev/null || printf '%s' "$line")"
+printf '%s' "$line" | grep -q '"adopted":2' || fail "expected 2 adopted: $line"
+printf '%s' "$line" | grep -q '"closed":3' || fail "expected 3 closed: $line"
+printf '%s' "$line" | grep -q '"failed":0' || fail "expected 0 failed: $line"
+for id in "$SDUP" "$SEXP" "$SX"; do [ "$(sess_field "$id" ClosedAt)" != 0 ] || fail "stale/unconfigured session ${id:0:10} left open"; done
+for id in "$SA" "$SB"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "adoptable session ${id:0:10} was closed"; done
+if printf '%s' "$line" | grep -qiE '0x[0-9a-f]{8}'; then fail "audit line carries a session id"; fi
+pa=$(sess_field "$SA" Prompts); pb=$(sess_field "$SB" Prompts)
+[ "$(chat e2e-alpha)" = 200 ] || fail "chat e2e-alpha after restart"
+[ "$(chat e2e-beta)" = 200 ] || fail "chat e2e-beta after restart"
+[ "$(opens)" = "$open0" ] || fail "uplink opened a new session for a model that had an adoptable one ($(opens) != $open0)"
+[ "$(sess_field "$SA" Prompts)" -gt "$pa" ] && [ "$(sess_field "$SB" Prompts)" -gt "$pb" ] || fail "inference did not use the adopted sessions"
+echo "OK reconcile: adopted 2 (alpha, beta), closed 3 (duplicate, expired, unconfigured), no new open, inference works"
+
+echo "== sessions: docker stop closes them before exit =="
+grace=$(docker inspect -f '{{.Config.StopTimeout}}' "$(cid uplink)")
+[ "$grace" = 45 ] || fail "uplink stop grace is ${grace}s, want 45s"
+[ "$(dc exec -T uplink cat /proc/1/comm)" = uplink ] || fail "PID 1 in uplink is $(dc exec -T uplink cat /proc/1/comm), not the app"
+t0=$(date +%s.%N)
+dc stop uplink >/dev/null
+t1=$(date +%s.%N)
+code=$(docker inspect -f '{{.State.ExitCode}}' "$(cid uplink)")
+for id in "$SA" "$SB"; do
+  c=$(sessions | jq -r --arg id "$id" '.sessions[] | select(.Id == $id) | .ClosedAtMono')
+  [ "$c" != 0 ] || fail "session ${id:0:10} still open after docker stop"
+done
+last=$(sessions | jq -r --arg a "$SA" --arg b "$SB" '[.sessions[] | select(.Id == $a or .Id == $b) | .ClosedAtMono] | max')
+stop_s=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')
+close_s=$(awk -v a="$t0" -v b="$last" 'BEGIN{printf "%.2f", b-a}')
+dc logs --no-color uplink | grep -E 'shutdown: (in-flight|closed)' | tail -n 2
+echo "TIMING docker stop: total ${stop_s}s, last session close at +${close_s}s, exit code $code (grace ${grace}s)"
+[ "$code" = 0 ] || fail "uplink exit code $code (137 = killed at grace end)"
+awk -v s="$stop_s" 'BEGIN{exit !(s < 45)}' || fail "docker stop took ${stop_s}s"
+dc up -d uplink >/dev/null
+wait_healthy uplink
+login
+echo "OK graceful stop: sessions closed before exit, within the grace period"
+
 echo "== T2 funding resync (password unchanged) =="
 pw0=$(cur_pw_tag); up0=$(docker inspect -f '{{.State.StartedAt}}' "$(cid uplink)")
 mockctl POST "/e2e/fund?mor=7770000" >/dev/null
@@ -421,4 +494,4 @@ C=dc
 [ "$(stats | jq -r .direct_payment_requests)" = 0 ] || fail "railway: direct-payment request"
 echo "OK railway: minted in-container with caps dropped, uplink uid 10001, no admin cookie in the server env"
 
-echo "OK: SecretVM auth handoff e2e (boot, funding resync, init re-run, manager down, reboot race, cap, railway)"
+echo "OK: SecretVM auth handoff e2e (boot, session reconcile, graceful stop, funding resync, init re-run, manager down, reboot race, cap, railway)"
