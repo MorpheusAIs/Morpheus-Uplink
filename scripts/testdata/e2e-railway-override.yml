@@ -1,0 +1,30 @@
+# Overlay for the Railway leg of scripts/e2e-secretvm-handoff.sh: the
+# Railway template as-is (uplink mints the scoped user itself, cap_drop ALL
+# + CHOWN/SETUID/SETGID, no-new-privileges), with the local image and the
+# python mock router. No host port publish in tests.
+services:
+  uplink:
+    image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
+    pull_policy: never
+    ports: !reset []
+    environment:
+      - ADMIN_2FA_REQUIRED=false
+    healthcheck:
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+
+  proxy-router:
+    image: python:3.12-alpine
+    entrypoint: ["python3", "/mock/e2e_mock_router.py", "8082"]
+    environment:
+      - MOCK_MOR=${E2E_MOCK_MOR:-1000000}
+    ports: !reset []
+    healthcheck:
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    volumes:
+      - ${E2E_MOCK_ROUTER:?set E2E_MOCK_ROUTER}:/mock/e2e_mock_router.py:ro

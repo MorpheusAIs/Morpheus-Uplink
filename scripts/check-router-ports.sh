@@ -20,13 +20,14 @@ export ROUTER_AUTH="${ROUTER_AUTH:-uplink:scoped-pass-xx}"
 export PUBLIC_HOST="${PUBLIC_HOST:-uplink.example}"
 export MOR_TOKEN_ADDRESS="${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}"
 
-# Returns 0 if clean, 1 if a bad publish is found (or compose config fails).
+# Returns 0 if clean, 1 if a bad publish is found, 2 if the file does not
+# render at all (an error, never counted as "correctly rejected").
 check_one() {
   local f="$1"
   local json
   if ! json=$(docker compose -f "$f" config --format json 2>/dev/null); then
-    echo "BAD: docker compose config failed for $f" >&2
-    return 1
+    echo "ERROR: docker compose config failed for $f" >&2
+    return 2
   fi
   printf '%s' "$json" | python3 -c '
 import json, sys
@@ -82,8 +83,14 @@ if [ "$#" -gt 0 ]; then
     exit 0
   fi
   for f in "$@"; do
-    if check_one "$f"; then
+    rc=0
+    check_one "$f" || rc=$?
+    if [ "$rc" -eq 0 ]; then
       echo "port guard: expected failure for $f but it passed" >&2
+      exit 1
+    fi
+    if [ "$rc" -ne 1 ]; then
+      echo "port guard: fixture $f failed to render; that is not a rejection" >&2
       exit 1
     fi
     echo "OK: rejected $f"

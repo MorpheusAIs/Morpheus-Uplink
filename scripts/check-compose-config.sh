@@ -40,15 +40,17 @@ check_single_file() {
     rm -rf "$tmp"
     exit 1
   fi
-  if grep -nE '^\s+-[[:space:]]+(\./|\.\./)' "$tmp/docker-compose.yml"; then
+  if grep -nE '^\s+-[[:space:]]+(\./|\.\./)' "$tmp/docker-compose.yml" \
+    || grep -nE '^\s+source:[[:space:]]*["'"'"']?(\./|\.\./|~)' "$tmp/docker-compose.yml"; then
     echo "BAD: relative bind mount breaks paste-only deploy" >&2
     rm -rf "$tmp"
     exit 1
   fi
   (cd "$tmp" && docker compose -f docker-compose.yml config --format json > "$jsonfile")
-  if ! python3 - "$jsonfile" <<'PY'
-import json, sys
+  if ! python3 - "$jsonfile" "$tmp" <<'PY'
+import json, os, sys
 data = json.load(open(sys.argv[1]))
+tmpdir = os.path.realpath(sys.argv[2])
 bad = []
 for sname, svc in (data.get("services") or {}).items():
     for v in svc.get("volumes") or []:
@@ -56,8 +58,12 @@ for sname, svc in (data.get("services") or {}).items():
             continue
         if v.get("type") == "bind":
             src = v.get("source") or ""
-            if src.startswith("./") or src.startswith("../"):
-                bad.append("%s bind %s" % (sname, src))
+            # Compose resolves relative sources (short or long form)
+            # against the project dir, i.e. this empty temp dir.
+            real = os.path.realpath(src) if src.startswith("/") else src
+            if (src.startswith("./") or src.startswith("../")
+                    or real == tmpdir or real.startswith(tmpdir + os.sep)):
+                bad.append("%s bind %s (relative)" % (sname, src))
 for cname, cfg in (data.get("configs") or {}).items():
     if cfg.get("file"):
         bad.append("config %s file=%s" % (cname, cfg.get("file")))
@@ -78,4 +84,22 @@ PY
 
 check_single_file "$ROOT/deploy/secretvm/docker-compose.yml"
 check_single_file "$ROOT/deploy/generic/docker-compose.yml"
+
+# Self-test: relative binds in short AND long form must be refused.
+selftest_dir=$(mktemp -d)
+mkdir -p "$selftest_dir/x"
+for form in short long; do
+  if [ "$form" = short ]; then
+    printf 'services:\n  a:\n    image: alpine\n    volumes:\n      - ./data:/data\n' > "$selftest_dir/x/docker-compose.yml"
+  else
+    printf 'services:\n  a:\n    image: alpine\n    volumes:\n      - type: bind\n        source: data\n        target: /data\n' > "$selftest_dir/x/docker-compose.yml"
+  fi
+  if (check_single_file "$selftest_dir/x/docker-compose.yml") >/dev/null 2>&1; then
+    echo "BAD: single-file check accepted a $form-form relative bind" >&2
+    rm -rf "$selftest_dir"
+    exit 1
+  fi
+  echo "OK: single-file check refuses $form-form relative bind"
+done
+rm -rf "$selftest_dir"
 echo "OK: all compose configs render"

@@ -161,6 +161,10 @@ jobs:
           bash scripts/check-router-ports.sh scripts/testdata/ports-bad.yml
           bash scripts/check-router-ports.sh scripts/testdata/netmode-host-router.yml scripts/testdata/netmode-host-uplink.yml scripts/testdata/netmode-host-renamed.yml scripts/testdata/netmode-host-renamed-uplink.yml
           bash scripts/check-router-ports.sh --ok scripts/testdata/ports-ok.yml
+          # A fixture that fails to render is an error, never a rejection.
+          if bash scripts/check-router-ports.sh scripts/testdata/ports-unrenderable.yml; then
+            echo "port guard counted an unrenderable fixture as rejected"; exit 1
+          fi
           echo "OK: port guard JSON fixtures"
       - name: Router image digest must stay pinned
         run: bash scripts/check-router-digest.sh
@@ -168,6 +172,12 @@ jobs:
         run: bash scripts/check-compose-config.sh
       - name: Router-user-init allowance resolution
         run: bash scripts/test-router-user-init.sh
+      - name: Allowance manager (fail-closed matrix, flag hostility, failures)
+        run: bash scripts/test-allowance-manager.sh
+      - name: Allowance manager template policy (mounts, network, perms, cap expression)
+        run: bash scripts/check-allowance-manager-policy.sh
+      - name: Uplink never requests direct-payment sessions
+        run: bash scripts/check-no-direct-payment.sh
       - name: GUI script must parse
         run: bash scripts/check-gui-js.sh
       - name: Uplink image lines must not be :latest without TODO (script self-check)
@@ -210,9 +220,12 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build image (no registry push)
         run: docker build -t uplink:e2e --build-arg VERSION=e2e .
-      - name: router-user-init -> uplink healthy (SecretVM caps, mock router)
-        # deploy/secretvm compose + scripts/testdata overlay: real cap_drop ALL
-        # (no DAC_OVERRIDE) and router_auth :ro handoff; proxy-router mocked.
+      - name: SecretVM stack e2e (init, allowance manager, restart race, Railway; mock router)
+        # deploy/secretvm + deploy/railway compose with scripts/testdata
+        # overlays: real caps and volumes; proxy-router is a stateful mock.
+        # Covers boot/handoff, funding resync, init re-run, manager down,
+        # reboot + daemon-restart race with credential rotation, cap mode,
+        # manager network isolation and the Railway path.
         run: bash scripts/e2e-secretvm-handoff.sh
 
   generate-tag:
