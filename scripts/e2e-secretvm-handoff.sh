@@ -15,6 +15,7 @@
 #                idempotent; an empty or {} catalog closes nothing live; a
 #                failing list holds opens and closes nothing, then recovers
 #                closing expired only; a slow close does not block opens;
+#                a model id that differs only by case is reused, never closed;
 #                then docker stop closes the sessions before exit, timed.
 #  funding       allowance follows the wallet balance with the password
 #                unchanged (T2); GUI resync request path; rate limit.
@@ -425,6 +426,18 @@ wait_for "slow close done" 40 recovered
 [ "$(sess_field "$SE3" ClosedAt)" != 0 ] || fail "slow close did not complete"
 echo "TIMING open during slow close: $((t1 - t0))s"
 echo "OK slow close: opens proceed while closes run in the background"
+
+echo "== sessions: model id differs only by case (adopted, reused, never closed) =="
+SD=$(mockctl POST "/e2e/seed-session?model=0x$(printf 'D4%.0s' $(seq 1 32))&ends_in=3600" | jq -r .id)
+kill_restart
+o3=$(opens); pd=$(sess_field "$SD" Prompts)
+[ "$(chat e2e-delta)" = 200 ] || fail "chat e2e-delta"
+[ "$(opens)" = "$o3" ] || fail "opened a new session next to a case-mismatched adoptable one"
+[ "$(sess_field "$SD" Prompts)" -gt "$pd" ] || fail "inference did not use the case-mismatched session"
+kill_restart
+[ "$(sess_field "$SD" ClosedAt)" = 0 ] || fail "case-mismatched session closed on a later boot"
+[ "$(opens)" = "$o3" ] || fail "second boot opened a session"
+echo "OK case-only match: adopted, reused (no new open), kept across boots"
 no_full_ids_in_audit
 
 echo "== sessions: docker stop closes them before exit =="

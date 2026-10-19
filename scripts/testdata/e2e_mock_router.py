@@ -63,6 +63,7 @@ CATALOG = [
     {"Name": "e2e-alpha", "Id": "0x" + "a1" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
     {"Name": "e2e-beta", "Id": "0x" + "b2" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
     {"Name": "e2e-gamma", "Id": "0x" + "c3" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
+    {"Name": "e2e-delta", "Id": "0x" + "d4" * 32, "Tags": [], "ModelType": "LLM", "bidDetail": []},
 ]
 
 
