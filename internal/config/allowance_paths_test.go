@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Josh SHOULD B: /ctl and /status are never under DATA_DIR.
+// /ctl and /status are never under DATA_DIR.
 func TestAllowancePathsNotUnderDataDir(t *testing.T) {
 	data := t.TempDir()
 	cases := []struct {
