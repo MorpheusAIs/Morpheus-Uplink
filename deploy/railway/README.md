@@ -46,34 +46,46 @@ Keep ownership separate:
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
-  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router**: PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR (see L1 below).
   Never put router PROXY_*/LOG_LEVEL_* into Uplink bake docs.
 
 No wallet material in logs or (future) journals.
 
-## MOR allowance (optional cap)
+## MOR allowance (locks, not spends; optional cap)
 
 Uplink talks to the router as a scoped `uplink` user (never the admin
-cookie). That user is recreated at each boot with a MOR **allowance**: the
-most MOR it can stake for sessions before a restart.
+cookie). Railway has no allowance manager: the entrypoint sets the allowance
+at each boot.
 
-- `UPLINK_MOR_ALLOWANCE_WEI` **empty / unset** (default): allowance = the
-  **full wallet MOR balance** read at boot. Convenient, but it is the
-  maximum exposure if Uplink is compromised.
-- **Set** (digits only, wei; no internal spaces): explicit cap. Setting a
-  cap **limits exposure**; e.g. `1000000000000000000000` = 1000 MOR.
-  Leading zeros are ignored.
-- **`0`**: explicit zero cap (fail-closed). The balance is not read; no
-  sessions open until you raise the cap and restart.
-- If the balance read fails or the wallet holds 0 MOR, the allowance is 0
-  with a warning (restart after funding).
+> **MOR allowance.** The gateway's router user can only open inference sessions; it cannot send MOR or ETH, change approvals, or read the wallet key. A session stake is locked while the session runs and is returned to this wallet, held at most until the next UTC day. Sessions cost ETH gas.
+> Empty `UPLINK_MOR_ALLOWANCE_WEI`: the gateway may lock up to the wallet MOR balance at boot. Set a value in wei to cap how much MOR it can lock in total; `0` disables session opening.
+> Note: the router also supports "direct payment" sessions, where the provider is paid from the stake (at most `getTodaysBudget / totalMORSupply` of it, about 0.3% today). The gateway itself never uses it, but whoever holds the router credential could. A cap bounds that worst case to the same fraction of the cap.
 
-The effective allowance (wei + source: `balance`, `override`, `zero`, or
-`unknown`) is shown on the GUI Status and Security tabs, returned by
-`/admin/status` (`morAllowance`), and logged once at boot
-(`mor allowance` line + `allowance` audit event; no secrets).
+**High-value wallets: use cap mode.** Set `UPLINK_MOR_ALLOWANCE_WEI`; a cap
+bounds the direct-payment worst case to that fraction of the cap.
+
+- **Empty / unset** (default): wallet MOR balance at boot. Restart to include
+  new deposits.
+- **Set** (digits only, wei; no internal spaces): fixed cap. Example:
+  `1000000000000000000000` = 1000 MOR. Leading zeros are ignored.
+- **`0`**: session opening disabled. The balance is not read.
+- If the balance read fails or the wallet holds 0 MOR, the allowance is 0 with
+  a warning (restart after funding).
+- **Opt-in ceiling** (`UPLINK_MOR_ALLOWANCE_MODE=ceiling`, only with an empty
+  cap): sets a ceiling above total supply, so there is no budget; the wallet
+  balance is the only limit on locked stake. A cap always wins. Never used in
+  the SecretVM or generic templates.
+
+The effective allowance (wei + source) is shown on the GUI Status and
+Security tabs, returned by `/admin/status` (`morAllowance`), and logged once
+at boot (`mor allowance` line + `allowance` audit event; no secrets).
+
+Railway residuals: the admin cookie is delivered as an env secret (the same
+exposure class as proxy-router), and there is no internal-only network
+between services. The scoped credential stays on disk in `/data` until the
+next boot replaces it.
 
 On Railway there is no init sidecar: the uplink entrypoint mints the
 scoped user whenever `COOKIE_CONTENT` is set (cap optional), writes

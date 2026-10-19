@@ -126,7 +126,10 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |
 | `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
-| `SESSION_DIRECT_PAYMENT` | `false` | Direct payment vs stake |
+| `SESSION_DIRECT_PAYMENT` | ignored | Removed: sessions are always staking-mode (`directPayment:false`); setting `true` only logs a warning |
+| `UPLINK_ALLOWANCE_STATUS_FILE` | unset | Allowance manager status file (read-only to Uplink; never under `DATA_DIR`) |
+| `UPLINK_ALLOWANCE_CTL_DIR` | unset | Dir for the presence-only resync request flag (never under `DATA_DIR`) |
+| `UPLINK_ALLOWANCE_POLL_SECONDS` | `60` | Manager poll interval; resync shows as available while its heartbeat is newer than 3 polls |
 | `CLOSE_SESSIONS_ON_EXIT` | `true` | Close pooled sessions on shutdown |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are
@@ -149,6 +152,42 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 | `MOR_TOKEN_ADDRESS` | MOR ERC-20 |
 
 ---
+
+## Boot order, restart safety and the allowance manager
+
+- **router-user-init** (one-shot, root, `cap_drop: ALL` + `CHOWN`) removes its
+  previous files, then writes `router.auth` (0400), the allowance and wallet
+  records (0444) and last a ready marker (`router.ready`, 0400) holding this
+  kernel boot's id, a random generation and the files' SHA-256. If the
+  router still accepts the current scoped credential it keeps the password
+  and only updates the allowance in place (read back); otherwise it re-mints.
+- **Uplink's entrypoint** waits (up to `UPLINK_INIT_WAIT_SECONDS`, default
+  300) for a marker from the current boot, copies the files and verifies the
+  hashes. The Docker daemon ignores `depends_on` when it restarts containers
+  after a host reboot; the marker is what stops Uplink from using an earlier
+  boot's credential. On a router 401 Uplink re-reads its auth file and, if
+  the 401 persists (`UPLINK_ROUTER_401_EXIT_SECONDS`, default 120), exits so
+  the restart picks up the current credential. `depends_on` also carries
+  `restart: true` so a compose re-run of init restarts Uplink.
+- **router-allowance-manager** (SecretVM and generic only): uid 10002, group
+  10003, no capabilities, read-only rootfs, internal `router_admin` network
+  (proxy-router only), no ports. It reads `/mgr/admin.cookie` (0400) once and
+  keeps the allowance equal to the live balance in balance mode; any
+  non-empty `UPLINK_MOR_ALLOWANCE_WEI` or a `/mgr/mode` marker other than
+  exactly `balance` makes it a permanent no-op. Status:
+  `/status/allowance-status.json` (0444). Requests: Uplink creates the
+  presence-only flag `/ctl/resync.request` (`O_CREAT|O_EXCL|O_NOFOLLOW`);
+  the manager never opens or lists it. `/mgr` is root:10002 0750, `/status`
+  10002:10002 0755, `/ctl` 10001:10003 0730; init sets only those mount
+  directories (never recursively). `/ctl` and `/status` must not be under
+  `DATA_DIR` (Uplink refuses to start otherwise).
+- Uplink never asks for direct-payment sessions: the open-session body pins
+  `directPayment:false`, and the router client refuses to send any body
+  that sets it (`scripts/check-no-direct-payment.sh` guards the source).
+
+Tests: `scripts/test-router-user-init.sh`, `scripts/test-allowance-manager.sh`,
+`scripts/check-allowance-manager-policy.sh`, `scripts/check-no-direct-payment.sh`
+and the compose e2e `scripts/e2e-secretvm-handoff.sh`.
 
 ## CI/CD and versioning
 

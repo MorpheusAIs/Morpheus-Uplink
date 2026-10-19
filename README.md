@@ -65,13 +65,13 @@ COOKIE_CONTENT=admin:YOUR_STRONG_PASSWORD
 ADMIN_PASSWORD=YOUR_GUI_PASSWORD
 API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
-# Optional: leave empty for full wallet MOR balance; digits-only wei to cap; 0 = zero.
+# Optional: empty = may lock up to the live wallet MOR balance; digits-only wei = cap; 0 = no sessions.
 UPLINK_MOR_ALLOWANCE_WEI=
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
 Form stays **six** fillables. Tunables change via compose/code, **not** Encrypted Secrets:
-- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
@@ -80,26 +80,44 @@ Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstra
 **Done when:** GUI at `/gui/`, wallet funded with ETH+MOR on Base, Probe succeeds, OpenAI client hits `https://<host>/v1` with a Prompt key.
 
 <details>
-<summary><strong>MOR allowance (optional cap)</strong></summary>
+<summary><strong>MOR allowance (locks, not spends; optional cap)</strong></summary>
 
 Uplink talks to the router as a scoped `uplink` user (never the admin
-cookie). That user is recreated at each boot with a MOR **allowance**: the
-most MOR it can stake for sessions before a restart.
+cookie).
 
-- `UPLINK_MOR_ALLOWANCE_WEI` **empty / unset** (default): allowance = the
-  **full wallet MOR balance** read at boot. Convenient, but it is the
-  maximum exposure if Uplink is compromised.
-- **Set** (digits only, wei; no internal spaces): explicit cap. Setting a
-  cap **limits exposure**; e.g. `1000000000000000000000` = 1000 MOR.
-  Leading zeros are ignored.
-- **`0`**: explicit zero cap (fail-closed). The balance is not read; no
-  sessions open until you raise the cap and restart.
-- If the balance read fails or the wallet holds 0 MOR, the allowance is 0
-  with a warning (restart after funding).
+> **MOR allowance.** The gateway's router user can only open inference sessions; it cannot send MOR or ETH, change approvals, or read the wallet key. A session stake is locked while the session runs and is returned to this wallet, held at most until the next UTC day. Sessions cost ETH gas.
+> Empty `UPLINK_MOR_ALLOWANCE_WEI`: the gateway may lock up to the live wallet MOR balance (new deposits are included within ~2 min). Set a value in wei to cap how much MOR it can lock in total; `0` disables session opening.
+> Note: the router also supports "direct payment" sessions, where the provider is paid from the stake (at most `getTodaysBudget / totalMORSupply` of it, about 0.3% today). The gateway itself never uses it, but whoever holds the router credential could. A cap bounds that worst case to the same fraction of the cap.
 
-The effective allowance (wei + source: `balance`, `override`, `zero`, or
-`unknown`) is shown on the GUI Status and Security tabs and returned by
-`/admin/status` (`morAllowance`). Details:
+**High-value wallets: use cap mode.** Set `UPLINK_MOR_ALLOWANCE_WEI`; a cap
+bounds the direct-payment worst case to that fraction of the cap.
+
+- **Empty / unset** (balance mode, default): the `router-allowance-manager`
+  service keeps the allowance equal to the live wallet MOR balance. It polls
+  every 60 s, includes new deposits within ~2 min and never changes the
+  password. It also overwrites manual router-side allowance edits; for a
+  fixed budget set a cap. The GUI's **Resync allowance now** button asks for
+  an immediate resync.
+- **Set** (digits only, wei; no internal spaces): fixed cap; the manager never
+  changes it. Example: `1000000000000000000000` = 1000 MOR. Leading zeros are
+  ignored.
+- **`0`**: session opening disabled. The balance is not read.
+- A failed or zero balance read is skipped (the manager never writes 0). At
+  boot, init falls back to 0 with a warning.
+
+The effective allowance (wei + source: `balance`, `override`, `zero`,
+`ceiling` or `unknown`) and the auto-resync state are shown on the GUI Status
+and Security tabs and returned by `/admin/status` (`morAllowance`,
+`allowanceResync`), and logged once at boot (`mor allowance` line +
+`allowance` audit event; no secrets).
+
+Credentials at rest: the scoped router credential stays on disk in `/shared`
+and in Uplink's `/data` until the next init run replaces it. The admin
+credential the manager uses is stored as `/mgr/admin.cookie` (0400, uid 10002)
+on the manager-only `manager_cred` volume; only init (read-write) and the
+manager (read-only) mount it.
+
+Railway has no allowance manager (balance at boot). Details:
 [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
 </details>
@@ -159,11 +177,13 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
 
 - **Not the hosted APIGW.** No Morpheus credits account, no shared pool with
   strangers. One wallet, one gateway, your ops.
-- **Any Prompt / ephemeral key can lock MOR** from that wallet. Treat keys like
-  spend authority; keep Master off shared machines.
-- **MOR allowance caps that exposure.** Empty `UPLINK_MOR_ALLOWANCE_WEI` =
-  full wallet MOR balance at boot; a digits-only wei cap limits it; `0` =
-  zero allowance (fail-closed).
+- **Any Prompt / ephemeral key can lock MOR** from that wallet as session
+  stake (returned, held at most until the next UTC day). Keep Master off
+  shared machines.
+- **The MOR allowance locks, not spends.** Empty `UPLINK_MOR_ALLOWANCE_WEI` =
+  up to the live wallet MOR balance (new deposits within ~2 min); a
+  digits-only wei cap limits it; `0` disables session opening. Use a cap for
+  high-value wallets.
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.

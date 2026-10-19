@@ -11,6 +11,11 @@ One topic at a time. You do not need every section on day one.
 - URL: `https://<your-host>/gui/`
 - User: `admin`
 - Password: `ADMIN_PASSWORD`
+- Two steps when 2FA is enrolled: password first, then the 6-digit code (or
+  a recovery code). Wrong password and missing code get the same answer, so
+  the page never reveals whether 2FA is enrolled; lockout and audit apply to
+  both steps.
+- Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
 
 ---
 
@@ -48,10 +53,21 @@ Then the clock:
 
 | Bucket | Meaning |
 |--------|---------|
-| **Wallet** | Spendable MOR |
+| **Wallet** | Liquid MOR in the wallet |
 | **Active** | Open session stake |
 | **On hold** | Closed/expired stake still daylocked |
 | **To claim** | Daylock done — reclaim to Wallet |
+
+**MOR allowance (locks, not spends).** The Status tab shows the router
+allowance: the most MOR the gateway may lock as session stake. Stake is
+returned to this wallet, held at most until the next UTC day. In balance
+mode (empty `UPLINK_MOR_ALLOWANCE_WEI`) the allowance follows the live
+wallet balance; new deposits are included within ~2 min, and **Resync
+allowance now** asks for an immediate update. The button is shown only when
+the allowance manager is running in balance mode; otherwise the tab says
+"auto-resync unavailable". With a cap the allowance is fixed. See
+[02-bootstrap](02-bootstrap.md) for the full wording and the cap-mode
+recommendation for high-value wallets.
 
 **Practical tip:** if you only need a short burst, close the session when you are done so unused duration returns immediately as liquid. If you leave sessions open until they expire, plan float for the **full** stake until the next reclaim cycle.
 
