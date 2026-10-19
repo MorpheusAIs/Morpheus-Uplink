@@ -1,7 +1,6 @@
 package chain
 
 import (
-	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -31,15 +30,3 @@ func TestNextUTCMidnight(t *testing.T) {
 	}
 }
 
-func TestEncodeWithdrawUserStakes(t *testing.T) {
-	data, err := EncodeWithdrawUserStakes("0xC599884ACB421BD548D6fAe444CD075DFB012FBF", 255)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hex.EncodeToString(data[:4]) != "a98a7c6b" {
-		t.Fatalf("selector %x", data[:4])
-	}
-	if data[len(data)-1] != 255 {
-		t.Fatalf("iterations byte %d", data[len(data)-1])
-	}
-}

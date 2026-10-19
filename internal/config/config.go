@@ -13,8 +13,9 @@ type Config struct {
 	Listen string
 	// Base URL of the proxy-router admin API, e.g. "http://proxy-router:8082".
 	RouterURL string
-	// Basic-auth credentials for the proxy-router ("user:password", the
-	// same value as the router's COOKIE_CONTENT).
+	// Basic-auth credentials for the proxy-router ("user:password").
+	// Prefer ROUTER_AUTH (scoped uplink user). COOKIE_CONTENT is a legacy
+	// fallback during migration; production should not give Uplink the admin cookie.
 	RouterUser string
 	RouterPass string
 	// Password for the admin API / GUI (username is always "admin").
@@ -26,10 +27,8 @@ type Config struct {
 	// Directory for the JSON state file (keys, usage). May be ephemeral.
 	DataDir string
 	// URL of the gateway model catalog JSON (ACTIVE_MODELS_URL).
-	// Default is gateway_models.json (includes bidDetail for list/open).
 	ActiveModelsURL string
-	// Companion gateway bids feed (GATEWAY_BIDS_URL). Documented for
-	// mirrors/ops; catalog list/open uses bidDetail on ActiveModelsURL.
+	// Companion gateway bids feed (GATEWAY_BIDS_URL).
 	GatewayBidsURL string
 	// Session behavior.
 	SessionDurationSec int
@@ -37,19 +36,20 @@ type Config struct {
 	DirectPayment      bool
 	// Close pooled sessions on shutdown to recover stake sooner.
 	CloseSessionsOnExit bool
-	// Optional Base HTTPS RPC for daylocked / on-hold MOR reads
-	// (getUserStakesOnHold). Same value as the router's ETH_NODE_ADDRESS.
-	EthNodeAddress string
-	// Diamond (Inference Contract) for on-hold reads. Empty = Base mainnet default.
+	// Optional Diamond address (legacy on-hold helpers; reclaim uses router).
 	DiamondAddress string
-	// Optional consumer wallet key — enables post-midnight withdrawUserStakes
-	// reclaim (same job as Infra consumer_wallet_housekeeping Lambda). Prefer
-	// sharing the router's WALLET_PRIVATE_KEY via compose.
-	WalletPrivateKey string
-	EthNodeChainID   int64
-	Housekeeping     bool
+	EthNodeChainID int64
+	Housekeeping   bool
 	// Retention for admin usage-history prune (POST /admin/disk/prune-usage).
 	UsagePruneDays int
+	// Required MOR agent allowance (wei) for scoped router user init.
+	// Validated in later hardening; optional here until C4 enforces boot refuse.
+	UplinkMORAllowanceWei string
+	// Optional path to a file containing "user:password" for ROUTER_AUTH
+	// (written by the init sidecar, mode 0400).
+	RouterAuthFile string
+	// Generic read-only JSON-RPC URL for optional on-chain alerts (no wallet key).
+	EthRPCURL string
 }
 
 func FromEnv() (*Config, error) {
@@ -65,19 +65,21 @@ func FromEnv() (*Config, error) {
 		SessionFailover:     getenvBool("SESSION_FAILOVER", true),
 		DirectPayment:       getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit: getenvBool("CLOSE_SESSIONS_ON_EXIT", true),
-		EthNodeAddress:      os.Getenv("ETH_NODE_ADDRESS"),
 		DiamondAddress:      getenv("DIAMOND_CONTRACT_ADDRESS", "0x6aBE1d282f72B474E54527D93b979A4f64d3030a"),
-		WalletPrivateKey:    os.Getenv("WALLET_PRIVATE_KEY"),
 		EthNodeChainID:      int64(getenvInt("ETH_NODE_CHAIN_ID", 8453)),
-		// On when a wallet key is present unless explicitly disabled.
-		Housekeeping:   getenvBool("HOUSEKEEPING", os.Getenv("WALLET_PRIVATE_KEY") != ""),
-		UsagePruneDays: getenvInt("USAGE_PRUNE_DAYS", 30),
+		Housekeeping:        getenvBool("HOUSEKEEPING", true),
+		UsagePruneDays:      getenvInt("USAGE_PRUNE_DAYS", 30),
+		UplinkMORAllowanceWei: os.Getenv("UPLINK_MOR_ALLOWANCE_WEI"),
+		RouterAuthFile:      os.Getenv("ROUTER_AUTH_FILE"),
+		EthRPCURL:           firstNonEmpty(os.Getenv("ETH_RPC_URL"), os.Getenv("ETH_NODE_ADDRESS")),
 	}
 
-	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.
-	// COOKIE_CONTENT is accepted as a fallback so a single secret can feed
-	// both containers via env_file (no compose ${} interpolation needed).
 	auth := getenv("ROUTER_AUTH", os.Getenv("COOKIE_CONTENT"))
+	if auth == "" && c.RouterAuthFile != "" {
+		if b, err := os.ReadFile(c.RouterAuthFile); err == nil {
+			auth = strings.TrimSpace(string(b))
+		}
+	}
 	if user, pass, ok := strings.Cut(auth, ":"); ok {
 		c.RouterUser, c.RouterPass = user, pass
 	}
@@ -90,12 +92,21 @@ func FromEnv() (*Config, error) {
 		missing = append(missing, "API_KEY_SEED")
 	}
 	if c.RouterUser == "" || c.RouterPass == "" {
-		missing = append(missing, "ROUTER_AUTH or COOKIE_CONTENT (user:password)")
+		missing = append(missing, "ROUTER_AUTH or ROUTER_AUTH_FILE (user:password)")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
 	return c, nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func getenv(key, def string) string {

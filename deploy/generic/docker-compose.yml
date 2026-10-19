@@ -75,8 +75,6 @@ services:
       # Same user:pass as the router (ROUTER_AUTH in .env.example works if you also set COOKIE_CONTENT=...).
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
       # Behavior bake (change via compose/code only -- not .env forms).
       - SESSION_DURATION_SECONDS=600

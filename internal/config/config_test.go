@@ -42,7 +42,7 @@ func TestMissingAuth(t *testing.T) {
 	setRequired(t)
 
 	if _, err := FromEnv(); err == nil {
-		t.Fatal("expected error when neither ROUTER_AUTH nor COOKIE_CONTENT is set")
+		t.Fatal("expected error when neither ROUTER_AUTH nor ROUTER_AUTH_FILE is set")
 	}
 }
 

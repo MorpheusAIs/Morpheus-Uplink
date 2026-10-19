@@ -155,19 +155,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"onHoldClaimableWei": nil,
 		"onHoldLockedWei":    nil,
 		"nextUnlockUTC":      chain.NextUTCMidnight(time.Now()).Format(time.RFC3339),
-		"onHoldConfigured":   s.cfg.EthNodeAddress != "",
+		"onHoldConfigured":   true,
 	}
-	if s.cfg.EthNodeAddress != "" {
-		addr, err := s.router.WalletAddress()
-		if err != nil {
-			mor["onHoldConfigured"] = false
-		} else if hold, err := chain.UserStakesOnHold(s.cfg.EthNodeAddress, s.cfg.DiamondAddress, addr, 1); err != nil {
-			// Transient RPC failure — keep configured=true so GUI doesn't imply mis-deploy.
-			mor["onHoldReadFailed"] = true
-		} else {
-			mor["onHoldClaimableWei"] = hold.Claimable.String()
-			mor["onHoldLockedWei"] = hold.Locked.String()
-		}
+	if hold, err := s.router.UserStakesOnHold(1); err != nil {
+		mor["onHoldReadFailed"] = true
+	} else {
+		mor["onHoldClaimableWei"] = hold.Claimable.String()
+		mor["onHoldLockedWei"] = hold.Locked.String()
 	}
 	status["mor"] = mor
 	if s.housekeep != nil {

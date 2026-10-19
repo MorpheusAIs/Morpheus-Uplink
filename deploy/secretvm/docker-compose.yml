@@ -76,8 +76,6 @@ services:
       # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       # Same Base RPC + wallet as the router - daylocked MOR reads + post-midnight reclaim.
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       # Public HTTPS origin (GUI / swagger). Fill with https://<vm-host>.
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
     configs:

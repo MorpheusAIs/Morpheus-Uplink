@@ -1,8 +1,8 @@
-// Package housekeep runs the consumer-wallet reclaim loop that the hosted
-// C-Node performs in Lambda (consumer_wallet_housekeeping):
+// Package housekeep runs the consumer-wallet reclaim loop:
 //
 //  1. close expired / past-end sessions (via pool.Rehydrate → router close)
 //  2. withdrawUserStakes for daylocked MOR that is past releaseAt (00:00 UTC)
+//     via the proxy-router (router signs; Uplink holds no wallet key)
 //
 // Allowance top-up stays on the router (/blockchain/approve) — operators can
 // approve once; personal gateways rarely race allowance like APIGW.
@@ -16,22 +16,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absgrafx/morpheus-uplink/internal/chain"
 	"github.com/absgrafx/morpheus-uplink/internal/pool"
+	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
+// DefaultGasLowWei is ~0.0005 ETH — below this, reclaim may fail on Base.
+var DefaultGasLowWei = new(big.Int).Mul(big.NewInt(5e14), big.NewInt(1)) // 5e14 = 0.0005 ETH
+
 type Config struct {
-	Enabled            bool
-	EthNodeAddress     string
-	DiamondAddress     string
-	WalletPrivateKey   string
-	ChainID            int64
+	Enabled bool
+	// Router performs on-hold reads and withdraw (scoped perms).
+	Router *router.Client
 	// Minute-of-day UTC after which the daily run may fire (default 00:05).
-	AfterUTCMinute     int
+	AfterUTCMinute int
 	WithdrawThreshold  *big.Int // wei; skip dust
 	WithdrawIterations uint8
 	MaxWithdrawRounds  int
 	CheckEvery         time.Duration
+	// GasLowWei: when router ETH balance is below this, set GasLow on Result.
+	GasLowWei *big.Int
 }
 
 type Result struct {
@@ -44,37 +47,40 @@ type Result struct {
 	Rounds          int       `json:"rounds"`
 	Status          string    `json:"status"` // ok | actioned | skipped | error
 	Message         string    `json:"message"`
+	GasLow          bool      `json:"gasLow,omitempty"`
+	EthBalanceWei   string    `json:"ethBalanceWei,omitempty"`
 }
 
 type Runner struct {
 	cfg  Config
 	pool *pool.Pool
 
-	mu       sync.Mutex
-	last     Result
-	lastDay  string // YYYY-MM-DD UTC of last successful daily attempt
-	signer   *chain.Signer
+	mu      sync.Mutex
+	last    Result
+	lastDay string // YYYY-MM-DD UTC of last successful daily attempt
 }
 
 func New(cfg Config, pl *pool.Pool) (*Runner, error) {
 	r := &Runner{cfg: cfg, pool: pl}
-	if cfg.Enabled && cfg.WalletPrivateKey != "" && cfg.EthNodeAddress != "" {
-		s, err := chain.NewSigner(cfg.EthNodeAddress, cfg.WalletPrivateKey, cfg.ChainID)
-		if err != nil {
-			return nil, err
-		}
-		r.signer = s
-		log.Printf("housekeep: reclaim enabled (wallet %s, after 00:%02d UTC)",
-			s.From.Hex(), cfg.AfterUTCMinute%60)
+	if cfg.Enabled && cfg.Router != nil {
+		log.Printf("housekeep: reclaim via router (after 00:%02d UTC, max %d rounds)",
+			cfg.AfterUTCMinute%60, maxRounds(cfg.MaxWithdrawRounds))
 	} else if cfg.Enabled {
 		log.Printf("housekeep: close-expired only (reclaim not wired)")
 	}
 	return r, nil
 }
 
-// ReclaimReady is true when withdrawUserStakes can be signed from this process.
+func maxRounds(n int) int {
+	if n <= 0 {
+		return 8
+	}
+	return n
+}
+
+// ReclaimReady is true when withdrawUserStakes can be requested via the router.
 func (r *Runner) ReclaimReady() bool {
-	return r != nil && r.signer != nil && r.cfg.EthNodeAddress != ""
+	return r != nil && r.cfg.Enabled && r.cfg.Router != nil
 }
 
 func (r *Runner) Last() Result {
@@ -92,7 +98,6 @@ func (r *Runner) Start(ctx context.Context) {
 	if every <= 0 {
 		every = 15 * time.Minute
 	}
-	// Startup pass: reclaim if anything is already claimable (covers redeploys after midnight).
 	r.maybeRun(ctx, true)
 
 	t := time.NewTicker(every)
@@ -113,7 +118,7 @@ func (r *Runner) maybeRun(ctx context.Context, startup bool) {
 	mins := now.Hour()*60 + now.Minute()
 	after := r.cfg.AfterUTCMinute
 	if after <= 0 {
-		after = 5 // 00:05 UTC — same window as the Lambda cron
+		after = 5
 	}
 
 	r.mu.Lock()
@@ -147,16 +152,14 @@ func (r *Runner) RunOnce(ctx context.Context) Result {
 func (r *Runner) Run(ctx context.Context) Result {
 	res := Result{At: time.Now().UTC(), Status: "ok"}
 
-	// 1) Close past-end sessions via router (same intent as Lambda close_expired).
 	if err := r.pool.RehydrateForce(); err != nil {
 		log.Printf("housekeep: rehydrate/close scan: %v", err)
 		res.Message = "close scan: " + err.Error()
-		// Continue to withdraw — closes may still succeed next pass.
 	} else {
 		res.ClosedViaScan = true
 	}
 
-	if r.signer == nil || r.cfg.EthNodeAddress == "" {
+	if r.cfg.Router == nil {
 		res.Status = "skipped"
 		if res.Message == "" {
 			res.Message = "closed past-end sessions; daylocked reclaim not available in this deploy"
@@ -165,11 +168,23 @@ func (r *Runner) Run(ctx context.Context) Result {
 		return res
 	}
 
-	addr := r.signer.From.Hex()
-	hold, err := chain.UserStakesOnHold(r.cfg.EthNodeAddress, r.cfg.DiamondAddress, addr, 1)
+	// Gas low alert (read-only balance via router).
+	gasThresh := r.cfg.GasLowWei
+	if gasThresh == nil {
+		gasThresh = DefaultGasLowWei
+	}
+	if eth, err := r.cfg.Router.EthBalanceWei(); err == nil {
+		res.EthBalanceWei = eth.String()
+		if eth.Cmp(gasThresh) < 0 {
+			res.GasLow = true
+			log.Printf("housekeep: alert gas low (eth wei=%s threshold=%s)", eth.String(), gasThresh.String())
+		}
+	}
+
+	hold, err := r.cfg.Router.UserStakesOnHold(1)
 	if err != nil {
 		res.Status = "error"
-		res.Message = "getUserStakesOnHold: " + err.Error()
+		res.Message = "stakes/onhold: " + err.Error()
 		log.Printf("housekeep: %s", res.Message)
 		return res
 	}
@@ -180,7 +195,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 	if thresh == nil {
 		thresh = big.NewInt(0)
 	}
-	if hold.Claimable.Cmp(thresh) < 0 {
+	if hold.Claimable.Cmp(thresh) <= 0 {
 		res.Status = "skipped"
 		if hold.Locked.Sign() > 0 {
 			res.Message = "nothing to reclaim yet — " + formatMOR(hold.Locked) + " MOR still on hold until 00:00 UTC"
@@ -195,14 +210,11 @@ func (r *Runner) Run(ctx context.Context) Result {
 	if iters == 0 {
 		iters = 255
 	}
-	maxRounds := r.cfg.MaxWithdrawRounds
-	if maxRounds <= 0 {
-		maxRounds = 8
-	}
+	maxR := maxRounds(r.cfg.MaxWithdrawRounds)
 
 	startClaimable := new(big.Int).Set(hold.Claimable)
 	var hashes []string
-	for round := 1; round <= maxRounds; round++ {
+	for round := 1; round <= maxR; round++ {
 		select {
 		case <-ctx.Done():
 			res.Status = "error"
@@ -210,9 +222,9 @@ func (r *Runner) Run(ctx context.Context) Result {
 			return res
 		default:
 		}
-		txHash, err := r.signer.WithdrawUserStakes(ctx, r.cfg.DiamondAddress, addr, iters)
+		txHash, err := r.cfg.Router.WithdrawUserStakes(iters)
 		if err != nil {
-			if chain.IsNothingToWithdraw(err) {
+			if isNothingToWithdraw(err) {
 				res.Message = "withdraw stopped: nothing releasable left"
 				break
 			}
@@ -233,14 +245,14 @@ func (r *Runner) Run(ctx context.Context) Result {
 			return res
 		}
 		hashes = append(hashes, txHash)
-		log.Printf("housekeep: withdraw round %d/%d tx=%s", round, maxRounds, txHash)
+		log.Printf("housekeep: withdraw round %d/%d tx=%s", round, maxR, txHash)
 
-		hold, err = chain.UserStakesOnHold(r.cfg.EthNodeAddress, r.cfg.DiamondAddress, addr, 1)
+		hold, err = r.cfg.Router.UserStakesOnHold(1)
 		if err != nil {
 			log.Printf("housekeep: post-withdraw on-hold read: %v", err)
 			break
 		}
-		if hold.Claimable.Cmp(thresh) < 0 {
+		if hold.Claimable.Cmp(thresh) <= 0 {
 			break
 		}
 	}
@@ -263,6 +275,16 @@ func (r *Runner) Run(ctx context.Context) Result {
 	}
 	log.Printf("housekeep: %s", res.Message)
 	return res
+}
+
+func isNothingToWithdraw(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "sessionuseramounttowithdrawiszero") ||
+		strings.Contains(s, "amounttowithdrawiszero") ||
+		strings.Contains(s, "nothing to withdraw")
 }
 
 func formatMOR(n *big.Int) string {

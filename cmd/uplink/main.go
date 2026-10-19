@@ -64,10 +64,7 @@ func main() {
 
 	hk, err := housekeep.New(housekeep.Config{
 		Enabled:            cfg.Housekeeping,
-		EthNodeAddress:     cfg.EthNodeAddress,
-		DiamondAddress:     cfg.DiamondAddress,
-		WalletPrivateKey:   cfg.WalletPrivateKey,
-		ChainID:            cfg.EthNodeChainID,
+		Router:             rc,
 		AfterUTCMinute:     5,
 		WithdrawThreshold:  big.NewInt(0), // personal gateway: reclaim any dust
 		WithdrawIterations: 255,

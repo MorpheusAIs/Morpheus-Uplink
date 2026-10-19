@@ -49,8 +49,6 @@ services:
       - API_KEY_SEED=${API_KEY_SEED}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - ROUTER_URL=http://proxy-router:8082
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
       # Behavior bake (change via compose/code only -- not Railway vars forms).
       - SESSION_DURATION_SECONDS=600

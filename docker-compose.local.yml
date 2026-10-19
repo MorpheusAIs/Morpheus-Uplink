@@ -90,8 +90,6 @@ services:
       - ROUTER_AUTH=${ROUTER_AUTH}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - WEB_PUBLIC_URL=http://localhost:8080
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
       # Behavior bake (change via compose/code only).
