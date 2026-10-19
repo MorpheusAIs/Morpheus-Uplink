@@ -84,8 +84,8 @@ at boot (`mor allowance` line + `allowance` audit event; no secrets).
 
 Railway residuals: the admin cookie is delivered as an env secret (the same
 exposure class as proxy-router), and there is no internal-only network
-between services. The scoped credential stays on disk in `/data` until the
-next boot replaces it.
+between services. The scoped credential stays on disk in `/data`; the
+entrypoint mints a new one on every boot, so a restart rotates it.
 
 On Railway there is no init sidecar: the uplink entrypoint mints the
 scoped user whenever `COOKIE_CONTENT` is set (cap optional), writes

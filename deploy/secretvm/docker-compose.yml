@@ -27,7 +27,9 @@ services:
     # into DATA_DIR as the uplink user. Each run first removes the previous
     # files, then writes the ready marker last; Uplink only accepts files
     # matching a marker for the current boot. The scoped credential stays on
-    # disk in /shared and in Uplink's /data until the next run replaces it.
+    # disk in /shared and in Uplink's /data; init keeps it while the router
+    # accepts it and re-mints when it is rejected or /shared/router.auth is
+    # missing (see the README for forcing a new one).
     user: "0:0"
     restart: "no"
     logging: *default-logging
@@ -35,7 +37,8 @@ services:
     # /shared and /mgr, and hands the /mgr, /status and /ctl mount
     # directories (never their contents) to their owners. No DAC_OVERRIDE,
     # no FOWNER. The manager's admin credential (/mgr/admin.cookie, 0400,
-    # uid 10002) also stays on disk in manager_cred until the next run.
+    # uid 10002) is rewritten on every run and stays on disk until the
+    # manager_cred volume is removed.
     security_opt:
       - no-new-privileges:true
     cap_drop:

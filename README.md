@@ -111,11 +111,34 @@ and Security tabs and returned by `/admin/status` (`morAllowance`,
 `allowanceResync`), and logged once at boot (`mor allowance` line +
 `allowance` audit event; no secrets).
 
-Credentials at rest: the scoped router credential stays on disk in `/shared`
-and in Uplink's `/data` until the next init run replaces it. The admin
-credential the manager uses is stored as `/mgr/admin.cookie` (0400, uid 10002)
-on the manager-only `manager_cred` volume; only init (read-write) and the
-manager (read-only) mount it.
+Credentials at rest:
+
+- **Scoped router credential** (`/shared/router.auth`, plus Uplink's copy in
+  `/data`). Init keeps it as long as the router still accepts it and only
+  updates the allowance, so it is **not** rotated on every run. Init replaces
+  it only when the router rejects it or when `/shared/router.auth` is
+  missing.
+- **Admin cookie for the manager** (`/mgr/admin.cookie`, 0400, uid 10002) on
+  the manager-only `manager_cred` volume; only init (read-write) and the
+  manager (read-only) mount it. Init overwrites it on every run. It persists
+  until the `manager_cred` volume is removed (`docker compose down -v` or
+  `docker volume rm <project>_manager_cred`). It is the same exposure class as
+  proxy-router's own `/app/data/.cookie`.
+
+**Forcing a new scoped credential** (needs `docker compose` access to the
+host). Remove the shared copy, then re-run init; init deletes the router
+user, mints a new password, and `restart: true` restarts Uplink and the
+manager so they pick it up:
+
+```sh
+docker compose run --rm --no-deps --entrypoint rm router-user-init -f /shared/router.auth
+docker compose up -d --force-recreate router-user-init
+```
+
+Removing only the `router_auth` volume (`docker compose down`, then
+`docker volume rm <project>_router_auth`, then `docker compose up -d`) has
+the same effect. Do not use `docker compose down -v` for this: it also
+deletes Uplink's data and the router's data volumes.
 
 Railway has no allowance manager (balance at boot). Details:
 [docs/02-bootstrap.md](docs/02-bootstrap.md).

@@ -31,8 +31,8 @@
 # this kernel boot, snapshot the files into a root-only staging dir, verify
 # every hash against the marker, and confirm the marker did not change while
 # we copied. No match within the timeout => exit 1 with a clear message.
-# The scoped credential then stays on disk (/shared and the DATA_DIR copy)
-# until the next init run replaces it.
+# The scoped credential then stays on disk (/shared and the DATA_DIR copy);
+# init keeps it while the router accepts it and re-mints it otherwise.
 set -e
 if [ -f /etc/uplink/bake.env ]; then
   set -a
