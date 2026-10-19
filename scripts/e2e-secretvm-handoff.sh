@@ -84,6 +84,13 @@ trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 cid() { dc ps -a -q "$1"; }
+# Capabilities as "DROP... |ADD... " (Docker versions differ in CAP_ prefixes and order).
+caps() {
+  local d a
+  d=$(docker inspect -f '{{range .HostConfig.CapDrop}}{{.}}{{"\n"}}{{end}}' "$1" | sed 's/^CAP_//' | grep . | sort | tr '\n' ' ')
+  a=$(docker inspect -f '{{range .HostConfig.CapAdd}}{{.}}{{"\n"}}{{end}}' "$1" | sed 's/^CAP_//' | grep . | sort | tr '\n' ' ')
+  printf '%s|%s' "$d" "$a"
+}
 
 # mockctl METHOD PATH [STDIN-AUTH]: talk to the mock from inside its own
 # container (works with bridge or shared-netns networking).
@@ -221,8 +228,8 @@ assert_manager_mounts() {
   dc exec -T router-allowance-manager sh -c 'touch /usr/x 2>/dev/null' && fail "manager rootfs writable"
   dc exec -T router-allowance-manager sh -c 'ls /ctl >/dev/null 2>&1' && fail "manager can list /ctl"
   dc exec -T --user 10001 uplink sh -c 'touch /status/x 2>/dev/null' && fail "uplink can write /status"
-  [ "$(docker inspect -f '{{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}} {{.HostConfig.ReadonlyRootfs}}' "$(cid router-allowance-manager)")" = "[ALL] [] true" ] \
-    || fail "manager caps/rootfs: $(docker inspect -f '{{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}} {{.HostConfig.ReadonlyRootfs}}' "$(cid router-allowance-manager)")"
+  [ "$(caps "$(cid router-allowance-manager)")" = "ALL |" ] || fail "manager caps: $(caps "$(cid router-allowance-manager)")"
+  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$(cid router-allowance-manager)")" = true ] || fail "manager rootfs not read-only"
   echo "OK T1: manager volumes, owners and modes"
 }
 
@@ -403,8 +410,7 @@ export UPLINK_MOR_ALLOWANCE_WEI=""
 C=rdc
 rdc up -d
 wait_healthy uplink
-[ "$(docker inspect -f '{{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}}' "$(rdc ps -q uplink)")" = "[ALL] [CHOWN SETUID SETGID]" ] \
-  || fail "railway caps: $(docker inspect -f '{{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}}' "$(rdc ps -q uplink)")"
+[ "$(caps "$(rdc ps -q uplink)")" = "ALL |CHOWN SETGID SETUID " ] || fail "railway caps: $(caps "$(rdc ps -q uplink)")"
 [ "$(rdc exec -T uplink stat -c '%u %a' /data/router.auth)" = "10001 400" ] || fail "railway auth file owner/mode"
 assert_uplink_uid
 login
