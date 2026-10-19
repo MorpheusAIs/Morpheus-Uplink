@@ -77,7 +77,10 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 ## Sessions & Usage
 
-- Open sessions rehydrate from chain after restart (still-valid ones are reused).
+- On boot Uplink lists the open sessions before opening any: still-valid
+  ones are reused (one per configured model), expired, duplicate and
+  no-longer-configured ones are closed so their stake is returned. On
+  `docker stop` Uplink closes its sessions before it exits.
 - **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
 
 ---

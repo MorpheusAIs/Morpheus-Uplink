@@ -1360,6 +1360,9 @@ function renderAllowanceResync(ar) {
     const res = ar.lastResult === 'error' ? 'error' : (ar.lastResult === 'ok' ? 'ok' : (ar.lastResult || '—'));
     txt = 'Auto-resync: on · last resync ' + when + ' (' + res + '). New deposits are included within ~2 min.';
     btn.classList.remove('hidden');
+  } else if (ar.fresh && ar.mode && ar.mode !== 'balance') {
+    txt = 'Fixed cap set: the allowance stays at the cap (no auto-resync).';
+    btn.classList.add('hidden');
   } else {
     txt = 'Auto-resync unavailable' + (ar.reason ? ' (' + ar.reason + ')' : '') + '.';
     btn.classList.add('hidden');

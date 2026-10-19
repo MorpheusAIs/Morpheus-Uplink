@@ -189,6 +189,45 @@ Tests: `scripts/test-router-user-init.sh`, `scripts/test-allowance-manager.sh`,
 `scripts/check-allowance-manager-policy.sh`, `scripts/check-no-direct-payment.sh`
 and the compose e2e `scripts/e2e-secretvm-handoff.sh`.
 
+### Sessions across restarts
+
+**Stop.** The `uplink` service has no `init: true`: the entrypoint `exec`s
+`su-exec uplink /usr/local/bin/uplink`, so the app is PID 1 and receives
+`docker stop`'s SIGTERM itself (no CAP_KILL needed). It stops accepting
+requests, lets in-flight ones finish for up to 30 s, then closes every pooled
+and on-chain open session (`CLOSE_SESSIONS_ON_EXIT`, default on).
+`stop_grace_period: 45s` leaves room for those 30 s plus the closes. CI
+checks every template for this (`check-allowance-manager-policy.sh`, rule S).
+
+**Boot reconcile.** A close on stop is best-effort; a crash, `docker kill`
+or a VM wipe leaves sessions open with their stake locked. So on every boot,
+before any request may open a session:
+
+- *When:* right after start-up; the entrypoint has already accepted this
+  boot's init marker. The first step is `GET /wallet` on the router, so the
+  reconcile only proceeds once the router answers with the scoped
+  credential. It then lists the wallet's open sessions.
+- *Valid:* a session is adopted when it is not closed, has more than the
+  pool's 90 s expiry buffer left, and its model is in the current model
+  catalog. One per model is adopted (the one that ends last).
+- *Closed:* past its end or inside the buffer (expired), a second usable
+  session for an already-adopted model (duplicate), or a model that is no
+  longer in the catalog (unconfigured). If the catalog cannot be read, no
+  session is closed for being unconfigured; usable ones are adopted.
+- *Gate:* session opens wait until the reconcile finishes, so a request
+  that arrives during boot uses the adopted session instead of opening a
+  second one. Status polls during the reconcile show the previous scan.
+- *List failure:* retried with backoff (2 s doubling, 15 s cap) for up to
+  60 s. After that the gate opens, but Uplink does not open a new session
+  until some session list succeeds (the request gets an error instead), so
+  it never opens next to a session it could not see. The reconcile keeps
+  retrying every 30 s in the background.
+- *Idempotent:* re-running it adopts the same sessions and closes nothing
+  new; a failed close is counted and retried by the next scan.
+- *Audit:* one line, `"event":"session_reconcile"` with `open`, `adopted`,
+  `closed`, `failed`, `skipped`, `attempts` (counts only, no session ids);
+  a `"result":"deferred"` line when the gate opened before a list succeeded.
+
 ## CI/CD and versioning
 
 - **PR → `main`:** vet + tests (only when material paths change — see below).
