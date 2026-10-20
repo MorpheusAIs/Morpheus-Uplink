@@ -215,6 +215,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"enrolled":       auth.Enrolled,
 		"required":       s.cfg.Admin2FARequired,
 		"breakGlassWarn": s.breakGlassWarn(),
+		// MASTER_KEY_ADMIN=true: the master key works as an admin Bearer
+		// token without 2FA. The GUI shows a banner while this is on.
+		"masterKeyAdmin": s.cfg.MasterKeyAdmin,
 	}
 	writeJSON(w, http.StatusOK, status)
 }

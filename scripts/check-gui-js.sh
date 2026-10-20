@@ -215,10 +215,10 @@ eval([
   'const RECOVERY_HINT_KEY = "uplink.2fa.recoveryLeft"; let loginPassword = ""; let recoveryMode = false;',
   'function flashIconCopied() {} function probeDurationSec() { return 600; }',
   ...['escapeHtml', 'escapeAttr', 'tipHTML', 'setTip', 'fmtMor', 'fmtUnlockLocal', 'weiIsPositive', 'morTileHTML', 'renderMorTiles',
-      'routerProblem', 'statusHealth', 'renderSysLine',
+      'routerProblem', 'renderMasterKeyBanner', 'statusHealth', 'renderSysLine',
       'modelBySendableId', 'stakeKeyFor', 'stakeRecord', 'modelTitle', 'connectDefaultDurationSec', 'connectStakeMor', 'fmtMorRate', 'fmtDuration',
       'connectModelOptionLabel', 'populateConnectModels', 'copyConnectModel', 'recoveryHint', 'setLoginStep', 'setRecoveryMode'].map(extract),
-  'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, statusHealth, renderSysLine,',
+  'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, statusHealth, renderSysLine, renderMasterKeyBanner,',
   '  populateConnectModels, copyConnectModel, setLoginStep, setModels(m, st) { allModels = m; modelStakes = st || {}; } };',
 ].join('\n'));
 const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
@@ -245,6 +245,15 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   // Add MOR is a plain section: always collapsed, no low-wallet logic.
   if (/LOW_WALLET|isWalletLow|lowWalletThreshold|fundSummaryLow|renderFund|fold\.low/.test(html)) fail('low-wallet warning code still present');
   if (!/<details id="fundDetails" class="fold">/.test(html)) fail('Add MOR must be a collapsed <details> without open');
+
+  // MASTER_KEY_ADMIN banner follows status.twoFactor.masterKeyAdmin.
+  if (!/id="masterKeyAdminBanner"[^>]*class="[^"]*hidden|class="[^"]*hidden[^"]*" id="masterKeyAdminBanner"/.test(html)) fail('master key banner must start hidden');
+  T.renderMasterKeyBanner({ twoFactor: { masterKeyAdmin: true } });
+  if (els.masterKeyAdminBanner.classList.contains('hidden') || els.masterKeyAdminBanner.textContent !== T.UI_COPY.masterKeyAdminOn) fail('master key banner not shown when on');
+  T.renderMasterKeyBanner({ twoFactor: { masterKeyAdmin: false } });
+  if (!els.masterKeyAdminBanner.classList.contains('hidden')) fail('master key banner shown when off');
+  T.renderMasterKeyBanner({});
+  if (!els.masterKeyAdminBanner.classList.contains('hidden')) fail('master key banner shown without the flag');
 
   // Status line: Healthy, or the plain reason.
   if (T.statusHealth({}).text !== 'Healthy') fail('healthy');

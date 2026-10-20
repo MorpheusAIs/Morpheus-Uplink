@@ -885,6 +885,7 @@
   </nav>
 
   <main>
+    <div class="callout warn compact hidden" id="masterKeyAdminBanner" role="status" data-copy="masterKeyAdminOn"></div>
     <!-- STATUS -->
     <div class="panel active" id="tab-status">
       <!-- 1. Status line + 2. headline numbers. Copy lives in UI_COPY (script). -->
@@ -1336,6 +1337,7 @@ const UI_COPY = {
   modelTipError: 'Lock estimate unavailable.',
   // Need more MOR?
   fundSummary: 'Add MOR',
+  masterKeyAdminOn: 'Master key admin access is on: the master key bypasses 2FA.',
   fundHow: 'Fund this wallet from MetaMask / Rabby on Base: swap ETH to MOR, then send MOR plus a little ETH for gas.',
   walletLabel: 'Wallet:',
   fundUniswap: 'Get MOR on Uniswap',
@@ -2099,6 +2101,15 @@ function renderRouterBanner(st) {
   el.textContent = p ? p.text : '';
 }
 
+// Shown on every tab while MASTER_KEY_ADMIN=true (status.twoFactor.masterKeyAdmin).
+function renderMasterKeyBanner(st) {
+  const el = document.getElementById('masterKeyAdminBanner');
+  if (!el) return;
+  const on = !!(st && st.twoFactor && st.twoFactor.masterKeyAdmin === true);
+  el.textContent = on ? UI_COPY.masterKeyAdminOn : '';
+  el.classList.toggle('hidden', !on);
+}
+
 async function doRefresh() {
   try {
     const st = await api('/admin/status', { poll: true });
@@ -2125,6 +2136,7 @@ async function doRefresh() {
     checkForUpdate(st.version || 'dev');
 
     renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).length);
+    renderMasterKeyBanner(st);
     renderDiskStatus(st.disk || null);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
