@@ -1092,10 +1092,6 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <code>API_KEY_SEED</code> in your env settings and restart.
         </p>
         <div id="builtinKeys" style="margin-top:8px"></div>
-        <div class="row" style="margin-top:8px">
-          <button type="button" class="ghost" onclick="refreshKeys(true).then(() => renderBuiltinKeys())">Reveal full keys</button>
-          <span class="note">Masked by default</span>
-        </div>
       </section>
 
       <section>
@@ -2647,9 +2643,8 @@ function renderSessions(sessions, sessionsError) {
   }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
 }
 
-async function refreshKeys(reveal) {
-  const qs = reveal ? '?reveal=1' : '';
-  const ks = await api('/admin/keys' + qs);
+async function refreshKeys() {
+  const ks = await api('/admin/keys');
   rememberKeys(ks);
   secrets.master = ks.masterKey || '';
   secrets.prompt = ks.promptKey || '';
@@ -3231,7 +3226,8 @@ function renderGeneratedKeys(keys) {
   box.innerHTML = keys.map(k => {
     const revoked = !!k.revokedAt;
     const full = (!revoked && k.secret) ? k.secret : '';
-    if (full) generatedKeySecrets[k.id] = full;
+    // The list is masked; only a full key is kept (for export).
+    if (full && usableKey(full)) generatedKeySecrets[k.id] = full;
     else delete generatedKeySecrets[k.id];
     const when = k.createdAt ? new Date(k.createdAt).toLocaleDateString() : '';
     let meta = when ? ('Created ' + when) : '';
@@ -3266,7 +3262,16 @@ function closeBulkImportModal() {
   document.getElementById('bulkImportModal').classList.add('hidden');
 }
 
-function exportEphemeralKeys() {
+async function exportEphemeralKeys() {
+  // The key list is masked: fetch the full keys (audited) for the file.
+  try {
+    const ks = await api('/admin/keys?reveal=1');
+    rememberKeys(ks);
+    renderGeneratedKeys(ks.keys || []);
+  } catch (e) {
+    document.getElementById('keysBulkMsg').textContent = 'Export failed: ' + e.message;
+    return;
+  }
   const keys = Object.keys(generatedKeySecrets).map(id => {
     const row = (window.__lastEphemeralKeys || []).find(k => k.id === id) || { id, name: id };
     return { name: row.name || id, key: generatedKeySecrets[id], createdAt: row.createdAt || null };
@@ -3957,7 +3962,7 @@ function parseCurlCommand(text) {
 }
 
 async function postChatCompletion({ key, duration, body }) {
-  if (!usableKey(key)) throw new Error('No full API key available (masked keys cannot be sent). Use Reveal full keys on API Keys.');
+  if (!usableKey(key)) throw new Error('No full API key available (masked keys cannot be sent). Pick a key from the list or paste a full key.');
   document.getElementById('pgStatus').textContent = 'Running…';
   document.getElementById('pgOut').textContent = '…';
   const res = await fetch('/v1/chat/completions', {

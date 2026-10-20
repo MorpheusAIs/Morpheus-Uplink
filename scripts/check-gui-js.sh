@@ -535,3 +535,10 @@ if (!el.classList._h || el.textContent) fail('Status warning not cleared');
 if (html.indexOf('id="originWarn"') < 0 || html.indexOf('id="originWarn"') > html.indexOf('id="connectClient"')) fail('originWarn must be on the Status overview');
 console.log('OK: Status warns when the page origin is not WEB_PUBLIC_URL');
 NODE
+
+# API Keys has no reveal button; copy and Export all fetch the full keys.
+if grep -qE 'Reveal full keys|Masked by default|refreshKeys\(true' "$HTML"; then
+  echo "FAIL: API Keys still has the reveal button or its note" >&2; exit 1
+fi
+grep -qF "await api('/admin/keys?reveal=1')" "$HTML" || { echo "FAIL: Export all must fetch full keys" >&2; exit 1; }
+echo "OK: no reveal button; copy and Export all fetch the full keys on demand"
