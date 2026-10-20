@@ -733,6 +733,7 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
+   `WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); otherwise admin changes are refused and the Status page warns.
 4. Deploy. Wait until `uplink` is healthy (proxy-router has no container
    healthcheck); after login, the GUI Status line should read Healthy.
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
@@ -760,6 +761,7 @@ docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 
 Open `https://$PUBLIC_HOST/gui/` and turn 2FA on with the switch on the
 Security tab (recommended; off by default, as on every deploy).
+`WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); otherwise admin changes are refused and the Status page warns.
 
 ---
 
