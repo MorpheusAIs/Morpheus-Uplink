@@ -24,8 +24,10 @@ One topic at a time. You do not need every section on day one.
 - Security: the **2FA switch** turns two-factor login on or off. It is off
   by default on every deploy (password-only login), and the tab shows a
   short note recommending turning it on; nothing is forced. Turning it on
-  runs the enrollment (scan the QR code, confirm a code); 2FA is on once
-  the code is confirmed, and 10 recovery codes are shown once; save them.
+  runs the enrollment (scan the QR code, confirm a code). Until a code is
+  confirmed the tab shows one message, "Finish setup", and switching back
+  off cancels the setup (after a reset, below, it cannot be switched off). 2FA is on once the code is confirmed, and 10
+  recovery codes are shown once; save them.
   Each works once in place of the 6-digit code. The switch is stored in
   `DATA_DIR`, so it survives restarts and redeploys.
 - Regenerate recovery codes, reset 2FA or turn it off from the same tab:

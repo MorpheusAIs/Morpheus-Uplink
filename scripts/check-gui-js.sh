@@ -38,6 +38,7 @@ function extractFn(name, text) {
 
 const showTabSrc = extractFn('showTab', src);
 const refreshSrc = extractFn('refreshSecurity', src);
+const viewSrc = extractFn('tfViewState', src);
 
 let activeTab = 'status';
 let fetches = 0;
@@ -74,13 +75,13 @@ global.fetch = async (url, opts = {}) => {
   return { status: 200, ok: true, json: async () => ({}), text: async () => '' };
 };
 global.showLogin = () => {};
-global.UI_COPY = new Proxy({}, { get: (_, k) => (typeof k === 'string' && /^tf|recovery/.test(k) ? (() => String(k)) : String(k)) });
+global.UI_COPY = new Proxy({}, { get: (_, k) => (k === 'tfEnrolled' || k === 'tfConfigWarn' ? (() => String(k)) : String(k)) });
 global.reenrollPending = () => false;
 global.tfEnrollRequested = false;
 global.tfState = { on: false, enrolled: false };
 global.setRecoveryHint = () => {};
 
-eval(showTabSrc + '\n' + refreshSrc + '\n');
+eval(showTabSrc + '\n' + viewSrc + '\n' + refreshSrc + '\n');
 if (typeof refreshSecurity !== 'function' || typeof showTab !== 'function') {
   console.error('missing showTab/refreshSecurity after extract');
   process.exit(1);
@@ -332,7 +333,9 @@ global.document = { getElementById: (id) => (els[id] = els[id] || mkEl(id)), bod
 const calls = { showTab: [], refreshSecurity: 0, startTotpEnroll: 0, setEnrollMsg: [] };
 global.T = {};
 eval([
-  "const UI_COPY = { enrollFirst: 'ENROLL_FIRST', tfEnrollStart: 'ENROLL_START', tfDisableNeedsFactor: 'NEEDS_FACTOR', tfDisableConfirm: 'CONFIRM_OFF' };",
+  "const UI_COPY = { enrollFirst: 'ENROLL_FIRST', tfDisableNeedsFactor: 'NEEDS_FACTOR', tfDisableConfirm: 'CONFIRM_OFF', tfNotEnrolled: '2FA is off: login needs only the password.', tfPending: 'PENDING', tfPendingLocked: 'PENDING_LOCKED', tfEnrolled: (n) => 'ON ' + n, recoveryNoneLeft: 'NONE_LEFT', tfBreakGlass: '', tfConfigWarn: () => '' };",
+  'let tfStatusAnswer = {}; function showLogin() {} function setRecoveryHint() {} function reenrollPending() { return false; }',
+  'async function fetch(url) { return String(url).includes("/admin/2fa/status") ? { status: 200, ok: true, json: async () => tfStatusAnswer } : { status: 200, ok: true, json: async () => ({ alerts: [] }) }; }',
   'let tfEnrollRequested = false; let tfState = { on: false, enrolled: false };',
   'const posted = []; async function postFactor(path, f) { posted.push(path); return { ok: false, status: 401, text: async () => "", headers: { get: () => null } }; }',
   'function confirm() { return true; }',
@@ -345,8 +348,9 @@ eval([
   'function hideRecoveryCodes() { document.getElementById("recoveryCodes").textContent = ""; }',
   'function hideEnrollSecret() { document.getElementById("enrollSecret").textContent = ""; }',
   'let enrollOnly = false; let enrollAutoStarted = false;',
-  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError', 'toggleTwoFactor', 'disableTwoFactor'].map(extract),
-  'Object.assign(T, { updateManageButtons, resetSecurityView, enterEnrollmentOnly, factorError, toggleTwoFactor, posted, setTF: (v) => { tfState = v; }, requested: () => tfEnrollRequested, state: () => ({ enrollOnly, enrollAutoStarted, activeTab }), setTab: (t) => { activeTab = t; } });',
+  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError', 'toggleTwoFactor', 'disableTwoFactor', 'tfViewState'].map(extract),
+  extract('refreshSecurity').replace('async function refreshSecurity', 'async function renderSecurity'),
+  'Object.assign(T, { updateManageButtons, resetSecurityView, enterEnrollmentOnly, factorError, toggleTwoFactor, posted, renderSecurity, setStatus: (v) => { tfStatusAnswer = v; }, setRequested: (v) => { tfEnrollRequested = v; }, setTF: (v) => { tfState = v; }, requested: () => tfEnrollRequested, state: () => ({ enrollOnly, enrollAutoStarted, activeTab }), setTab: (t) => { activeTab = t; } });',
 ].join('\n'));
 const $ = (id) => document.getElementById(id);
 (async () => {
@@ -417,6 +421,28 @@ const $ = (id) => document.getElementById(id);
   T.setTF({ on: true, enrolled: false });
   T.toggleTwoFactor(false);
   if (T.posted.length !== 1 || $('tfSwitch').checked !== true) fail('2FA on without enrollment (after reset) cannot be switched off');
-  console.log('OK: 2FA buttons need password and code; reset clears the view; re-login goes straight to a fresh enrollment; 2FA switch');
+  // One state at a time: off shows the recommendation; pending (switch on
+  // or just turned on, no confirmed code) hides it and every "off" text.
+  const view = async (st, requested) => {
+    T.resetSecurityView(); T.setRequested(requested); T.setStatus(st);
+    await T.renderSecurity();
+    return { text: $('twoFactorStatus').textContent, noteHidden: $('twoFactorOffNote').classList.contains('hidden'),
+      checked: $('tfSwitch').checked, enroll: $('twoFactorEnroll').style.display };
+  };
+  let v = await view({ on: false, enrolled: false }, false);
+  if (v.noteHidden || v.checked || v.enroll !== 'none' || !/off/.test(v.text)) fail('off state: ' + JSON.stringify(v));
+  for (const [st, req, want] of [[{ on: true, enrolled: false }, false, 'PENDING_LOCKED'], [{ on: false, enrolled: false }, true, 'PENDING']]) {
+    v = await view(st, req);
+    if (!v.noteHidden) fail('recommendation shown while enrollment is pending: ' + JSON.stringify(st));
+    if (v.text !== want || /\boff\b/i.test(v.text) || !v.checked || v.enroll !== 'grid') fail('pending state: ' + JSON.stringify(v));
+  }
+  v = await view({ on: true, enrolled: true, recoveryRemaining: 10 }, false);
+  if (!v.noteHidden || v.text !== 'ON 10' || !v.checked || v.enroll !== 'none') fail('on state: ' + JSON.stringify(v));
+  // Manage buttons share the Regenerate size (no small danger pills).
+  if (!/#twoFactorManage button\.danger-ghost \{ padding: 8px 14px; font-size: 13px; \}/.test(html)) fail('Reset / Turn off must match the Regenerate button size');
+  // Enrollment: QR code, then the secret under it, then Start, then the code form.
+  const order = ['id="enrollQr"', 'id="enrollSecret"', 'onclick="startTotpEnroll()"', 'id="enrollConfirmForm"'].map((k) => html.indexOf(k));
+  if (order.some((i, n) => i < 0 || (n && i < order[n - 1]))) fail('enrollment layout order: ' + order);
+  console.log('OK: 2FA buttons need password and code; reset clears the view; re-login goes straight to a fresh enrollment; 2FA switch; one 2FA state at a time');
 })().catch((e) => fail(e.stack || e));
 NODE

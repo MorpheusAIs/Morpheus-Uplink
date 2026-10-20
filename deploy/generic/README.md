@@ -30,19 +30,29 @@ off).
 
 ## Upgrading from an earlier test build
 
-SecretVM upgrades, and `docker compose up` without `--remove-orphans`, do
-not remove services that were dropped from the compose file. If you are
-coming from an earlier test build, do a fresh deploy, or remove the
-orphaned `router-allowance-manager` and `router-user-init` containers (for
-example `docker compose up -d --remove-orphans` where available). Then
-delete the old volumes `router_auth`, `manager_cred`, `allowance_status`
-and `allowance_ctl`. Docker prefixes volume names with the compose project
-name:
+`docker compose up` without `--remove-orphans` does not remove services
+that were dropped from the compose file (`router-allowance-manager`,
+`router-user-init`) or their volumes. On a generic host or dev VM you can
+clean up in place. Run this in the deploy directory, with the same `-f` and
+`--env-file` flags you deploy with. Docker prefixes volume names with the
+compose project name:
 
 ```bash
+docker compose up -d --remove-orphans
 docker volume rm <project>_router_auth <project>_manager_cred \
   <project>_allowance_status <project>_allowance_ctl
 ```
+
+An earlier test build may also have left an extra scoped router user in
+the router's config; a fresh deploy clears it. On a production SecretVM
+(no shell) a fresh deploy is the only fix; see
+[deploy/secretvm](../secretvm/README.md#upgrading-from-an-earlier-test-build).
+
+A fresh deploy starts with empty Uplink state. Generated (ephemeral) API
+keys and the 2FA state (enrollment, recovery codes) are gone, and 2FA
+comes back off. Master and Prompt keys come back from the same
+`API_KEY_SEED`. Export ephemeral keys first and re-create or import them
+afterwards, then turn 2FA on and enroll again.
 
 ## Session stake (locks, not spends)
 

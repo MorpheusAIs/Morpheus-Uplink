@@ -796,6 +796,10 @@
     padding: 4px 10px; font-size: 11px;
   }
   button.danger-ghost:hover { border-color: #ef4444; color: #fecaca; filter: none; }
+  /* 2FA manage buttons: same size as the ghost Regenerate button. */
+  #twoFactorManage button.danger-ghost { padding: 8px 14px; font-size: 13px; }
+  .enroll-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: 100%; }
+  .enroll-qr #enrollSecret { margin: 0; max-width: 340px; text-align: center; word-break: break-all; white-space: pre-line; font-family: 'IBM Plex Mono', ui-monospace, monospace; }
   td.model-cell { min-width: 120px; }
   td.model-cell .model-name { display: block; font-weight: 600; color: var(--text); }
   td.model-cell code { font-size: 10px; color: var(--muted); }
@@ -1013,11 +1017,13 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
         <div class="callout compact hidden" id="twoFactorOffNote" role="status" data-copy="tfOffNote" style="margin:0 0 10px"></div>
         <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
+          <div class="enroll-qr">
+            <img id="enrollQr" alt="" style="display:none;max-width:200px;background:#fff;padding:8px;border-radius:8px">
+            <div id="enrollSecret" class="note"></div>
+          </div>
           <div class="row">
             <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
           </div>
-          <div id="enrollSecret" class="note" style="word-break:break-all"></div>
-          <img id="enrollQr" alt="" style="display:none;max-width:200px;background:#fff;padding:8px;border-radius:8px">
           <form id="enrollConfirmForm" class="row" onsubmit="event.preventDefault(); confirmTotpEnroll();" style="display:none">
             <input id="enrollCode" class="otp-input" type="text" inputmode="numeric" autocomplete="one-time-code"
                    maxlength="6" pattern="\d{6}" placeholder="123456" aria-label="6-digit code from authenticator">
@@ -1361,10 +1367,10 @@ const UI_COPY = {
   // Two-factor auth (Security tab)
   tfEnrolled: (n) => '2FA is on · ' + n + ' recovery code' + (n === 1 ? '' : 's') + ' left.',
   tfNotEnrolled: '2FA is off: login needs only the password.',
-  tfRequired: ' 2FA is on: enroll an authenticator before other admin actions.',
+  tfPending: 'Finish setup: scan the QR code and confirm a code.',
+  tfPendingLocked: 'Finish setup: scan the QR code and confirm a code. Other admin actions are available after that.',
   tfSwitchLabel: 'Require an authenticator code at login (2FA)',
-  tfOffNote: '2FA is off. We recommend turning it on: flip the switch above and scan the QR code with an authenticator app.',
-  tfEnrollStart: 'Scan the QR code (or enter the secret) in your authenticator app, then confirm a code to turn 2FA on.',
+  tfOffNote: 'We recommend turning 2FA on: flip the switch above and scan the QR code with an authenticator app.',
   tfDisableTitle: 'Turn off 2FA',
   tfDisableNeedsFactor: 'To turn 2FA off, enter your password and a current authenticator code or a recovery code below, then choose Turn off 2FA.',
   tfDisableConfirm: 'Turn off 2FA? This removes the authenticator and all recovery codes and logs out every admin session. Login will then need only the password.',
@@ -1373,7 +1379,6 @@ const UI_COPY = {
   tfConfigWarn: (names) => ' Warning: ' + names.join(', ') + ' is not true or false, so the safe value'
     + ' is in use (master key admin off). Set it to true or false.',
   tfBreakGlass: ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.',
-  tfReenroll: '2FA was reset. Enroll again below; new recovery codes are issued when you confirm.',
   enrollFirst: 'Enroll 2FA to continue: scan the new QR code and confirm a code.',
   recoveryShownOnce: 'Recovery codes (shown once). Each works one time. Store them offline.',
   recoveryEnrolled: '2FA enabled. Save the recovery codes below; they are shown once.',
@@ -1635,13 +1640,19 @@ let enrollAutoStarted = false;
 let tfEnrollRequested = false;
 // Last /admin/2fa/status answer (server state behind the switch).
 let tfState = { on: false, enrolled: false };
+// Security tab 2FA state: 'on' (enrolled), 'pending' (switch on, or just
+// turned on, without a confirmed code yet) or 'off'.
+function tfViewState(tf, requested) {
+  if (tf.enrolled) return 'on';
+  if (tf.on || requested) return 'pending';
+  return 'off';
+}
 function enterEnrollmentOnly(fromRefresh) {
   const first = !enrollOnly;
   enrollOnly = true;
   document.body.classList.add('enroll-only');
   if (activeTab !== 'security') showTab('security');
   else if (first && !fromRefresh) refreshSecurity();
-  setEnrollMsg(UI_COPY.enrollFirst, '');
   if (!enrollAutoStarted) { enrollAutoStarted = true; startTotpEnroll(); }
 }
 function leaveEnrollmentOnly() {
@@ -1686,22 +1697,24 @@ async function refreshSecurity() {
       if (!res.ok) throw new Error(await res.text() || res.statusText);
       const tf = await res.json();
       const left = Number(tf.recoveryRemaining) || 0;
-      let msg = tf.enrolled ? UI_COPY.tfEnrolled(left) : (tf.on ? '' : UI_COPY.tfNotEnrolled);
-      if (tf.enrolled && left === 0) msg += ' ' + UI_COPY.recoveryNoneLeft;
-      if (tf.on && !tf.enrolled) msg += UI_COPY.tfRequired;
+      // One message per state: off, pending (finish setup) or on.
+      const view = tfViewState(tf, tfEnrollRequested);
+      let msg = view === 'on' ? UI_COPY.tfEnrolled(left)
+        : view === 'pending' ? (tf.on ? UI_COPY.tfPendingLocked : UI_COPY.tfPending)
+          : UI_COPY.tfNotEnrolled;
+      if (view === 'on' && left === 0) msg += ' ' + UI_COPY.recoveryNoneLeft;
       if (tf.breakGlassWarn) msg += UI_COPY.tfBreakGlass;
       if (Array.isArray(tf.configWarn) && tf.configWarn.length) msg += UI_COPY.tfConfigWarn(tf.configWarn);
-      if (!tf.enrolled && reenrollPending()) msg = UI_COPY.tfReenroll + ' ' + msg;
       stEl.textContent = msg.trim();
       // The switch shows the server state; turning it on shows enrollment
-      // until a code is confirmed.
+      // until a code is confirmed. The recommendation shows only when off.
       tfState = { on: !!tf.on, enrolled: !!tf.enrolled };
       const sw = document.getElementById('tfSwitch');
-      if (sw) sw.checked = !!tf.on || (tfEnrollRequested && !tf.enrolled);
+      if (sw) sw.checked = view !== 'off';
       const offNote = document.getElementById('twoFactorOffNote');
-      if (offNote) offNote.classList.toggle('hidden', !!tf.on);
+      if (offNote) offNote.classList.toggle('hidden', view !== 'off');
       if (tf.enrolled) tfEnrollRequested = false;
-      if (enrollBox) enrollBox.style.display = (!tf.enrolled && (tf.on || tfEnrollRequested)) ? 'flex' : 'none';
+      if (enrollBox) enrollBox.style.display = view === 'pending' ? 'grid' : 'none';
       const manage = document.getElementById('twoFactorManage');
       if (manage) manage.classList.toggle('hidden', !tf.enrolled);
       if (tf.enrolled) setRecoveryHint(left);
@@ -1765,7 +1778,7 @@ async function startTotpEnroll() {
   setEnrollMsg('', '');
   try {
     const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    secretEl.textContent = 'Secret (save offline): ' + (data.secret || '');
+    secretEl.textContent = 'Secret (save offline):\n' + (data.secret || '');
     if (data.qrPngB64 && qr) {
       qr.src = 'data:image/png;base64,' + data.qrPngB64;
       qr.style.display = 'block';
@@ -1926,8 +1939,11 @@ function toggleTwoFactor(on) {
   if (on) {
     tfEnrollRequested = true;
     const enrollBox = document.getElementById('twoFactorEnroll');
-    if (enrollBox) enrollBox.style.display = 'flex';
-    setEnrollMsg(UI_COPY.tfEnrollStart, '');
+    if (enrollBox) enrollBox.style.display = 'grid';
+    const stEl = document.getElementById('twoFactorStatus');
+    if (stEl) stEl.textContent = UI_COPY.tfPending;
+    const offNote = document.getElementById('twoFactorOffNote');
+    if (offNote) offNote.classList.add('hidden');
     startTotpEnroll();
     return;
   }

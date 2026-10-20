@@ -143,7 +143,7 @@ privacy on the pinned v7.15.0 digest until verified.
 
 - `/node/*` remains **admin-gated** (admin session, or the Master key with
   `MASTER_KEY_ADMIN=true`), with a block list (see docs/06-developers.md)
-- Keep: Basic admin, `sk-` keys, soft-revoke, `GET /v1/usage`,
+- Keep: password + session-cookie admin login (Basic auth is refused), `sk-` keys, soft-revoke, `GET /v1/usage`,
   `gateway_models.json`, GHCR release-asset deploy
 
 ## Operator checklist
