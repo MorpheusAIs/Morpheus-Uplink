@@ -137,6 +137,8 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   stake (returned, held at most until the next UTC day). Keep Master off
   shared machines.
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
+  Rotating it also invalidates the 2FA secret and recovery codes; the way
+  back is one restart with `UPLINK_RESET_2FA=true`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned

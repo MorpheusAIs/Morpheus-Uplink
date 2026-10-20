@@ -51,6 +51,20 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
   `2fa_reset` (sessions revoked), `2fa_remove`. Codes and secrets are never
   logged.
+- **`API_KEY_SEED` rotation** invalidates the TOTP secret (its encryption
+  key is derived from the seed) and every recovery code (their pepper is
+  too). With 2FA enrolled, admin login then fails until 2FA is cleared with
+  `UPLINK_RESET_2FA`.
+- **`UPLINK_RESET_2FA=true`** (break-glass, default off): on the next start
+  Uplink wipes the TOTP secret, all recovery codes and any pending
+  enrollment, ends all admin sessions, clears lockouts, and audits
+  `2fa_reset_breakglass` (`ok`, `wiped`). It then sets a marker, so later
+  restarts with the variable still set do not wipe again; they audit
+  `2fa_reset_breakglass` `blocked` and the Security tab asks you to remove
+  it. Restart once with it set, then unset it and restart; that clears the
+  marker for any future use. Log in with the password and enroll again
+  (required first when `ADMIN_2FA_REQUIRED=true`). On SecretVM set it in the
+  `uplink_bake_env` block (see [02-bootstrap.md](02-bootstrap.md)).
 - Logout and **Revoke all sessions** end the server-side session; there is
   no remembered device, so the next login asks for a fresh code.
 

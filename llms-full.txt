@@ -390,6 +390,8 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   stake (returned, held at most until the next UTC day). Keep Master off
   shared machines.
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
+  Rotating it also invalidates the 2FA secret and recovery codes; the way
+  back is one restart with `UPLINK_RESET_2FA=true`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Images are digest-pinned
@@ -675,7 +677,7 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 | `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
 | `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
-| `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
+| `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
 | `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
 | `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt (platform-specific; not one of the six). |
 
@@ -795,7 +797,10 @@ One topic at a time. You do not need every section on day one.
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
 | **Ephemeral** | No — export/import | Named keys for apps/agents |
 
-- Rotate built-ins by changing `API_KEY_SEED` and restarting.
+- Rotate built-ins by changing `API_KEY_SEED` and restarting. This also
+  invalidates the 2FA secret and recovery codes; restart once with
+  `UPLINK_RESET_2FA=true` to clear them, then remove it and enroll again
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 - Ephemeral: create, red trash to delete, **Export all** / **Import list** after redeploy.
 
 ---
@@ -1062,6 +1067,20 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
   `2fa_reset` (sessions revoked), `2fa_remove`. Codes and secrets are never
   logged.
+- **`API_KEY_SEED` rotation** invalidates the TOTP secret (its encryption
+  key is derived from the seed) and every recovery code (their pepper is
+  too). With 2FA enrolled, admin login then fails until 2FA is cleared with
+  `UPLINK_RESET_2FA`.
+- **`UPLINK_RESET_2FA=true`** (break-glass, default off): on the next start
+  Uplink wipes the TOTP secret, all recovery codes and any pending
+  enrollment, ends all admin sessions, clears lockouts, and audits
+  `2fa_reset_breakglass` (`ok`, `wiped`). It then sets a marker, so later
+  restarts with the variable still set do not wipe again; they audit
+  `2fa_reset_breakglass` `blocked` and the Security tab asks you to remove
+  it. Restart once with it set, then unset it and restart; that clears the
+  marker for any future use. Log in with the password and enroll again
+  (required first when `ADMIN_2FA_REQUIRED=true`). On SecretVM set it in the
+  `uplink_bake_env` block (see [02-bootstrap.md](02-bootstrap.md)).
 - Logout and **Revoke all sessions** end the server-side session; there is
   no remembered device, so the next login asks for a fresh code.
 

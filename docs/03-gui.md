@@ -34,7 +34,10 @@ One topic at a time. You do not need every section on day one.
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
 | **Ephemeral** | No — export/import | Named keys for apps/agents |
 
-- Rotate built-ins by changing `API_KEY_SEED` and restarting.
+- Rotate built-ins by changing `API_KEY_SEED` and restarting. This also
+  invalidates the 2FA secret and recovery codes; restart once with
+  `UPLINK_RESET_2FA=true` to clear them, then remove it and enroll again
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 - Ephemeral: create, red trash to delete, **Export all** / **Import list** after redeploy.
 
 ---
