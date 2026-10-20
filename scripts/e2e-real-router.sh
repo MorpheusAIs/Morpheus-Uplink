@@ -144,7 +144,16 @@ for m in PUT PATCH PROPFIND; do
   [ "$c" = 403 ] || fail "$m /node/healthcheck: $c, want 403"
 done
 sleep 1
-if rlog | grep -iE 'HTTP-REQ\] ([A-Z]+ [^ ]*(send|wallet/privatekey|audio|config/ethnode|config/models|provider/ping|sessions/initiate)|(POST|PUT|PATCH|DELETE) /(blockchain/(bids|providers|models)|wallet|auth)\b|(PUT|PATCH|PROPFIND) ))'; then
+# One regex for the self-check and the real router-log check.
+blocked_re='HTTP-REQ\] ([A-Z]+ [^ ]*(send|wallet/privatekey|audio|config/ethnode|config/models|provider/ping|sessions/initiate)|(POST|PUT|PATCH|DELETE) /(blockchain/(bids|providers|models)|wallet|auth)\b|(PUT|PATCH|PROPFIND) )'
+# Self-check: the regex must match a canned blocked line and must not match a
+# canned allowed line, so the router-log assertion below can actually fail.
+printf '%s\n' '[HTTP-REQ] POST /blockchain/send/eth' | grep -qiE "$blocked_re" \
+  || fail "router-log regex self-check: does not match a canned blocked request line"
+if printf '%s\n' '[HTTP-REQ] GET /healthcheck' | grep -qiE "$blocked_re"; then
+  fail "router-log regex self-check: matches a canned allowed request line"
+fi
+if rlog | grep -iE "$blocked_re"; then
   fail "a blocked request reached the router"
 fi
 blocks=$(dc logs --no-color uplink | grep -c '"event":"node_passthrough_block"' || true)

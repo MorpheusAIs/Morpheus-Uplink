@@ -36,10 +36,9 @@ import (
 //	                     file-access routes are denied.
 //	/v1/audio/transcriptions  internal/proxyapi/controller_http.go:100 (audio_transcription);
 //	                     router file-access route, denied.
-//	/proxy/provider/ping       internal/proxyapi/controller_http.go:88 (no auth) and
+//	/proxy/provider/ping       internal/proxyapi/controller_http.go:88 and
 //	/proxy/sessions/initiate   :89 (initiate_session): the body carries a caller-chosen
-//	                     providerUrl (requests.go:13-16, 24-30); the router dials it,
-//	                     sends a signed message and returns the reply or error
+//	                     providerUrl (requests.go:13-16, 24-30) that the router contacts
 //	                     (proxy_sender.go:139-146, 261-275, 580-633). Uplink does not
 //	                     use either route; denied.
 //	/docker/build, /docker/build/*  internal/proxyapi/controller_http.go:114-115 (docker_build);
