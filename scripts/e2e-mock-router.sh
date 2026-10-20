@@ -385,7 +385,9 @@ printf '%s' "$out" | jq -e '.ok == true and .reenroll == true and .required == t
 dc logs --no-color uplink | grep -q '"event":"2fa_reset","result":"ok".*"reason":"sessions_revoked=' || fail "no 2fa_reset audit"
 SESSION=$OLD_SESSION; uapi GET /admin/2fa/status >/dev/null
 [ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "old cookie after reset: $(cat "$E2E_BOOT_DIR/ucode")"
-dc exec -T uplink cat /data/uplink-state.json | jq -e '.auth // {} | (has("totpBlob") or has("recoveryCodes") or has("enrolled") or has("pendingSecretEnc")) | not' >/dev/null \
+# As uid 10001: the file is the app user's, mode 0600, and the service drops
+# CAP_DAC_OVERRIDE, so a root exec cannot read it.
+dc exec -T --user 10001 uplink cat /data/uplink-state.json | jq -e '.auth // {} | (has("totpBlob") or has("recoveryCodes") or has("enrolled") or has("pendingSecretEnc")) | not' >/dev/null \
   || fail "state file still holds 2FA material after reset"
 try_login "$ADMIN_PASSWORD" ""
 [ "$LCODE" = 200 ] && [ -n "$LSESSION" ] || fail "password-only login after reset: $LCODE"

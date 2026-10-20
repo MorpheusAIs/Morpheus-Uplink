@@ -405,15 +405,14 @@ characters as well.
 | `.github/workflows/build.yml` | Pipeline itself |
 
 **Skipped** (no test run, no version bump): `docs/**`, root markdown
-(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `scripts/**`,
-`.ai-docs/**`, `.env.example`, etc. A PR that mixes docs + `internal/` still
+(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `.ai-docs/**`, etc. A PR that mixes docs + `internal/` still
 runs — any matching path is enough.
 
 Keep the `uplink` GHCR package **public** so SecretVM can pull anonymously.
 Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).
 
-`scripts/deploy-assets.sh` and `.env.example` also trigger pull_request CI
-(not a release), so the asset check runs when they change.
+`scripts/**` and `.env.example` also trigger pull_request CI (not a
+release), so the checks, e2e and asset check run when they change.
 
 ### Release assets
 

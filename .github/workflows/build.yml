@@ -31,10 +31,10 @@ name: CI/CD
 #   deploy/            entrypoint in image + SecretVM/generic release assets
 #   docker-compose.local.yml   CI ASCII / local-stack contract
 #   this workflow      CI itself
-#   scripts/deploy-assets.sh, .env.example   pull_request only (asset check)
+#   scripts/**, .env.example   pull_request only (checks, e2e, asset check)
 #
 # Does NOT trigger (examples): docs/**, README.md, AGENTS.md, DISCLAIMER.md,
-# LICENSE, NOTICE, llms*.txt, other scripts/**, .ai-docs/**
+# LICENSE, NOTICE, llms*.txt, .ai-docs/** (and scripts/** on push)
 #
 # workflow_dispatch always runs (manual prerelease / force publish).
 on:
@@ -49,9 +49,9 @@ on:
       - "Dockerfile"
       - "docker-compose.local.yml"
       - ".github/workflows/build.yml"
-      # Release-asset generator and the env example it checks (PR check only;
-      # they do not cut a version on their own).
-      - "scripts/deploy-assets.sh"
+      # The scripts CI runs (asset generator, checks, e2e) and the env example
+      # the asset check reads. PR only: they do not cut a version on their own.
+      - "scripts/**"
       - ".env.example"
   push:
     branches: [main]
