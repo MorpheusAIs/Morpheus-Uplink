@@ -315,9 +315,60 @@ wait_healthy uplink
 login
 echo "OK graceful stop: sessions closed before exit, within the grace period"
 
+echo "== admin 2FA: revoke-all and logout force a fresh second factor =="
+# totp SECRET [STEP_OFFSET] -> 6-digit code (RFC 6238, SHA-1, 30 s).
+totp() {
+  python3 - "$1" "${2:-0}" <<'PY'
+import base64, hashlib, hmac, struct, sys, time
+s = sys.argv[1]
+k = base64.b32decode(s + "=" * (-len(s) % 8))
+h = hmac.new(k, struct.pack(">Q", int(time.time()) // 30 + int(sys.argv[2])), hashlib.sha1).digest()
+o = h[-1] & 15
+print("%06d" % ((struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % 1000000))
+PY
+}
+# try_login PASSWORD CODE -> HTTP code in $LCODE, cookie (if any) in $LSESSION.
+try_login() {
+  local out body
+  body=$(jq -cn --arg p "$1" --arg c "$2" '{password: $p} + (if $c == "" then {} else {code: $c} end)')
+  out=$(dc exec -T uplink curl -sS -D - -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+    --data-binary @- http://127.0.0.1:8080/admin/login <<<"$body")
+  LCODE=$(printf '%s' "$out" | tail -n 1)
+  LSESSION=$(printf '%s' "$out" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
+}
+login
+start=$(uapi POST /admin/2fa/enroll/start '{}')
+TOTP_SECRET=$(printf '%s' "$start" | jq -r .secret)
+[ -n "$TOTP_SECRET" ] && [ "$TOTP_SECRET" != null ] || fail "2fa enroll start: $start"
+conf=$(uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$TOTP_SECRET")\"}")
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "2fa enroll confirm: $conf"
+RECOVERY=$(printf '%s' "$conf" | jq -r '.recoveryCodes[]')
+[ "$(printf '%s\n' "$RECOVERY" | grep -cE '^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}$')" = 10 ] || fail "want 10 recovery codes at enrollment"
+try_login "$ADMIN_PASSWORD" "$(totp "$TOTP_SECRET" 1)"
+[ "$LCODE" = 200 ] && [ -n "$LSESSION" ] || fail "password + TOTP login: $LCODE"
+SESSION=$LSESSION
+uapi POST /admin/sessions/revoke-all '{}' >/dev/null
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "revoke-all"
+uapi GET /admin/status >/dev/null
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "old cookie still works after revoke-all"
+try_login "$ADMIN_PASSWORD" ""
+[ "$LCODE" = 401 ] && [ -z "$LSESSION" ] || fail "password-only login after revoke-all: $LCODE cookie=${LSESSION:+set}"
+dc logs --no-color uplink | grep -q '"event":"login".*"reason":"2fa_required"' || fail "no 2fa_required audit for the password-only login"
+RC1=$(printf '%s\n' "$RECOVERY" | head -n 1)
+try_login "$ADMIN_PASSWORD" "$RC1"
+[ "$LCODE" = 200 ] && [ -n "$LSESSION" ] || fail "recovery-code login: $LCODE"
+SESSION=$LSESSION
+uapi POST /admin/logout '{}' >/dev/null
+uapi GET /admin/status >/dev/null
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "cookie still works after logout"
+try_login "$ADMIN_PASSWORD" "$RC1"
+[ "$LCODE" = 401 ] || fail "recovery code accepted twice: $LCODE"
+echo "OK 2FA: revoke-all and logout end every session; password alone stops at 2fa_required; recovery codes are single-use"
+
 echo "== logs carry no secrets; no direct payment ever requested =="
 logs=$(dc logs --no-color 2>&1)
-for s in "$COOKIE_SECRET" "$ADMIN_PASSWORD" "$API_KEY_SEED" "${WALLET_PRIVATE_KEY#0x}" "$APIKEY"; do
+for s in "$COOKIE_SECRET" "$ADMIN_PASSWORD" "$API_KEY_SEED" "${WALLET_PRIVATE_KEY#0x}" "$APIKEY" "$TOTP_SECRET" $RECOVERY; do
   if printf '%s' "$logs" | grep -qF -- "$s"; then fail "a secret appears in the compose logs"; fi
 done
 [ "$(stats | jq -r .direct_payment_requests)" = 0 ] || fail "a direct-payment request reached the router"
