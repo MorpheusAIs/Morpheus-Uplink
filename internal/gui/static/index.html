@@ -316,6 +316,15 @@
   .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
   .note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.45; }
   .hidden { display: none !important; }
+  .otp-input {
+    width: 9ch;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 1.15rem;
+    letter-spacing: 0.3em;
+    text-align: center;
+  }
+  .msg-ok { color: var(--green-light, #4c4); }
+  .msg-err { color: var(--warn, #c90); }
   .callout {
     margin-top: 12px; padding: 14px 16px; border-radius: var(--radius);
     background: var(--green-bg); border: 1px solid rgba(32, 220, 142, 0.35);
@@ -802,11 +811,26 @@
       <div class="eyebrow">Establish connection</div>
       <h2>Operator.<em>_</em></h2>
       <p>Dial into your personal Morpheus gateway. One password opens the console; API keys live behind it.</p>
-      <form class="row" onsubmit="event.preventDefault(); login();">
-        <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
-        <button type="submit">Connect</button>
+      <form id="loginStepPassword" class="stack" onsubmit="event.preventDefault(); login();" style="gap:8px">
+        <div class="row">
+          <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
+          <button type="submit">Connect</button>
+        </div>
       </form>
-      <div class="note" id="loginMsg"></div>
+      <form id="loginStepCode" class="stack hidden" onsubmit="event.preventDefault(); loginWithCode();" style="gap:8px">
+        <label for="totpCode" class="note" style="margin:0">Two-factor code</label>
+        <div class="row">
+          <input id="totpCode" class="otp-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+                 maxlength="6" pattern="\d{6}" placeholder="123456" aria-describedby="loginCodeHint">
+          <button type="submit">Verify</button>
+        </div>
+        <div class="row" style="gap:12px">
+          <button type="button" class="ghost" onclick="toggleRecoveryCode()" id="recoveryToggle">Use a recovery code</button>
+          <button type="button" class="ghost" onclick="loginBack()">Back</button>
+        </div>
+        <p class="note" id="loginCodeHint" style="margin:0">Enter the 6-digit code from your authenticator app.</p>
+      </form>
+      <div class="note" id="loginMsg" role="status"></div>
     </div>
     <div class="login-visual">
       <img src="uplink-phone.png" alt="Matrix green rotary telephone — Uplink">
@@ -820,6 +844,7 @@
     <button class="tab" data-tab="keys" onclick="showTab('keys')">API Keys</button>
     <button class="tab" data-tab="playground" onclick="showTab('playground')">Probe</button>
     <button class="tab" data-tab="activity" onclick="showTab('activity')">Sessions &amp; Usage</button>
+    <button class="tab" data-tab="security" onclick="showTab('security')">Security</button>
   </nav>
 
   <main>
@@ -868,9 +893,16 @@
 
       <section>
         <h2>Status &amp; wallet</h2>
+        <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
         <div class="sys-line" id="stats"></div>
         <div class="mor-grid" id="morBuckets"></div>
         <p class="note" id="morNote" style="margin-top:8px"></p>
+        <details class="note" id="stakeHelp" style="margin-top:4px">
+          <summary>Session stake: locks, not spends</summary>
+          <p style="margin:4px 0">A session stake is locked while the session runs and is returned to this wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink only opens staking-mode sessions (never direct payment).</p>
+          <p style="margin:4px 0"><strong>Stopping Uplink.</strong> A graceful <code>docker stop</code> closes every open session on this wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions. The stake is returned (a lock, not a loss). <code>CLOSE_SESSIONS_ON_EXIT=false</code> opts out. Use a dedicated wallet.</p>
+        </details>
+        <p class="note" id="sessionReconcileLine" style="margin-top:4px"></p>
         <div class="callout fund-callout">
           <strong>Need more MOR?</strong>
           <p class="note" style="margin:4px 0 0">
@@ -879,6 +911,7 @@
           <div class="secret-row">
             <span class="note" style="margin:0">Wallet:</span>
             <code id="walletMasked">…</code>
+            <span class="note" id="walletSourceNote" style="margin:0"></span>
             <button type="button" class="icon" title="Copy full address" onclick="copySecret('wallet', this)" aria-label="Copy wallet address">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
             </button>
@@ -927,6 +960,44 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
       </section>
     </div>
 
+
+    <div class="panel" id="tab-security">
+      <section>
+        <h2>Two-factor auth</h2>
+        <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
+        <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
+          <div class="row">
+            <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
+          </div>
+          <div id="enrollSecret" class="note" style="word-break:break-all"></div>
+          <img id="enrollQr" alt="" style="display:none;max-width:200px;background:#fff;padding:8px;border-radius:8px">
+          <form id="enrollConfirmForm" class="row" onsubmit="event.preventDefault(); confirmTotpEnroll();" style="display:none">
+            <input id="enrollCode" class="otp-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" pattern="\d{6}" placeholder="123456" aria-label="6-digit code from authenticator">
+            <button type="submit">Confirm code</button>
+          </form>
+        </div>
+        <p class="note" id="enrollMsg" role="status" style="margin:0"></p>
+        <pre id="recoveryCodes" class="note" style="display:none;white-space:pre-wrap"></pre>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" type="button" onclick="logoutAllSessions()">Revoke all sessions</button>
+          <button class="ghost" type="button" onclick="logout()">Log out</button>
+        </div>
+      </section>
+      <section>
+        <h2>Security alerts</h2>
+        <p class="note" style="margin-top:0">
+          Recent login failures, lockouts, key ops, and balance-drop signals.
+          Forward container logs to your log stack (json-file / journald / SIEM);
+          Uplink does not dump secrets at boot.
+        </p>
+        <div id="securityAlerts" class="note">Loading…</div>
+        <div class="row" style="margin-top:12px">
+          <button type="button" class="ghost" onclick="refreshSecurity()">Refresh</button>
+        </div>
+      </section>
+    </div>
+
     <!-- KEYS -->
     <div class="panel" id="tab-keys">
       <section>
@@ -936,6 +1007,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <code>API_KEY_SEED</code> in your env settings and restart.
         </p>
         <div id="builtinKeys" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="ghost" onclick="refreshKeys(true).then(() => renderBuiltinKeys())">Reveal full keys</button>
+          <span class="note">Masked by default</span>
+        </div>
       </section>
 
       <section>
@@ -1160,8 +1235,52 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 </div>
 
 <script>
-let auth = sessionStorage.getItem('uplink_auth') || '';
+let authed = false;
+let lastRouterProblem = null; // { kind, text } from /admin/status
+let catalogState = { state: 'idle', error: '' }; // idle | loading | ok | error
+let stakeEstimateError = null; // { kind, hint } from /admin/estimate-stakes
 let secrets = { wallet: '', prompt: '', master: '' };
+// Full API keys by id ('master', 'prompt' or a key record id). /admin/keys
+// masks keys by default ("sk-p…d04f"): those are display-only and never go
+// into an Authorization header, the clipboard or the curl box.
+let realKeys = {};
+const KEY_PLACEHOLDER = 'YOUR_API_KEY';
+
+function isMaskedKey(s) {
+  return /\u2026|\.\.\.|\*{4,}/.test(String(s || ''));
+}
+
+// usableKey returns k when it can go into an Authorization header, else ''.
+function usableKey(k) {
+  k = String(k || '');
+  if (!k || k === KEY_PLACEHOLDER || isMaskedKey(k) || /[^\x21-\x7e]/.test(k)) return '';
+  return k;
+}
+
+function rememberKeys(ks) {
+  if (!ks) return;
+  if (ks.masked === false) {
+    if (usableKey(ks.masterKey)) realKeys.master = ks.masterKey;
+    if (usableKey(ks.promptKey)) realKeys.prompt = ks.promptKey;
+  }
+  for (const k of (ks.keys || [])) {
+    if (k.revokedAt) { delete realKeys[k.id]; continue; }
+    if (usableKey(k.secret)) realKeys[k.id] = k.secret;
+  }
+}
+
+// fullKey returns the full key for id, fetching it once (audited reveal)
+// when only the masked form is known. '' when unavailable.
+async function fullKey(id) {
+  if (realKeys[id]) return realKeys[id];
+  try {
+    const res = await fetch('/admin/keys?reveal=1', { credentials: 'same-origin' });
+    if (res.status === 401) { showLogin(); return ''; }
+    if (!res.ok) return '';
+    rememberKeys(await res.json());
+  } catch (_) { return ''; }
+  return realKeys[id] || '';
+}
 let promptKey = '';
 let allModels = [];
 let selectedModel = '';
@@ -1217,20 +1336,27 @@ function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta,
 }
 
 function showTab(id) {
+  const switchingToSecurity = (id === 'security' && activeTab !== 'security');
   activeTab = id || 'status';
+  if (switchingToSecurity) refreshSecurity();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
   // Status / Sessions show live wallet + chain state — refresh on every visit.
-  if ((id === 'status' || id === 'activity') && auth && !document.getElementById('app').classList.contains('hidden')) {
+  if ((id === 'status' || id === 'activity') && authed && !document.getElementById('app').classList.contains('hidden')) {
     refresh({ force: true });
   }
 }
 
 async function api(path, opts = {}) {
-  opts.headers = Object.assign({}, opts.headers, { 'Authorization': 'Basic ' + auth });
+  opts = Object.assign({ credentials: 'same-origin' }, opts);
+  opts.headers = Object.assign({}, opts.headers);
+  if (opts.poll) {
+    opts.headers['X-Uplink-Poll'] = '1';
+    delete opts.poll;
+  }
   const res = await fetch(path, opts);
-  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || res.statusText);
@@ -1241,8 +1367,33 @@ async function api(path, opts = {}) {
   return res.text();
 }
 
+function renderSessionReconcile(sr) {
+  const el = document.getElementById('sessionReconcileLine');
+  if (!el) return;
+  const when = sr.at ? new Date(sr.at).toLocaleString() : '';
+  const counts = 'adopted ' + (sr.adopted || 0) + ', closed ' + (sr.closed || 0)
+    + ', skipped ' + (sr.skipped || 0) + ', deferred ' + (sr.deferred || 0)
+    + ((sr.failed || 0) ? ', failed ' + sr.failed : '');
+  let txt;
+  switch (sr.state) {
+    case 'pending': case 'reconciling':
+      txt = 'Boot session check: listing open sessions… new sessions wait until it finishes.'; break;
+    case 'closing':
+      txt = 'Boot session check: ' + counts + ' (closing stale sessions in the background).'; break;
+    case 'ok': case 'partial':
+      txt = 'Boot session check ' + when + ': ' + counts + (sr.state === 'partial' ? ' (some left for later scans or expiry)' : '') + '.'; break;
+    case 'deferred': case 'retrying':
+      txt = 'Boot session check retrying (open sessions could not be listed' + (sr.attempts ? ', attempt ' + sr.attempts : '') + ').'
+        + (sr.opensHeld ? ' New sessions are not opened until the list succeeds.' : ''); break;
+    default:
+      txt = '';
+  }
+  el.textContent = txt;
+  el.classList.toggle('msg-err', sr.state === 'deferred' || sr.state === 'retrying');
+}
+
 async function copySecret(kind, btn) {
-  const full = secrets[kind];
+  const full = await fullKey(kind);
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
@@ -1274,23 +1425,328 @@ function setLoggedIn(on) {
   else refreshConnectBaseUrl();
 }
 
-function logout() {
-  sessionStorage.removeItem('uplink_auth');
-  auth = '';
+function showLogin() {
+  authed = false;
+  realKeys = {};
   setLoggedIn(false);
+  if (document.getElementById('loginStepPassword')) setLoginStep('password');
+}
+
+async function logout() {
+  try {
+    await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch (_) {}
+  showLogin();
+}
+
+
+async function refreshSecurity() {
+  const box = document.getElementById('securityAlerts');
+  const stEl = document.getElementById('twoFactorStatus');
+  const enrollBox = document.getElementById('twoFactorEnroll');
+  if (stEl) {
+    try {
+      const res = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+      if (res.status === 401) { showLogin(); return; }
+      if (!res.ok) throw new Error(await res.text() || res.statusText);
+      const tf = await res.json();
+      let msg = tf.enrolled ? '2FA enrolled.' : '2FA not enrolled.';
+      if (tf.required && !tf.enrolled) msg += ' Enrollment required before other admin actions.';
+      if (tf.breakGlassWarn) msg += ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.';
+      stEl.textContent = msg;
+      if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
+      if (tf.need2fa && activeTab !== 'security') showTab('security');
+    } catch (e) {
+      stEl.textContent = 'Could not load 2FA status.';
+    }
+  }
+  if (box) {
+    try {
+      const res = await fetch('/admin/security', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+      if (res.status === 401) { showLogin(); return; }
+      if (res.status === 403) {
+        box.textContent = 'Security alerts available after 2FA enrollment.';
+      } else if (!res.ok) {
+        box.textContent = 'Failed to load: ' + (await res.text() || res.statusText);
+      } else {
+        const data = await res.json();
+        const alerts = data.alerts || [];
+        if (!alerts.length) {
+          box.textContent = 'No recent alerts.';
+        } else {
+          box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
+            const when = a.at ? new Date(a.at).toLocaleString() : '';
+            return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
+              + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
+          }).join('') + '</ul>';
+        }
+      }
+    } catch (e) {
+      box.textContent = 'Failed to load: ' + e.message;
+    }
+  }
+}
+
+function setEnrollMsg(text, kind) {
+  const el = document.getElementById('enrollMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('msg-ok', kind === 'ok');
+  el.classList.toggle('msg-err', kind === 'err');
+}
+
+function hideEnrollSecret() {
+  const secretEl = document.getElementById('enrollSecret');
+  const qr = document.getElementById('enrollQr');
+  const form = document.getElementById('enrollConfirmForm');
+  if (secretEl) secretEl.textContent = '';
+  if (qr) { qr.removeAttribute('src'); qr.style.display = 'none'; }
+  if (form) form.style.display = 'none';
+}
+
+async function startTotpEnroll() {
+  const secretEl = document.getElementById('enrollSecret');
+  const qr = document.getElementById('enrollQr');
+  const rec = document.getElementById('recoveryCodes');
+  const form = document.getElementById('enrollConfirmForm');
+  const codeEl = document.getElementById('enrollCode');
+  if (rec) { rec.style.display = 'none'; rec.textContent = ''; }
+  setEnrollMsg('', '');
+  try {
+    const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    secretEl.textContent = 'Secret (save offline): ' + (data.secret || '');
+    if (data.qrPngB64 && qr) {
+      qr.src = 'data:image/png;base64,' + data.qrPngB64;
+      qr.style.display = 'block';
+    } else if (qr) {
+      qr.style.display = 'none';
+    }
+    if (form) form.style.display = 'flex';
+    if (codeEl) { codeEl.value = ''; setTimeout(() => codeEl.focus(), 0); }
+  } catch (e) {
+    setEnrollMsg('Enroll start failed: ' + e.message, 'err');
+  }
+}
+
+async function confirmTotpEnroll() {
+  const codeEl = document.getElementById('enrollCode');
+  const code = ((codeEl || {}).value || '').trim();
+  const rec = document.getElementById('recoveryCodes');
+  if (!/^\d{6}$/.test(code)) {
+    setEnrollMsg('Enter the 6 digits shown in your authenticator app.', 'err');
+    if (codeEl) codeEl.focus();
+    return;
+  }
+  setEnrollMsg('Checking…', '');
+  try {
+    const data = await api('/admin/2fa/enroll/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    hideEnrollSecret();
+    if (codeEl) codeEl.value = '';
+    setTwoFactorHint(true);
+    setEnrollMsg('2FA enabled. Save the recovery codes below; they are shown once.', 'ok');
+    if (rec && data.recoveryCodes) {
+      rec.style.display = 'block';
+      rec.textContent = 'Recovery codes (shown once):\n' + data.recoveryCodes.join('\n');
+    }
+    refreshSecurity();
+  } catch (e) {
+    setEnrollMsg('Code not accepted: ' + e.message + '. Check the time on your device and try the next code.', 'err');
+    if (codeEl) { codeEl.select(); codeEl.focus(); }
+  }
+}
+
+async function logoutAllSessions() {
+  if (!confirm('Revoke all admin sessions on this instance?')) return;
+  try {
+    await api('/admin/sessions/revoke-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    showLogin();
+  } catch (e) {
+    alert('Revoke failed: ' + e.message);
+  }
+}
+
+// Two-step login. The server keeps one POST /admin/login {password, code?}
+// and answers the same 401 for a wrong password and for a correct password
+// that still needs a code, so nothing about enrollment leaks before a
+// correct password. The browser remembers (locally) whether this instance
+// had 2FA at the last successful login, to skip the code step when it
+// knows there is none.
+let loginPassword = '';
+let recoveryMode = false;
+const TWOFA_HINT_KEY = 'uplink.2fa.enrolled';
+
+function twoFactorHint() {
+  try { return localStorage.getItem(TWOFA_HINT_KEY); } catch (_) { return null; }
+}
+function setTwoFactorHint(enrolled) {
+  try { localStorage.setItem(TWOFA_HINT_KEY, enrolled ? '1' : '0'); } catch (_) {}
+}
+
+function setLoginStep(step) {
+  document.getElementById('loginStepPassword').classList.toggle('hidden', step !== 'password');
+  document.getElementById('loginStepCode').classList.toggle('hidden', step !== 'code');
+  if (step === 'code') {
+    const c = document.getElementById('totpCode');
+    c.value = '';
+    setTimeout(() => c.focus(), 0);
+  } else {
+    loginPassword = '';
+    setRecoveryMode(false);
+    const pw = document.getElementById('pw');
+    if (pw) setTimeout(() => pw.focus(), 0);
+  }
+}
+
+function setRecoveryMode(on) {
+  recoveryMode = !!on;
+  const c = document.getElementById('totpCode');
+  const hint = document.getElementById('loginCodeHint');
+  const tog = document.getElementById('recoveryToggle');
+  if (!c) return;
+  if (recoveryMode) {
+    c.removeAttribute('maxlength');
+    c.removeAttribute('pattern');
+    c.setAttribute('inputmode', 'text');
+    c.setAttribute('autocomplete', 'off');
+    c.placeholder = 'recovery code';
+    c.classList.remove('otp-input');
+    if (hint) hint.textContent = 'Enter one of your single-use recovery codes.';
+    if (tog) tog.textContent = 'Use authenticator code';
+  } else {
+    c.setAttribute('maxlength', '6');
+    c.setAttribute('pattern', '\\d{6}');
+    c.setAttribute('inputmode', 'numeric');
+    c.setAttribute('autocomplete', 'one-time-code');
+    c.placeholder = '123456';
+    c.classList.add('otp-input');
+    if (hint) hint.textContent = 'Enter the 6-digit code from your authenticator app.';
+    if (tog) tog.textContent = 'Use a recovery code';
+  }
+}
+
+function toggleRecoveryCode() {
+  setRecoveryMode(!recoveryMode);
+  const c = document.getElementById('totpCode');
+  if (c) { c.value = ''; c.focus(); }
+}
+
+function loginBack() {
+  document.getElementById('loginMsg').textContent = '';
+  setLoginStep('password');
+}
+
+async function postLogin(password, code) {
+  return fetch('/admin/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password, code: code || undefined }),
+  });
+}
+
+async function finishLogin(res, msg) {
+  const data = await res.json();
+  setTwoFactorHint(!!data.enrolled);
+  loginPassword = '';
+  document.getElementById('pw').value = '';
+  document.getElementById('totpCode').value = '';
+  setLoginStep('password');
+  authed = true;
+  setLoggedIn(true);
+  if (data.need2fa) {
+    msg.textContent = 'Enroll 2FA from the Security tab before other admin actions.';
+    showTab('security');
+    return;
+  }
+  refresh();
 }
 
 async function login() {
   const pw = document.getElementById('pw').value;
-  auth = btoa('admin:' + pw);
+  const msg = document.getElementById('loginMsg');
+  msg.textContent = '';
+  if (!pw) return;
   try {
-    await api('/admin/status');
-    sessionStorage.setItem('uplink_auth', auth);
-    setLoggedIn(true);
-    refresh();
+    const res = await postLogin(pw);
+    if (res.status === 429) {
+      const ra = res.headers.get('Retry-After') || '?';
+      msg.textContent = 'Too many attempts. Retry after ' + ra + 's.';
+      return;
+    }
+    if (res.ok) { await finishLogin(res, msg); return; }
+    if (res.status === 401 && twoFactorHint() !== '0') {
+      // Either the password was wrong or a code is needed; the server
+      // does not say which. Ask for the code; a wrong password fails there.
+      loginPassword = pw;
+      document.getElementById('pw').value = '';
+      setLoginStep('code');
+      return;
+    }
+    // This browser last saw no 2FA here. Offer the code step anyway in
+    // case 2FA was enabled since.
+    loginPassword = pw;
+    msg.innerHTML = 'Login failed: password not accepted. '
+      + '<button type="button" class="ghost" onclick="document.getElementById(\'pw\').value=\'\'; setLoginStep(\'code\')">I have a 2FA code</button>';
   } catch (e) {
-    document.getElementById('loginMsg').textContent = 'Connection failed: ' + e.message;
+    msg.textContent = 'Connection failed: ' + e.message;
   }
+}
+
+async function loginWithCode() {
+  const msg = document.getElementById('loginMsg');
+  const code = (document.getElementById('totpCode').value || '').trim();
+  msg.textContent = '';
+  if (!recoveryMode && !/^\d{6}$/.test(code)) {
+    msg.textContent = 'Enter the 6 digits from your authenticator.';
+    return;
+  }
+  if (!code || !loginPassword) { setLoginStep('password'); return; }
+  try {
+    const res = await postLogin(loginPassword, code);
+    if (res.status === 429) {
+      const ra = res.headers.get('Retry-After') || '?';
+      msg.textContent = 'Too many attempts. Retry after ' + ra + 's.';
+      setLoginStep('password');
+      return;
+    }
+    if (res.ok) { await finishLogin(res, msg); return; }
+    msg.textContent = 'Login failed: password or code not accepted. Start again.';
+    setLoginStep('password');
+  } catch (e) {
+    msg.textContent = 'Connection failed: ' + e.message;
+  }
+}
+
+async function tryRestoreSession() {
+  try {
+    const res = await fetch('/admin/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+    if (res.ok) {
+      authed = true;
+      setLoggedIn(true);
+      refresh();
+      return;
+    }
+    // 403 with ADMIN_2FA_REQUIRED: session may be valid but enroll pending.
+    if (res.status === 403) {
+      const st = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+      if (st.ok) {
+        const tf = await st.json();
+        authed = true;
+        setLoggedIn(true);
+        if (tf.need2fa) {
+          showTab('security');
+          return;
+        }
+        refresh();
+        return;
+      }
+    }
+  } catch (_) {}
+  showLogin();
 }
 
 function fmtMor(v) {
@@ -1329,7 +1785,7 @@ function fmtEnds(iso) {
 }
 
 function loggedIn() {
-  return !!auth && !document.getElementById('app').classList.contains('hidden');
+  return !!authed && !document.getElementById('app').classList.contains('hidden');
 }
 
 /** Refresh wallet/sessions/usage. force=true skips the short coalesce window. */
@@ -1347,9 +1803,35 @@ function refresh(opts = {}) {
   return refreshInFlight;
 }
 
+/** Distinct router problems: rejected credential vs router not ready. */
+function routerProblem(st) {
+  const ra = (st && st.routerAuth) || {};
+  if (ra.ok === false) {
+    return {
+      kind: 'router_auth',
+      text: 'Router rejected Uplink\'s credential (401) since '
+        + (ra.since ? new Date(ra.since).toLocaleTimeString() : 'boot')
+        + '. Balances, sessions and stake estimates are unavailable. Check that COOKIE_CONTENT matches on uplink and proxy-router.',
+    };
+  }
+  if (st && st.routerError) {
+    return { kind: 'router_not_ready', text: 'Router not reachable yet (starting or restarting). Retrying automatically.' };
+  }
+  return null;
+}
+
+function renderRouterBanner(st) {
+  const el = document.getElementById('routerAuthBanner');
+  if (!el) return;
+  const p = routerProblem(st);
+  lastRouterProblem = p;
+  el.classList.toggle('hidden', !p);
+  el.textContent = p ? p.text : '';
+}
+
 async function doRefresh() {
   try {
-    const st = await api('/admin/status');
+    const st = await api('/admin/status', { poll: true });
     const bal = st.balance || {};
     const mor = st.mor || {};
     lastStatusSnapshot = st;
@@ -1420,12 +1902,18 @@ async function doRefresh() {
          </div>
        </div>`;
 
-    secrets.wallet = '';
-    try {
-      const w = await api('/node/wallet');
-      secrets.wallet = w.address || '';
-    } catch (e) { /* optional */ }
-    document.getElementById('walletMasked').textContent = shortSecret(secrets.wallet) || '(unavailable)';
+    // Keep the last address we saw; the server already falls back to the
+    // last router answer.
+    if (st.walletAddress) secrets.wallet = st.walletAddress;
+    document.getElementById('walletMasked').textContent = secrets.wallet ? shortSecret(secrets.wallet) : '(not reported yet)';
+    const wsn = document.getElementById('walletSourceNote');
+    if (wsn) {
+      wsn.textContent = (st.walletAddressError && secrets.wallet)
+        ? '(last known; router lookup failing)'
+        : '';
+    }
+    renderRouterBanner(st);
+    renderSessionReconcile(st.sessionReconcile || {});
 
     const rawSessions = st.sessions || [];
     lastRawSessionIds.clear();
@@ -1577,8 +2065,10 @@ function renderSessions(sessions, sessionsError) {
   }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
 }
 
-async function refreshKeys() {
-  const ks = await api('/admin/keys');
+async function refreshKeys(reveal) {
+  const qs = reveal ? '?reveal=1' : '';
+  const ks = await api('/admin/keys' + qs);
+  rememberKeys(ks);
   secrets.master = ks.masterKey || '';
   secrets.prompt = ks.promptKey || '';
   promptKey = secrets.prompt;
@@ -1623,11 +2113,7 @@ function populateConnectClient(ks) {
 
 function connectKeySecret() {
   const id = document.getElementById('connectKeySelect')?.value || 'prompt';
-  if (id === 'prompt') return secrets.prompt || '';
-  const fromGen = generatedKeySecrets[id];
-  if (fromGen) return fromGen;
-  const row = (window.__lastEphemeralKeys || []).find(k => k.id === id);
-  return (row && row.secret) || '';
+  return fullKey(id);
 }
 
 function onConnectKeyChange() {
@@ -1655,7 +2141,7 @@ async function copyConnectBaseUrl(btn) {
 }
 
 async function copyConnectKey(btn) {
-  const full = connectKeySecret();
+  const full = await connectKeySecret();
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
@@ -1716,10 +2202,26 @@ function populateConnectModels() {
   if (!sel) return;
   const hint = document.getElementById('connectModelDurHint');
   const dur = connectDefaultDurationSec();
-  if (hint) hint.textContent = '(~MOR lock · ' + fmtDuration(dur) + ' default)';
+  if (hint) {
+    let h = '(~MOR lock · ' + fmtDuration(dur) + ' default)';
+    if (stakeEstimateError) {
+      h = stakeEstimateError.kind === 'router_auth'
+        ? '(lock estimate unavailable: router rejected Uplink\'s credential)'
+        : stakeEstimateError.kind === 'router_not_ready'
+          ? '(lock estimate unavailable: router not ready yet)'
+          : '(lock estimate unavailable)';
+    }
+    hint.textContent = h;
+  }
   const prev = sel.value || selectedModel || '';
   if (!allModels.length) {
-    sel.innerHTML = '<option value="">Catalog unavailable — open Probe or retry</option>';
+    let label = 'Loading model catalog…';
+    if (catalogState.state === 'error') {
+      label = 'Catalog fetch failed — ' + (catalogState.error || 'see Probe') + ' (retry from Probe)';
+    } else if (catalogState.state === 'idle') {
+      label = authed ? 'Loading model catalog…' : 'Connect first';
+    }
+    sel.innerHTML = `<option value="">${escapeHtml(label)}</option>`;
     return;
   }
   const ids = allModels.map(m => m.id).sort((a, b) => a.localeCompare(b));
@@ -1788,7 +2290,7 @@ function todayUTC() {
   return utcDayString(new Date());
 }
 
-/** Josh residual: custom dates must be YYYY-MM-DD UTC only; from <= to. */
+/** Custom usage dates must be YYYY-MM-DD UTC only; from <= to. */
 function isValidUTCDate(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split('-').map(Number);
@@ -2231,7 +2733,7 @@ function parseKeyList(text) {
 }
 
 async function copyGeneratedKey(id, btn) {
-  const full = generatedKeySecrets[id];
+  const full = await fullKey(id);
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
@@ -2256,6 +2758,7 @@ async function createKey() {
     const ks = await refreshKeys();
     if (created && created.key && created.record && created.record.id) {
       generatedKeySecrets[created.record.id] = created.key;
+      if (usableKey(created.key)) realKeys[created.record.id] = created.key;
       const keys = (ks.keys || []).map(k =>
         k.id === created.record.id ? Object.assign({}, k, { secret: created.key }) : k
       );
@@ -2334,7 +2837,7 @@ async function closeAll() {
   try {
     const res = await fetch('/admin/pool/close-all', {
       method: 'POST',
-      headers: { 'Authorization': 'Basic ' + auth },
+      credentials: 'same-origin',
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok && !(body.ok > 0)) {
@@ -2501,8 +3004,8 @@ function refreshModelStakes() {
   const dur = probeDurationSec();
   const seq = ++stakesSeq;
   lockPreviewTimer = setTimeout(async () => {
-    if (!auth) {
-      // Preview mode: fake stakes from MOR/h × hours (display only).
+    if (!authed) {
+      // Preview mode: fake stakes from MOR/h x hours (display only).
       modelStakes = {};
       modelStakesDurationSec = dur;
       for (const m of allModels) {
@@ -2516,8 +3019,19 @@ function refreshModelStakes() {
       return;
     }
     try {
-      const data = await api('/admin/estimate-stakes?duration=' + dur);
+      const res = await fetch('/admin/estimate-stakes?duration=' + dur, { credentials: 'same-origin' });
+      if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+      if (!res.ok) {
+        let j = {};
+        try { j = await res.json(); } catch (_) {}
+        const err = new Error(j.error || res.statusText);
+        err.kind = j.kind || 'router_error';
+        err.hint = j.hint || '';
+        throw err;
+      }
+      const data = await res.json();
       if (seq !== stakesSeq) return;
+      stakeEstimateError = null;
       if (data.liquidWei != null) liquidWei = String(data.liquidWei);
       modelStakes = {};
       modelStakesDurationSec = Number(data.durationSec) || dur;
@@ -2535,6 +3049,7 @@ function refreshModelStakes() {
     } catch (e) {
       if (seq !== stakesSeq) return;
       console.warn('estimate-stakes failed', e);
+      stakeEstimateError = { kind: e.kind || 'router_error', hint: e.hint || e.message };
       filterModels();
       populateConnectModels();
     }
@@ -2646,9 +3161,10 @@ function populatePgKeys(ks) {
   updateCurlPreview();
 }
 
+// selectedKeySecret: the full key for the Probe selection, or '' when only
+// the masked form is known (see fullKey).
 function selectedKeySecret() {
-  const k = pgKeys.find(x => x.id === selectedKeyId);
-  return (k && k.secret) || promptKey || '';
+  return usableKey(realKeys[selectedKeyId || 'prompt']);
 }
 
 function onPgKeyChange() {
@@ -2675,10 +3191,19 @@ function fuzzyScore(q, text) {
 
 async function loadModels() {
   const box = document.getElementById('modelList');
-  if (!promptKey) { box.innerHTML = '<div class="note" style="padding:12px">Connect first…</div>'; return; }
+  if (!authed) { box.innerHTML = '<div class="note" style="padding:12px">Connect first…</div>'; return; }
+  catalogState = { state: 'loading', error: '' };
+  populateConnectModels();
   try {
-    const res = await fetch('/v1/models', { headers: { 'Authorization': 'Bearer ' + promptKey } });
-    if (!res.ok) throw new Error(await res.text());
+    // Admin-session catalog: the GUI only holds masked API keys, so it must
+    // not call /v1/models with them. Catalog comes from ACTIVE_MODELS_URL.
+    const res = await fetch('/admin/models', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+    if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+    if (!res.ok) {
+      let m = res.statusText;
+      try { const j = await res.json(); m = j.error || m; } catch (_) {}
+      throw new Error(m);
+    }
     const data = await res.json();
     allModels = (data.data || []).map(m => {
       const mor = m.morpheus || {};
@@ -2691,11 +3216,13 @@ async function loadModels() {
         pricePerSecondWei: mor.pricePerSecondWei || '',
       };
     });
+    catalogState = { state: 'ok', error: '' };
     filterModels();
     refreshModelStakes();
     populateConnectModels();
   } catch (e) {
-    box.innerHTML = `<div class="note" style="padding:12px">Catalog error: ${escapeHtml(e.message)}</div>`;
+    catalogState = { state: 'error', error: e.message };
+    box.innerHTML = `<div class="note" style="padding:12px">Catalog fetch failed: ${escapeHtml(e.message)}</div>`;
     populateConnectModels();
   }
 }
@@ -2793,7 +3320,7 @@ function buildCurl() {
   const model = selectedModel || 'MODEL';
   const prompt = document.getElementById('pgPrompt').value;
   const max = Number(document.getElementById('pgMaxTokens').value) || 128;
-  const key = selectedKeySecret() || 'sk-….';
+  const key = selectedKeySecret() || KEY_PLACEHOLDER;
   // Pretty JSON in one single-quoted -d (newlines are fine inside quotes).
   // Backslashes only continue between curl flags.
   const bodyPretty =
@@ -2855,6 +3382,7 @@ function parseCurlCommand(text) {
 }
 
 async function postChatCompletion({ key, duration, body }) {
+  if (!usableKey(key)) throw new Error('No full API key available (masked keys cannot be sent). Use Reveal full keys on API Keys.');
   document.getElementById('pgStatus').textContent = 'Running…';
   document.getElementById('pgOut').textContent = '…';
   const res = await fetch('/v1/chat/completions', {
@@ -2876,6 +3404,7 @@ async function postChatCompletion({ key, duration, body }) {
 async function runCurlCommand() {
   try {
     const parsed = parseCurlCommand(document.getElementById('pgCurl').value);
+    if (!usableKey(parsed.key)) parsed.key = await fullKey(selectedKeyId || 'prompt');
     if (!parsed.key) throw new Error('No Authorization Bearer key in curl');
     if (!(parsed.duration >= MIN_SESSION_DURATION)) throw new Error('Session duration must be ≥ 600');
     await postChatCompletion(parsed);
@@ -2887,7 +3416,7 @@ async function runCurlCommand() {
 
 async function runPlayground() {
   if (!selectedModel) { document.getElementById('pgStatus').textContent = 'Select a model first.'; return; }
-  const key = selectedKeySecret();
+  const key = await fullKey(selectedKeyId || 'prompt');
   if (!key) { document.getElementById('pgStatus').textContent = 'Select an API key first.'; return; }
   const rawDur = Number(document.getElementById('pgDuration')?.value);
   if (Number.isFinite(rawDur) && rawDur < MIN_SESSION_DURATION) {
@@ -2999,7 +3528,7 @@ function enterUiPreview() {
        </div>
      </div>`;
   document.getElementById('morNote').textContent = 'On-hold unlocks after 00:00 UTC · next ≈ Tue, 11 Aug 2026 00:00:00 GMT';
-  document.getElementById('walletMasked').textContent = '0xf24e9…7897598';
+  document.getElementById('walletMasked').textContent = '0x0000…0000';
   allModels = [
     { id: 'glm-5.2', tags: ['LLM', 'glm', 'size:l'], priceMorPerHour: 0.0959 },
     { id: 'glm-5.2:web', tags: ['LLM', 'glm', 'web'], priceMorPerHour: 0.1583 },
@@ -3046,7 +3575,7 @@ startMatrixRain();
 
 const previewMode = new URLSearchParams(location.search).has('preview')
   || location.protocol === 'file:';
-if (previewMode && !auth) {
+if (previewMode && !authed) {
   enterUiPreview();
   showTab('status');
 } else {
@@ -3058,15 +3587,7 @@ if (previewMode && !auth) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && loggedIn()) refresh({ force: true });
   });
-  if (auth) {
-    (async () => {
-      try {
-        await api('/admin/status');
-        setLoggedIn(true);
-        refresh({ force: true });
-      } catch (e) { logout(); }
-    })();
-  }
+  tryRestoreSession();
 }
 </script>
 </body>
