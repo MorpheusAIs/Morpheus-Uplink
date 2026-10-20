@@ -32,7 +32,8 @@
 #      pinned variable has exactly the pinned value wherever the compose or
 #      its env example gives one (${VAR:-x} default or literal, quoted or
 #      with "export"), and is assigned at most once per file; Railway's env
-#      example sets ADMIN_2FA_REQUIRED actively (ENV_MUST_SET).
+#      example sets ADMIN_2FA_REQUIRED, PROXY_STORE_CHAT_CONTEXT,
+#      LOG_LEVEL_APP and ETH_NODE_CHAIN_ID actively (ENV_MUST_SET).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/scripts/deploy-assets.sh"
@@ -76,8 +77,9 @@ SECURITY_DEFAULTS = {
     "local":    {"ADMIN_2FA_REQUIRED": ABSENT, "MASTER_KEY_ADMIN": ABSENT},
 }
 # Must be set (not commented) in the env example: hosts that do not run
-# compose (Railway) never see the ${VAR:-default}, and unset means off.
-ENV_MUST_SET = {"railway": ("ADMIN_2FA_REQUIRED",)}
+# compose (Railway) never see the ${VAR:-default}, and unset is the less
+# safe value (2FA off, chat context stored, debug app logs, no chain check).
+ENV_MUST_SET = {"railway": ("ADMIN_2FA_REQUIRED", "PROXY_STORE_CHAT_CONTEXT", "LOG_LEVEL_APP", "ETH_NODE_CHAIN_ID")}
 # False wherever they appear, in every template and env example.
 FALSE_WHEREVER = ("UPLINK_RESET_2FA", "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT")
 
@@ -320,6 +322,9 @@ PY
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)(ADMIN_2FA_REQUIRED=true)$' '\1\2\n\1\2'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-twice 'D\(secretvm\): ADMIN_2FA_REQUIRED is assigned 2 times in deploy/secretvm/docker-compose.yml'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(# MASTER_KEY_ADMIN=false)$' '\1\nexport MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-master-key-twice 'D\(railway\): MASTER_KEY_ADMIN is assigned 2 times in deploy/railway/env.example'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(ADMIN_2FA_REQUIRED=true)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-2fa-commented 'D\(railway\): ADMIN_2FA_REQUIRED must be set \(not commented\)'
+  copy_root; edit "$tmp/root/deploy/railway/env.example" '^(PROXY_STORE_CHAT_CONTEXT=false)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-store-chat-commented 'D\(railway\): PROXY_STORE_CHAT_CONTEXT must be set \(not commented\)'
+  copy_root; edit "$tmp/root/deploy/railway/env.example" '^(LOG_LEVEL_APP=warn)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-log-level-app-commented 'D\(railway\): LOG_LEVEL_APP must be set \(not commented\)'
+  copy_root; edit "$tmp/root/deploy/railway/env.example" '^(ETH_NODE_CHAIN_ID=8453)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-chain-id-commented 'D\(railway\): ETH_NODE_CHAIN_ID must be set \(not commented\)'
   echo "OK: deploy-assets self-tests ($n failure modes rejected)"
 }
 
