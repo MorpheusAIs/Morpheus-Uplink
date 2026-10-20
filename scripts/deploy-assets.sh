@@ -28,6 +28,9 @@
 #   E  each env example matches its template: every key (set or commented)
 #      is a template variable, every required variable is set, no
 #      duplicates; env.secretvm.example sets exactly the six secrets.
+#   D  security defaults (SECURITY_DEFAULTS, FALSE_WHEREVER below): each
+#      pinned variable has exactly the pinned value wherever the compose or
+#      its env example gives one (${VAR:-x} default or literal).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/scripts/deploy-assets.sh"
@@ -58,6 +61,41 @@ SETS = {
     "local": ("docker-compose.local.yml", ".env.example", None, None,
               {"WALLET_PRIVATE_KEY", "ETH_NODE_ADDRESS", "ROUTER_AUTH", "ADMIN_PASSWORD", "API_KEY_SEED"}, OVERRIDES),
 }
+# Security-relevant defaults, pinned per template (rule D). The value is the
+# one the compose ships: the ${VAR:-x} default or a literal (SecretVM
+# configs: content). Every value of the variable in the compose and in its
+# env example must equal it, and the variable must be present. ABSENT: the
+# compose must not set it (the code default applies: false for both).
+ABSENT = None
+SECURITY_DEFAULTS = {
+    "secretvm": {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
+    "generic":  {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
+    # Railway keeps 2FA opt-in (volume persistence is operator-managed). To
+    # default it on, set "true" here and in deploy/railway/docker-compose.yml
+    # and env.example (and the docs).
+    "railway":  {"ADMIN_2FA_REQUIRED": "false", "MASTER_KEY_ADMIN": "false"},
+    "local":    {"ADMIN_2FA_REQUIRED": ABSENT, "MASTER_KEY_ADMIN": ABSENT},
+}
+# False wherever they appear, in every template and env example.
+FALSE_WHEREVER = ("UPLINK_RESET_2FA", "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT")
+
+def compose_values(text, var):
+    """Every value the compose gives var: ${var:-x} defaults and literals
+    (environment items "- var=x" / "var: x", configs content "var=x")."""
+    vals = re.findall(r"\$\{" + var + r":?-([^}]*)\}", text)
+    lit = re.compile(r"^\s*(?:-\s*)?" + var + r"\s*(?:=|:\s)\s*(.*)$")
+    for line in text.splitlines():
+        if re.match(r"^\s*#", line):
+            continue
+        m = lit.match(line)
+        if m and "${" not in m.group(1):
+            vals.append(m.group(1).split(" #")[0].strip().strip("'\""))
+    return vals
+
+def env_values(text, var):
+    """Values set or shown (commented) for var in an env example."""
+    return re.findall(r"^#?\s*" + var + r"=(\S*)", text, re.M)
+
 UPLINK_LINE = re.compile(r"^(\s*)image:\s*ghcr\.io/morpheusais/uplink(?:[:@]\S*)?(?:\s+#.*)?$", re.M)
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+])?")
 IMAGE = re.compile(r"^\s*image:\s*(\S+)", re.M)
@@ -163,11 +201,30 @@ def check(image, digest, root, out):
                 bad.append("E(%s): required %s is not set in %s" % (name, k, env))
         if name == "secretvm" and (sorted(active) != sorted(SIX) or commented):
             bad.append("E(secretvm): %s must set exactly the six secrets (set %s, commented %s)" % (env, active, commented))
+        # D
+        pins = dict(SECURITY_DEFAULTS.get(name, {}))
+        for var in FALSE_WHEREVER:
+            pins.setdefault(var, "false")
+        for var, want in sorted(pins.items()):
+            got = compose_values(compose, var)
+            if want is ABSENT:
+                if got or re.search(r"\b" + var + r"\b", "\n".join(
+                        l for l in compose.splitlines() if not re.match(r"^\s*#", l))):
+                    bad.append("D(%s): %s must not be set in %s (code default applies)" % (name, var, tpl))
+                continue
+            if not got and var not in FALSE_WHEREVER:
+                bad.append("D(%s): %s is missing from %s, want %s" % (name, var, tpl, want))
+            for v in got:
+                if v != want:
+                    bad.append("D(%s): %s defaults to %s in %s, want %s" % (name, var, v, tpl, want))
+            for v in env_values(envtext, var):
+                if v != want:
+                    bad.append("D(%s): %s=%s in %s, want %s" % (name, var, v, env, want))
     if bad:
         for b in bad:
             print("BAD " + b, file=sys.stderr)
         sys.exit(1)
-    print("OK: deploy assets P/T/V/E (%s)" % ", ".join(n for n in SETS))
+    print("OK: deploy assets P/T/V/E/D (%s)" % ", ".join(n for n in SETS))
 
 cmd = sys.argv[1]
 if cmd == "generate":
@@ -223,6 +280,17 @@ PY
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-literal-env 'V\(secretvm\): environment key MASTER_KEY_ADMIN'
   copy_root; printf 'SESSION_FAILOVER=false\n' >> "$tmp/out/env.generic.example"; expect_fail env-asset-drift 'E\(generic\): env.generic.example differs'
   copy_root; printf '# HOUSEKEEPING=true\n' >> "$tmp/root/.env.example"; expect_fail env-duplicate 'E\(local\): HOUSEKEEPING listed twice'
+  copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{MASTER_KEY_ADMIN:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-master-key-true 'D\(generic\): MASTER_KEY_ADMIN defaults to true'
+  copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{ADMIN_2FA_REQUIRED:-)true\}' '\1false}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-2fa-false 'D\(generic\): ADMIN_2FA_REQUIRED defaults to false'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+ADMIN_2FA_REQUIRED=)true$' '\1false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-false 'D\(secretvm\): ADMIN_2FA_REQUIRED defaults to false'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-master-key-true 'D\(secretvm\): MASTER_KEY_ADMIN defaults to true'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^\s+ADMIN_2FA_REQUIRED=true\n' ''; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-missing 'D\(secretvm\): ADMIN_2FA_REQUIRED is missing'
+  copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{MASTER_KEY_ADMIN:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-master-key-true 'D\(railway\): MASTER_KEY_ADMIN defaults to true'
+  copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{UPLINK_RESET_2FA:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-reset-2fa-true 'D\(railway\): UPLINK_RESET_2FA defaults to true'
+  copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{PROXY_STORE_CHAT_CONTEXT:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-store-chat-true 'D\(generic\): PROXY_STORE_CHAT_CONTEXT defaults to true'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+PROXY_FORWARD_CHAT_CONTEXT=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-forward-chat-true 'D\(secretvm\): PROXY_FORWARD_CHAT_CONTEXT defaults to true'
+  copy_root; edit "$tmp/root/deploy/generic/env.example" '^(MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-env-master-key-true 'D\(generic\): MASTER_KEY_ADMIN=true in deploy/generic/env.example'
+  copy_root; edit "$tmp/root/docker-compose.local.yml" '^(\s+- UPLINK_RESET_2FA=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail local-master-key-set 'D\(local\): MASTER_KEY_ADMIN must not be set'
   echo "OK: deploy-assets self-tests ($n failure modes rejected)"
 }
 
