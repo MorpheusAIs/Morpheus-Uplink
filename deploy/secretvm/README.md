@@ -17,6 +17,13 @@ change via compose/code, not Encrypted Secrets:
 
 Never put router PROXY_*/LOG_LEVEL_* into uplink bake docs.
 
+To change a tunable, edit the `configs:` block (`uplink_bake_env` /
+`router_network_env`) in `docker-compose.yml` (or the downloaded
+`docker-compose.secretvm.deployed.yml`). SecretVM turns every `${...}` in
+the compose file into an operator prompt and the form deliberately stays at
+the six secrets, so there are no `${VAR:-default}` overrides here (unlike
+generic / Railway / local).
+
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest

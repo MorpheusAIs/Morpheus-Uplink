@@ -77,6 +77,13 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 `environment:` key (literals too), so tunables stay in compose `configs:`
 (change via code / compose only -- not operator forms):
 
+> To change a SecretVM tunable, edit the `configs:` block
+> (`uplink_bake_env` / `router_network_env`) in
+> `deploy/secretvm/docker-compose.yml` (or your downloaded
+> `docker-compose.secretvm.deployed.yml`). SecretVM turns every `${...}` in
+> the compose file into an operator prompt, and the form deliberately stays
+> at the six secrets, so SecretVM has no `${VAR:-default}` overrides.
+
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
   `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
   `HOUSEKEEPING=true`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
