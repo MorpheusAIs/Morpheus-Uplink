@@ -12,9 +12,6 @@ import (
 type AuthState struct {
 	TOTPBlob string `json:"totpBlob,omitempty"` // base64(v1||nonce||ct)
 	TOTPSalt string `json:"totpSalt,omitempty"` // base64 16 bytes
-	// RecoveryHashes are codes issued before salted storage (unsalted
-	// sha256 hex); still accepted once each, cleared on regenerate/reset.
-	RecoveryHashes []string `json:"recoveryHashes,omitempty"`
 	// RecoveryCodes are salted HMACs of the current recovery codes
 	// (see adminauth/recovery.go). Single use: a used entry is removed.
 	RecoveryCodes       []adminauth.RecoveryHash `json:"recoveryCodes,omitempty"`
@@ -28,7 +25,7 @@ type AuthState struct {
 
 // RecoveryRemaining is the number of unused recovery codes.
 func (a AuthState) RecoveryRemaining() int {
-	return len(a.RecoveryCodes) + len(a.RecoveryHashes)
+	return len(a.RecoveryCodes)
 }
 
 // GetAuthState returns a copy; slices are cloned so callers cannot mutate
@@ -37,7 +34,6 @@ func (s *Store) GetAuthState() AuthState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := s.st.Auth
-	a.RecoveryHashes = append([]string(nil), a.RecoveryHashes...)
 	a.RecoveryCodes = append([]adminauth.RecoveryHash(nil), a.RecoveryCodes...)
 	return a
 }
@@ -56,7 +52,6 @@ func (s *Store) UpdateAuthState(fn func(*AuthState) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := s.st.Auth
-	a.RecoveryHashes = append([]string(nil), a.RecoveryHashes...)
 	a.RecoveryCodes = append([]adminauth.RecoveryHash(nil), a.RecoveryCodes...)
 	if err := fn(&a); err != nil {
 		return err

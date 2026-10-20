@@ -69,11 +69,6 @@ func HashToken(raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func HashString(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
 func RandomBytes(n int) ([]byte, error) {
 	b := make([]byte, n)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {

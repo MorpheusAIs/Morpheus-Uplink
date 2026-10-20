@@ -66,20 +66,10 @@ func TestRecoveryCodeHashAndMatch(t *testing.T) {
 func TestLooksLikeRecoveryCode(t *testing.T) {
 	for in, want := range map[string]bool{
 		"abcd-efgh-2345": true, "ABCDEFGH2345": true, "123456": false,
-		"abcd-efgh-234": false, "ABCDEFGHIJKLMNOP": true, "abcd-efgh-2341": false, "": false,
+		"abcd-efgh-234": false, "ABCDEFGHIJKLMNOP": false, "abcd-efgh-2341": false, "": false,
 	} {
 		if got := LooksLikeRecoveryCode(in); got != want {
 			t.Fatalf("LooksLikeRecoveryCode(%q)=%v want %v", in, got, want)
 		}
-	}
-}
-
-func TestLegacyRecoveryCodeMatch(t *testing.T) {
-	stored := []string{HashString("ABCDEFGHIJKLMNOP")}
-	if !LooksLikeRecoveryCode("abcdefghijklmnop") || MatchLegacyRecoveryCode(stored, "abcdefghijklmnop") != 0 {
-		t.Fatal("legacy code not matched")
-	}
-	if MatchLegacyRecoveryCode(stored, "ABCDEFGHIJKLMNOQ") != -1 {
-		t.Fatal("wrong legacy code matched")
 	}
 }

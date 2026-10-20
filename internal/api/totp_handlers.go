@@ -148,7 +148,6 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 		}
 		a.TOTPBlob = store.EncodeB64(enc)
 		a.RecoveryCodes = hashes
-		a.RecoveryHashes = nil
 		a.Enrolled = true
 		a.LastTOTPStep = step
 		a.PendingSecretEnc = ""
@@ -220,7 +219,6 @@ func (s *Server) passwordAndFactor(w http.ResponseWriter, r *http.Request, event
 func wipe2FA(a *store.AuthState) {
 	a.TOTPBlob = ""
 	a.TOTPSalt = ""
-	a.RecoveryHashes = nil
 	a.RecoveryCodes = nil
 	a.Enrolled = false
 	a.LastTOTPStep = 0
@@ -264,7 +262,6 @@ func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 	}
 	replace := func(a *store.AuthState) {
 		a.RecoveryCodes = hashes
-		a.RecoveryHashes = nil
 	}
 	if _, ok := s.passwordAndFactor(w, r, "recovery_codes_regenerated", replace); !ok {
 		return

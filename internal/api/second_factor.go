@@ -46,8 +46,6 @@ func (s *Server) consumeSecondFactor(code string, then func(*store.AuthState)) f
 			}
 			if i, _ := adminauth.MatchRecoveryCode(pepper, a.RecoveryCodes, code); i >= 0 {
 				a.RecoveryCodes = append(a.RecoveryCodes[:i], a.RecoveryCodes[i+1:]...)
-			} else if j := adminauth.MatchLegacyRecoveryCode(a.RecoveryHashes, code); j >= 0 {
-				a.RecoveryHashes = append(a.RecoveryHashes[:j], a.RecoveryHashes[j+1:]...)
 			} else {
 				res.reason = "bad_recovery_code"
 				return errSecondFactor

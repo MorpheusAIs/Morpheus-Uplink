@@ -31,7 +31,6 @@ const (
 	recoveryGroup       = 4
 	recoveryAlphabet    = "abcdefghijklmnopqrstuvwxyz234567"
 	recoveryInfo        = "uplink-recovery-v1"
-	legacyCodeSymbols   = 16
 )
 
 // RecoveryHash is one stored code: hex salt and hex HMAC.
@@ -68,11 +67,10 @@ func NormalizeRecoveryCode(code string) string {
 }
 
 // LooksLikeRecoveryCode reports whether input has a recovery-code shape
-// after normalization: 12 base32 symbols, or 16 for codes issued before
-// salted storage.
+// after normalization: 12 base32 symbols.
 func LooksLikeRecoveryCode(code string) bool {
 	n := NormalizeRecoveryCode(code)
-	if len(n) != recoveryCodeSymbols && len(n) != legacyCodeSymbols {
+	if len(n) != recoveryCodeSymbols {
 		return false
 	}
 	for i := 0; i < len(n); i++ {
@@ -139,18 +137,4 @@ func MatchRecoveryCode(pepper []byte, stored []RecoveryHash, code string) (int, 
 		}
 	}
 	return match, nil
-}
-
-// MatchLegacyRecoveryCode checks codes issued before salted storage
-// (unsalted SHA-256 hex of the uppercase code). Returns the index or -1.
-func MatchLegacyRecoveryCode(stored []string, code string) int {
-	c := strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(code)))
-	got := []byte(HashString(c))
-	match := -1
-	for i, h := range stored {
-		if subtle.ConstantTimeCompare(got, []byte(h)) == 1 && match < 0 {
-			match = i
-		}
-	}
-	return match
 }
