@@ -82,7 +82,7 @@ func TestTOTPRemoveRegenAuditFailures(t *testing.T) {
 	const wrongPW = "definitely-wrong-password-xyz"
 	for _, tc := range []struct{ path, kind string }{
 		{"/admin/2fa/remove", "2fa_remove"},
-		{"/admin/2fa/recovery/regen", "recovery_codes_regen"},
+		{"/admin/2fa/recovery/regen", "recovery_codes_regenerated"},
 	} {
 		code, _ = postJSON(t, ac, ts, cfg, tc.path, `{"password":"`+wrongPW+`","code":"000000"}`)
 		if code != http.StatusUnauthorized {

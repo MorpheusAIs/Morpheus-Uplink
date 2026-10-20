@@ -53,20 +53,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		ok, reason := s.verifySecondFactor(req.Code, &auth, ip)
-		if !ok {
-			d := s.lockout.Failure(ip)
-			s.auditEvent("login", ip, "fail", reason)
-			if d > 0 {
-				s.auditEvent("login_lockout", ip, "blocked", "lockout")
-				w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-				http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-				return
-			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		res := s.consumeSecondFactor(req.Code, nil)
+		if !res.ok {
+			s.failAuth(w, "login", ip, res.reason, "unauthorized")
 			return
 		}
-		_ = s.store.SetAuthState(auth)
+		s.auditRecoveryUse(ip, res)
+		auth = s.store.GetAuthState()
 	}
 
 	s.lockout.Success(ip)
@@ -78,36 +71,36 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	adminauth.SetSessionCookie(w, raw, s.cfg.DevHTTP)
 	s.auditEvent("login", ip, "ok", "")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"enrolled": auth.Enrolled,
-		"need2fa":  s.cfg.Admin2FARequired && !auth.Enrolled,
+		"ok":                true,
+		"enrolled":          auth.Enrolled,
+		"need2fa":           s.cfg.Admin2FARequired && !auth.Enrolled,
+		"recoveryRemaining": auth.RecoveryRemaining(),
 	})
 }
 
-func (s *Server) verifySecondFactor(code string, auth *store.AuthState, ip string) (bool, string) {
-	code = strings.TrimSpace(code)
-	// Try recovery codes first (single use).
-	h := adminauth.HashString(strings.ToUpper(strings.ReplaceAll(code, " ", "")))
-	// Also try as-is hash
-	h2 := adminauth.HashString(code)
-	for i, rh := range auth.RecoveryHashes {
-		if rh == h || rh == h2 {
-			auth.RecoveryHashes = append(auth.RecoveryHashes[:i], auth.RecoveryHashes[i+1:]...)
-			s.auditEvent("recovery_code_used", ip, "ok", "")
-			return true, "recovery"
-		}
+// failAuth records a failed credential check, counts it toward the
+// lockout, and answers 429 once the lockout trips, else 401.
+func (s *Server) failAuth(w http.ResponseWriter, event, ip, reason, msg string) {
+	d := s.lockout.Failure(ip)
+	s.auditEvent(event, ip, "fail", reason)
+	if d > 0 {
+		s.auditEvent("login_lockout", ip, "blocked", "lockout")
+		w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+		return
 	}
-	// TOTP
-	secret, err := s.decryptTOTPSecret(auth.TOTPBlob, auth.TOTPSalt)
-	if err != nil {
-		return false, "totp_decrypt"
+	http.Error(w, msg, http.StatusUnauthorized)
+}
+
+// lockedOut answers 429 if ip is currently locked out.
+func (s *Server) lockedOut(w http.ResponseWriter, ip string) bool {
+	if ok, retry := s.lockout.Allow(ip); !ok {
+		s.auditEvent("login_lockout", ip, "blocked", "lockout")
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+		return true
 	}
-	ok, step, err := adminauth.ValidateTOTP(secret, code, auth.LastTOTPStep)
-	if err != nil || !ok {
-		return false, "bad_totp"
-	}
-	auth.LastTOTPStep = step
-	return true, "totp"
+	return false
 }
 
 func (s *Server) decryptTOTPSecret(blobB64, saltB64 string) (string, error) {

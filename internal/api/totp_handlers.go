@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,11 +43,6 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleTOTPEnrollStart(w http.ResponseWriter, r *http.Request) {
-	auth := s.store.GetAuthState()
-	if auth.Enrolled {
-		http.Error(w, "already enrolled", http.StatusConflict)
-		return
-	}
 	key, err := adminauth.GenerateTOTP("Morpheus-Uplink", "admin")
 	if err != nil {
 		http.Error(w, "totp generate failed", http.StatusInternalServerError)
@@ -67,10 +63,21 @@ func (s *Server) handleTOTPEnrollStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encrypt failed", http.StatusInternalServerError)
 		return
 	}
-	auth.TOTPSalt = store.EncodeB64(salt)
-	auth.PendingSecretEnc = store.EncodeB64(enc)
-	auth.PendingExpires = time.Now().UTC().Add(10 * time.Minute)
-	if err := s.store.SetAuthState(auth); err != nil {
+	expires := time.Now().UTC().Add(10 * time.Minute)
+	err = s.store.UpdateAuthState(func(a *store.AuthState) error {
+		if a.Enrolled {
+			return errAlreadyEnrolled
+		}
+		a.TOTPSalt = store.EncodeB64(salt)
+		a.PendingSecretEnc = store.EncodeB64(enc)
+		a.PendingExpires = expires
+		return nil
+	})
+	if errors.Is(err, errAlreadyEnrolled) {
+		http.Error(w, "already enrolled", http.StatusConflict)
+		return
+	}
+	if err != nil {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
@@ -79,16 +86,21 @@ func (s *Server) handleTOTPEnrollStart(w http.ResponseWriter, r *http.Request) {
 		"secret":    key.Secret(),
 		"otpauth":   key.URL(),
 		"qrPngB64":  qr, // empty if QR lib failed (stdlib fallback: show secret)
-		"expiresAt": auth.PendingExpires,
+		"expiresAt": expires,
 	})
 }
 
+var (
+	errAlreadyEnrolled = errors.New("already enrolled")
+	errNoPending       = errors.New("no pending enrollment")
+	errBadCode         = errors.New("invalid code")
+)
+
+// handleTOTPEnrollConfirm checks the first code against the pending secret
+// and, in the same store update, activates 2FA and issues recovery codes.
 func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request) {
 	ip := s.lockout.ClientIP(r)
-	if ok, retry := s.lockout.Allow(ip); !ok {
-		s.auditEvent("login_lockout", ip, "blocked", "lockout")
-		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+	if s.lockedOut(w, ip) {
 		return
 	}
 	var req struct {
@@ -98,196 +110,166 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"code":"..."} required`, http.StatusBadRequest)
 		return
 	}
-	auth := s.store.GetAuthState()
-	if auth.Enrolled {
-		http.Error(w, "already enrolled", http.StatusConflict)
-		return
-	}
-	if auth.PendingSecretEnc == "" || time.Now().UTC().After(auth.PendingExpires) {
-		http.Error(w, "no pending enrollment", http.StatusBadRequest)
-		return
-	}
-	blob, err := store.DecodeB64(auth.PendingSecretEnc)
-	if err != nil {
-		http.Error(w, "pending corrupt", http.StatusInternalServerError)
-		return
-	}
-	salt, _ := store.DecodeB64(auth.TOTPSalt)
-	aesKey, err := adminauth.DeriveTOTPKey(s.cfg.APIKeySeed, salt)
-	if err != nil {
-		http.Error(w, "derive failed", http.StatusInternalServerError)
-		return
-	}
-	secretBytes, err := adminauth.DecryptSecret(aesKey, blob)
-	if err != nil {
-		http.Error(w, "decrypt failed", http.StatusInternalServerError)
-		return
-	}
-	secret := string(secretBytes)
-	ok, step, err := adminauth.ValidateTOTP(secret, req.Code, 0)
-	if err != nil || !ok {
-		d := s.lockout.Failure(ip)
-		s.auditEvent("login", ip, "fail", "bad_totp_enroll")
-		if d > 0 {
-			s.auditEvent("login_lockout", ip, "blocked", "lockout")
-			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-			return
-		}
-		http.Error(w, "invalid code", http.StatusUnauthorized)
-		return
-	}
-	s.lockout.Success(ip)
-	// Fresh encrypt for stored blob (new nonce).
-	enc, err := adminauth.EncryptSecret(aesKey, secretBytes)
-	if err != nil {
-		http.Error(w, "encrypt failed", http.StatusInternalServerError)
-		return
-	}
-	codes, hashes, err := generateRecoveryCodes(10)
+	codes, hashes, err := s.issueRecoveryCodes()
 	if err != nil {
 		http.Error(w, "recovery codes failed", http.StatusInternalServerError)
 		return
 	}
-	auth.TOTPBlob = store.EncodeB64(enc)
-	auth.RecoveryHashes = hashes
-	auth.Enrolled = true
-	auth.LastTOTPStep = step
-	auth.PendingSecretEnc = ""
-	auth.PendingExpires = time.Time{}
-	if err := s.store.SetAuthState(auth); err != nil {
-		http.Error(w, "save failed", http.StatusInternalServerError)
+	err = s.store.UpdateAuthState(func(a *store.AuthState) error {
+		if a.Enrolled {
+			return errAlreadyEnrolled
+		}
+		if a.PendingSecretEnc == "" || time.Now().UTC().After(a.PendingExpires) {
+			return errNoPending
+		}
+		blob, err := store.DecodeB64(a.PendingSecretEnc)
+		if err != nil {
+			return err
+		}
+		salt, err := store.DecodeB64(a.TOTPSalt)
+		if err != nil {
+			return err
+		}
+		aesKey, err := adminauth.DeriveTOTPKey(s.cfg.APIKeySeed, salt)
+		if err != nil {
+			return err
+		}
+		secret, err := adminauth.DecryptSecret(aesKey, blob)
+		if err != nil {
+			return err
+		}
+		ok, step, verr := adminauth.ValidateTOTP(string(secret), req.Code, 0)
+		if verr != nil || !ok {
+			return errBadCode
+		}
+		enc, err := adminauth.EncryptSecret(aesKey, secret) // fresh nonce for the stored blob
+		if err != nil {
+			return err
+		}
+		a.TOTPBlob = store.EncodeB64(enc)
+		a.RecoveryCodes = hashes
+		a.RecoveryHashes = nil
+		a.Enrolled = true
+		a.LastTOTPStep = step
+		a.PendingSecretEnc = ""
+		a.PendingExpires = time.Time{}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errBadCode):
+		s.failAuth(w, "login", ip, "bad_totp_enroll", "invalid code")
+		return
+	case errors.Is(err, errAlreadyEnrolled):
+		http.Error(w, "already enrolled", http.StatusConflict)
+		return
+	case errors.Is(err, errNoPending):
+		http.Error(w, "no pending enrollment", http.StatusBadRequest)
+		return
+	case err != nil:
+		http.Error(w, "enroll failed", http.StatusInternalServerError)
 		return
 	}
-	s.auditEvent("2fa_enroll", s.lockout.ClientIP(r), "ok", "")
+	s.lockout.Success(ip)
+	s.auditEvent("2fa_enroll", ip, "ok", "")
+	s.auditEvent("recovery_codes_issued", ip, "ok", "count="+strconv.Itoa(len(codes)))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":            true,
-		"recoveryCodes": codes, // shown once
+		"recoveryCodes": codes, // shown once; only salted hashes are stored
 	})
 }
 
-func generateRecoveryCodes(n int) (plain []string, hashes []string, err error) {
-	for i := 0; i < n; i++ {
-		c, err := adminauth.RandomBase32(10)
-		if err != nil {
-			return nil, nil, err
-		}
-		plain = append(plain, c)
-		hashes = append(hashes, adminauth.HashString(c))
+// passwordAndFactor runs the shared checks for the password + second factor
+// endpoints (remove, regenerate, reset): lockout, body, password, then an
+// atomic second-factor consume. then runs inside the same store update on
+// success. Returns false after writing the error response.
+func (s *Server) passwordAndFactor(w http.ResponseWriter, r *http.Request, event string, then func(*store.AuthState)) (factorResult, bool) {
+	ip := s.lockout.ClientIP(r)
+	if s.lockedOut(w, ip) {
+		return factorResult{}, false
 	}
-	return plain, hashes, nil
+	var req struct {
+		Password string `json:"password"`
+		Code     string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return factorResult{}, false
+	}
+	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
+		s.failAuth(w, event, ip, "bad_password", "unauthorized")
+		return factorResult{}, false
+	}
+	if !s.store.GetAuthState().Enrolled {
+		http.Error(w, "not enrolled", http.StatusBadRequest)
+		return factorResult{}, false
+	}
+	res := s.consumeSecondFactor(req.Code, then)
+	if !res.ok {
+		if res.reason == "not_enrolled" {
+			http.Error(w, "not enrolled", http.StatusBadRequest)
+			return res, false
+		}
+		s.failAuth(w, event, ip, res.reason, "unauthorized")
+		return res, false
+	}
+	s.lockout.Success(ip)
+	s.auditRecoveryUse(ip, res)
+	return res, true
+}
+
+func wipe2FA(a *store.AuthState) {
+	a.TOTPBlob = ""
+	a.TOTPSalt = ""
+	a.RecoveryHashes = nil
+	a.RecoveryCodes = nil
+	a.Enrolled = false
+	a.LastTOTPStep = 0
+	a.PendingSecretEnc = ""
+	a.PendingExpires = time.Time{}
 }
 
 func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
-	ip := s.lockout.ClientIP(r)
-	if ok, retry := s.lockout.Allow(ip); !ok {
-		s.auditEvent("login_lockout", ip, "blocked", "lockout")
-		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
+	if _, ok := s.passwordAndFactor(w, r, "2fa_remove", wipe2FA); !ok {
 		return
 	}
-	var req struct {
-		Password string `json:"password"`
-		Code     string `json:"code"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad body", http.StatusBadRequest)
-		return
-	}
-	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
-		d := s.lockout.Failure(ip)
-		s.auditEvent("2fa_remove", ip, "fail", "bad_password")
-		if d > 0 {
-			s.auditEvent("login_lockout", ip, "blocked", "lockout")
-			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-			return
-		}
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	auth := s.store.GetAuthState()
-	if !auth.Enrolled {
-		http.Error(w, "not enrolled", http.StatusBadRequest)
-		return
-	}
-	ok, reason := s.verifySecondFactor(req.Code, &auth, ip)
-	if !ok {
-		d := s.lockout.Failure(ip)
-		s.auditEvent("2fa_remove", ip, "fail", reason)
-		if d > 0 {
-			s.auditEvent("login_lockout", ip, "blocked", "lockout")
-			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-			return
-		}
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	auth.TOTPBlob = ""
-	auth.RecoveryHashes = nil
-	auth.Enrolled = false
-	auth.LastTOTPStep = 0
-	auth.PendingSecretEnc = ""
-	_ = s.store.SetAuthState(auth)
-	s.auditEvent("2fa_remove", ip, "ok", "")
+	s.auditEvent("2fa_remove", s.lockout.ClientIP(r), "ok", "")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleTOTPReset (POST /admin/2fa/reset) needs the password plus a TOTP or
+// recovery code. In one store update it wipes the TOTP secret and all
+// recovery codes; then it revokes every admin session, including this one.
+// The next login is password-only; with ADMIN_2FA_REQUIRED=true that
+// session can only enroll again (requireAdmin), and enrolling issues new
+// recovery codes.
+func (s *Server) handleTOTPReset(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.passwordAndFactor(w, r, "2fa_reset", wipe2FA); !ok {
+		return
+	}
+	n := s.sessions.RevokeAll()
+	adminauth.ClearSessionCookie(w, s.cfg.DevHTTP)
+	s.auditEvent("2fa_reset", s.lockout.ClientIP(r), "ok", "sessions_revoked="+strconv.Itoa(n))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"reenroll": true,
+		"required": s.cfg.Admin2FARequired,
+	})
+}
+
 func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
-	ip := s.lockout.ClientIP(r)
-	if ok, retry := s.lockout.Allow(ip); !ok {
-		s.auditEvent("login_lockout", ip, "blocked", "lockout")
-		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-		return
-	}
-	var req struct {
-		Password string `json:"password"`
-		Code     string `json:"code"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad body", http.StatusBadRequest)
-		return
-	}
-	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
-		d := s.lockout.Failure(ip)
-		s.auditEvent("recovery_codes_regen", ip, "fail", "bad_password")
-		if d > 0 {
-			s.auditEvent("login_lockout", ip, "blocked", "lockout")
-			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-			return
-		}
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	auth := s.store.GetAuthState()
-	if !auth.Enrolled {
-		http.Error(w, "not enrolled", http.StatusBadRequest)
-		return
-	}
-	ok, reason := s.verifySecondFactor(req.Code, &auth, ip)
-	if !ok {
-		d := s.lockout.Failure(ip)
-		s.auditEvent("recovery_codes_regen", ip, "fail", reason)
-		if d > 0 {
-			s.auditEvent("login_lockout", ip, "blocked", "lockout")
-			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
-			http.Error(w, "too many failed logins", http.StatusTooManyRequests)
-			return
-		}
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	codes, hashes, err := generateRecoveryCodes(10)
+	codes, hashes, err := s.issueRecoveryCodes()
 	if err != nil {
 		http.Error(w, "failed", http.StatusInternalServerError)
 		return
 	}
-	auth.RecoveryHashes = hashes
-	_ = s.store.SetAuthState(auth)
-	s.auditEvent("recovery_codes_regen", ip, "ok", "")
+	replace := func(a *store.AuthState) {
+		a.RecoveryCodes = hashes
+		a.RecoveryHashes = nil
+	}
+	if _, ok := s.passwordAndFactor(w, r, "recovery_codes_regenerated", replace); !ok {
+		return
+	}
+	s.auditEvent("recovery_codes_regenerated", s.lockout.ClientIP(r), "ok", "count="+strconv.Itoa(len(codes)))
 	writeJSON(w, http.StatusOK, map[string]any{"recoveryCodes": codes})
 }
 
@@ -311,5 +293,7 @@ func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 		"required":       s.cfg.Admin2FARequired,
 		"breakGlassWarn": s.breakGlassWarn(),
 		"need2fa":        s.cfg.Admin2FARequired && !auth.Enrolled,
+		// Count only; lets the GUI hide "Use a recovery code" when none are left.
+		"recoveryRemaining": auth.RecoveryRemaining(),
 	})
 }

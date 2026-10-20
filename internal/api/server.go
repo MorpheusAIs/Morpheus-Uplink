@@ -86,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/2fa/enroll/confirm", s.requireSession(s.handleTOTPEnrollConfirm))
 	mux.HandleFunc("POST /admin/2fa/remove", s.requireAdmin(s.handleTOTPRemove))
 	mux.HandleFunc("POST /admin/2fa/recovery/regen", s.requireAdmin(s.handleRecoveryRegen))
+	mux.HandleFunc("POST /admin/2fa/reset", s.requireAdmin(s.handleTOTPReset))
 	mux.HandleFunc("GET /admin/audit", s.requireAdmin(s.handleAudit))
 
 	// Admin surface (session cookie).
