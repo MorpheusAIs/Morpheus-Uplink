@@ -108,7 +108,9 @@ API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 WEB_PUBLIC_URL=https://uplink.yourdomain.com
 ```
 
-Tunables are baked in compose (change via code only). Keep ownership separate:
+Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
+keeps the default; set one in `.env` to override. `ADMIN_2FA_REQUIRED=false`
+or `MASTER_KEY_ADMIN=true` weakens admin security. Keep ownership separate:
 **Uplink** session/catalog/housekeeping (+ wiring defaults);
 **Router** `PROXY_*` / `LOG_LEVEL_*` / chain / Diamond / MOR. Never describe
 router `PROXY_*` / `LOG_LEVEL_*` as Uplink knobs.
@@ -129,8 +131,9 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are baked in compose (Uplink vs router ownership stays separate;
-see SecretVM block above). Full checklist:
+Tunables are env-overridable compose defaults; set one as a Railway
+Variable to override (Uplink vs router ownership stays separate; see
+SecretVM block above). Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -138,7 +141,7 @@ see SecretVM block above). Full checklist:
 <details>
 <summary><strong>Var ownership (Uplink vs router)</strong></summary>
 
-Product rule: **form stays six**; tunables change via compose/code, not Encrypted Secrets.
+Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM keeps them in compose `configs:`; generic / Railway / local compose take them as env-overridable defaults (`${VAR:-default}`).
 
 | Bucket | Where | Vars |
 |--------|-------|------|

@@ -9,7 +9,9 @@ https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 ## Var ownership
 
 Form/`.env` stays the operator fillables (+ `PUBLIC_HOST` for Caddy).
-Tunables change via compose/code:
+Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
+keeps the default; set one in `.env` to override (see `env.example`).
+`ADMIN_2FA_REQUIRED=false` or `MASTER_KEY_ADMIN=true` weakens admin security.
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,

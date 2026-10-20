@@ -98,9 +98,20 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## Environment variables
 
-Product rule: **form stays six**; tunables change via compose/code, not
-Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
-`uplink_bake_env` / `router_network_env`.
+Product rule: **form stays six**; tunables are not Encrypted Secrets.
+Sources: `internal/config/config.go`, SecretVM `uplink_bake_env` /
+`router_network_env`.
+
+Generic, Railway and local compose templates take every tunable as an
+env-overridable default (`${VAR:-default}`): leave it unset for the
+default, or set it in `.env` / the shell / Railway Variables. Overridable
+there: `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `ACTIVE_MODELS_URL`,
+`GATEWAY_BIDS_URL`, `HOUSEKEEPING`, `ADMIN_2FA_REQUIRED` (generic),
+`MASTER_KEY_ADMIN` (generic, Railway), `PROXY_STORE_CHAT_CONTEXT`,
+`PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` /
+`LOG_LEVEL_ETH_RPC`, `ETH_NODE_USE_SUBSCRIPTIONS`. Setting
+`ADMIN_2FA_REQUIRED=false` or `MASTER_KEY_ADMIN=true` weakens admin
+security. SecretVM keeps tunables in compose `configs:` (form stays six).
 
 ### 1. Minimum to run (six operator fillables)
 

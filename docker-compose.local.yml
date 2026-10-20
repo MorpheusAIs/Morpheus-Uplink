@@ -45,11 +45,11 @@ services:
       - COOKIE_FILE_PATH=/app/data/.cookie
       - ENVIRONMENT=production
       # Privacy (L1: set / believed honored; live acceptance pending).
-      - PROXY_STORE_CHAT_CONTEXT=false
-      - PROXY_FORWARD_CHAT_CONTEXT=false
-      - LOG_LEVEL_APP=warn
-      - LOG_LEVEL_TCP=warn
-      - LOG_LEVEL_ETH_RPC=warn
+      - PROXY_STORE_CHAT_CONTEXT=${PROXY_STORE_CHAT_CONTEXT:-false}
+      - PROXY_FORWARD_CHAT_CONTEXT=${PROXY_FORWARD_CHAT_CONTEXT:-false}
+      - LOG_LEVEL_APP=${LOG_LEVEL_APP:-warn}
+      - LOG_LEVEL_TCP=${LOG_LEVEL_TCP:-warn}
+      - LOG_LEVEL_ETH_RPC=${LOG_LEVEL_ETH_RPC:-warn}
       # Consumer mode: no MODELS_CONFIG_CONTENT, nothing served on :3333.
     ports:
       - "127.0.0.1:8082:8082"
@@ -92,12 +92,12 @@ services:
       - UPLINK_DEV_HTTP=true
       - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
-      # Behavior bake (change via compose/code only).
-      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
-      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
-      - SESSION_DURATION_SECONDS=600
-      - SESSION_FAILOVER=true
-      - HOUSEKEEPING=true
+      # Tunables: override via env / .env; defaults shown.
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       - DATA_DIR=/data
     ports:
       - "127.0.0.1:8080:8080"

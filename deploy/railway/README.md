@@ -41,7 +41,17 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are baked in compose (change via code only; not Railway Secrets).
+Tunables are env-overridable compose defaults (`${VAR:-default}`), not
+Railway Secrets. `MASTER_KEY_ADMIN=true` weakens admin security.
+
+Railway caveat: Railway does not run `docker-compose.yml`; each service's
+environment comes from its Railway Variables. Railway variables have no
+`${VAR:-default}` fallback (its own syntax is `${{SERVICE.VAR}}`
+references). If a compose import leaves a value as the literal
+`${VAR:-default}` string, set the plain value (the default shown here, or
+your override) in that service's Variables. The defaults apply as-is
+under `docker compose`.
+
 Keep ownership separate:
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,

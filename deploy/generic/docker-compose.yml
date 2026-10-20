@@ -71,19 +71,19 @@ services:
       start_period: 90s
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - ADMIN_2FA_REQUIRED=true
-      - MASTER_KEY_ADMIN=false
+      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}
+      - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
       - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - API_KEY_SEED=${API_KEY_SEED}
       # Same user:pass as the router (ROUTER_AUTH works too).
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      - SESSION_DURATION_SECONDS=600
-      - SESSION_FAILOVER=true
-      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
-      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
-      - HOUSEKEEPING=true
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
+      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
@@ -108,7 +108,7 @@ services:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
-      - ETH_NODE_USE_SUBSCRIPTIONS=false
+      - ETH_NODE_USE_SUBSCRIPTIONS=${ETH_NODE_USE_SUBSCRIPTIONS:-false}
       - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}
       - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
@@ -117,11 +117,11 @@ services:
       - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
       - COOKIE_FILE_PATH=/app/data/.cookie
       - ENVIRONMENT=production
-      - PROXY_STORE_CHAT_CONTEXT=false
-      - PROXY_FORWARD_CHAT_CONTEXT=false
-      - LOG_LEVEL_APP=warn
-      - LOG_LEVEL_TCP=warn
-      - LOG_LEVEL_ETH_RPC=warn
+      - PROXY_STORE_CHAT_CONTEXT=${PROXY_STORE_CHAT_CONTEXT:-false}
+      - PROXY_FORWARD_CHAT_CONTEXT=${PROXY_FORWARD_CHAT_CONTEXT:-false}
+      - LOG_LEVEL_APP=${LOG_LEVEL_APP:-warn}
+      - LOG_LEVEL_TCP=${LOG_LEVEL_TCP:-warn}
+      - LOG_LEVEL_ETH_RPC=${LOG_LEVEL_ETH_RPC:-warn}
     volumes:
       - router_data:/app/data
     networks:
