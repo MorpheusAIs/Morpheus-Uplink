@@ -76,16 +76,20 @@ There is no separate docs host or MCP for Uplink.
 
 7. **Do not expose the proxy-router admin port publicly.** Only the TLS
    front (Uplink on `:443` / local `:8080`) should be public. Router `:8082`
-   stays on the compose network; `/node/*` is the admin-gated passthrough.
+   stays on the compose network; `/node/*` is the admin-gated passthrough
+   (GET, HEAD, POST and DELETE only), with a block list for routes that
+   move funds, open sessions, or change the wallet, users, permissions or
+   config (see `internal/api/nodeproxy.go`).
    Consumer nodes need **no inbound `:3333`** — they dial out to providers.
 
 8. **Deploy from GitHub Release assets, not `git clone`, for production.**  
    Three overlays, same GHCR digests: SecretVM
    (`docker-compose.secretvm.deployed.yml`), generic VPS
    (`docker-compose.generic.deployed.yml`), and Railway scaffold
-   (`deploy/railway/`). Prefer
+   (`deploy/railway/`, reference asset `docker-compose.railway.deployed.yml`).
+   Every image in the assets is digest-pinned. Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.14.0 by digest**
+   over forks. Proxy-router (Lumerin) is **pinned to v7.15.0 by digest**
    (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
@@ -97,7 +101,8 @@ There is no separate docs host or MCP for Uplink.
    Wrong strings fail resolve. Never invent a flashy name; never point
    agents at `active_models.json` / ALL.
 
-10. **Key roles:** Master (`sk-uplink.…`) = inference + admin; Prompt
+10. **Key roles:** Master (`sk-uplink.…`) = inference, plus admin only with
+    `MASTER_KEY_ADMIN=true` (default off); Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
     named, export/import across wipes. Built-ins derive from `API_KEY_SEED`.
 
@@ -149,6 +154,8 @@ deploy/              secretvm + generic + railway overlays (CI pins digests)
 - Do not hard-code contract addresses; keep them in compose/config.
 - Prefer release-asset deploy instructions for operators; `docker compose`
   local is for development.
+- Compose templates and env examples must pass
+  `bash scripts/deploy-assets.sh pr` (the release uses the same script).
 - Feature work: branch → PR → `main` (release tags cut on merge to `main`).
 
 ## Regenerating the corpus

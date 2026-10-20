@@ -1,0 +1,6 @@
+# Fixture: router image under a renamed service ("node") on host network must
+# be rejected (match on image morpheus-lumerin-node, not only service name).
+services:
+  node:
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
+    network_mode: host

@@ -82,16 +82,20 @@ There is no separate docs host or MCP for Uplink.
 
 7. **Do not expose the proxy-router admin port publicly.** Only the TLS
    front (Uplink on `:443` / local `:8080`) should be public. Router `:8082`
-   stays on the compose network; `/node/*` is the admin-gated passthrough.
+   stays on the compose network; `/node/*` is the admin-gated passthrough
+   (GET, HEAD, POST and DELETE only), with a block list for routes that
+   move funds, open sessions, or change the wallet, users, permissions or
+   config (see `internal/api/nodeproxy.go`).
    Consumer nodes need **no inbound `:3333`** — they dial out to providers.
 
 8. **Deploy from GitHub Release assets, not `git clone`, for production.**  
    Three overlays, same GHCR digests: SecretVM
    (`docker-compose.secretvm.deployed.yml`), generic VPS
    (`docker-compose.generic.deployed.yml`), and Railway scaffold
-   (`deploy/railway/`). Prefer
+   (`deploy/railway/`, reference asset `docker-compose.railway.deployed.yml`).
+   Every image in the assets is digest-pinned. Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.14.0 by digest**
+   over forks. Proxy-router (Lumerin) is **pinned to v7.15.0 by digest**
    (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
@@ -103,7 +107,8 @@ There is no separate docs host or MCP for Uplink.
    Wrong strings fail resolve. Never invent a flashy name; never point
    agents at `active_models.json` / ALL.
 
-10. **Key roles:** Master (`sk-uplink.…`) = inference + admin; Prompt
+10. **Key roles:** Master (`sk-uplink.…`) = inference, plus admin only with
+    `MASTER_KEY_ADMIN=true` (default off); Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
     named, export/import across wipes. Built-ins derive from `API_KEY_SEED`.
 
@@ -155,6 +160,8 @@ deploy/              secretvm + generic + railway overlays (CI pins digests)
 - Do not hard-code contract addresses; keep them in compose/config.
 - Prefer release-asset deploy instructions for operators; `docker compose`
   local is for development.
+- Compose templates and env examples must pass
+  `bash scripts/deploy-assets.sh pr` (the release uses the same script).
 - Feature work: branch → PR → `main` (release tags cut on merge to `main`).
 
 ## Regenerating the corpus
@@ -198,9 +205,13 @@ an API key.
   fitness guarantee.
 - A **single-tenant** gateway: one wallet, one session pool. Any Prompt or
   ephemeral API key can open sessions and **escrow / lock MOR** from that
-  wallet. Treat every inference key as spend authority on this box.
-- Admin login and the Master key can reach `/admin/*` and `/node/*` (full
-  proxy-router power). Protect them like the wallet.
+  wallet. Treat every inference key as authority to lock this wallet's MOR.
+- Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
+  `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
+  routes that send or approve funds, open sessions, create providers, models
+  or bids, change the wallet, router users, permissions or config, or access
+  router files, or make the router contact a caller-chosen address. Protect admin access
+  like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
 
@@ -282,6 +293,7 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 - Same shape clients already know: `POST /v1/chat/completions`, embeddings,
   `GET /v1/models`, Bearer `sk-…` keys
 - Sessions open and reuse automatically (model name → on-chain session)
+- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a dedicated wallet ([details](docs/06-developers.md#sessions-across-restarts))
 - Admin GUI at `/gui` — balances, keys, Probe, usage
 - You pay providers in MOR from the wallet you fund — no multi-tenant credits
 
@@ -296,8 +308,8 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill Encrypted Secrets (block below) — **six keys only** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
-| **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
+| **3. Secrets** | Fill Encrypted Secrets (block below) — **operator fillables** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
+| **4. Deploy** | Start the VM; wait until `uplink` is healthy (proxy-router has no container healthcheck), then check that the GUI Status line reads Healthy. |
 | **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
 | **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
 | **7. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
@@ -315,8 +327,8 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
-Form stays **six** fillables. Tunables change via compose/code, **not** Encrypted Secrets:
-- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+The SecretVM form has exactly these **six** fields (`env.secretvm.example` is the same six). Tunables are **not** Encrypted Secrets: SecretVM keeps them in the compose `configs:` block; generic and local compose take them as env-overridable `${VAR:-default}` defaults, while Railway does not run compose and applies none of them (see the Railway steps below and [docs/06-developers.md](docs/06-developers.md#environment-variables)):
+- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`, and the `UPLINK_RESET_2FA` break-glass; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
@@ -326,13 +338,13 @@ Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstra
 
 ### Generic VPS
 
-Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)) and Lumerin pin as SecretVM. Release asset: **`docker-compose.generic.deployed.yml`** (+ `env.generic.example`). Full walkthrough: [docs/02-bootstrap.md#first-start--generic-vps](docs/02-bootstrap.md#first-start--generic-vps).
+Same GHCR images (`ghcr.io/morpheusais/uplink` from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)) and Lumerin pin as SecretVM. Release asset: **`docker-compose.generic.deployed.yml`** (+ `env.generic.example`). Full walkthrough: [docs/02-bootstrap.md#first-start--generic-vps](docs/02-bootstrap.md#first-start--generic-vps).
 
 | Step | Do this |
 |------|---------|
 | **1. DNS / ports** | Point A/AAAA at the box; open **80** and **443**. |
 | **2. Compose** | Download **`docker-compose.generic.deployed.yml`** (+ `env.generic.example` → `.env`) from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the six fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
+| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the operator fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
 | **4. Deploy** | `docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d` (Caddy + LE). |
 | **5. GUI → fund → Probe** | Open `https://$PUBLIC_HOST/gui/` → fund ETH+MOR on Base → Probe → Prompt key at `/v1`. |
 
@@ -342,15 +354,15 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 
 Supported Uplink hosts are **SecretVM**, **generic VPS**, and **this in-repo Railway scaffold** only. Do not follow third-party consumer-gateway Railway stacks (different images/vars such as DOMAIN / PUBLIC_ORIGIN).
 
-Same image pair; **no** Railway-specific release compose yet — use the in-repo scaffold [`deploy/railway/`](deploy/railway/) and pin digests from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) (SecretVM/generic assets). Checklist: [docs/02-bootstrap.md#first-start--railway](docs/02-bootstrap.md#first-start--railway) · [deploy/railway/README.md](deploy/railway/README.md).
+Same image pair. The [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) ships a digest-pinned reference **`docker-compose.railway.deployed.yml`** (+ `env.railway.example`); Railway does not run compose itself, so copy its image digests and variables into the Railway services (scaffold: [`deploy/railway/`](deploy/railway/)). Checklist: [docs/02-bootstrap.md#first-start--railway](docs/02-bootstrap.md#first-start--railway) · [deploy/railway/README.md](deploy/railway/README.md).
 
 | Step | Do this |
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
-| **2. Images** | Pin `ghcr.io/morpheusais/uplink` (+ Lumerin) to release digests — not bare `:latest`. |
-| **3. Secrets** | Set the six fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
+| **2. Images** | Use the digests from `docker-compose.railway.deployed.yml` for `ghcr.io/morpheusais/uplink` and Lumerin — not bare `:latest`. |
+| **3. Secrets + vars** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets**. Railway applies no compose defaults, so also set the active lines of `env.railway.example` as plain service variables: `PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses on proxy-router. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
-| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
+| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → turn 2FA on (Security tab, recommended) → fund → Probe → `/v1`. |
 
 **Done when:** same as SecretVM — GUI, funded wallet, Probe OK, client on `https://<host>/v1`.
 
@@ -371,7 +383,7 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins proxy-router (Lumerin) at v7.14.0**
+Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.15.0**
 (Lumerin `main` / #889 caps — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
@@ -379,18 +391,39 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
 
 - **Not the hosted APIGW.** No Morpheus credits account, no shared pool with
   strangers. One wallet, one gateway, your ops.
-- **Any Prompt / ephemeral key can lock MOR** from that wallet. Treat keys like
-  spend authority; keep Master off shared machines.
+- **Any Prompt / ephemeral key can lock MOR** from that wallet as session
+  stake (returned, held at most until the next UTC day). Keep Master off
+  shared machines.
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
+  Rotating it also invalidates the 2FA secret and recovery codes; the way
+  back is one restart with `UPLINK_RESET_2FA=true`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
-- **Deploy from release assets**, not a git checkout. Images are digest-pinned
-  for SecretVM / compose — including **proxy-router v7.14.0** (not `:latest`).
+- **Deploy from release assets**, not a git checkout. Every image in them is
+  digest-pinned, Uplink and **proxy-router v7.15.0** included (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
   `active_models.json` / ALL.
+- **Admin 2FA** (TOTP) is an on/off switch on the Security tab, off by
+  default on every deploy (first login is password only). We recommend
+  turning it on: the switch runs the enrollment (QR code, confirm a code)
+  and issues 10 single-use recovery codes, shown once; from then on login
+  needs a TOTP or recovery code. The switch is kept in `DATA_DIR`, so it
+  survives restarts and redeploys. The Security tab shows how many codes
+  are left and can regenerate them, reset 2FA (wipe and re-enroll; 2FA
+  stays on) or turn it off (password plus a code; signs out every session).
+  No environment variable turns 2FA on.
+  Emergency recovery when locked out: one restart with
+  `UPLINK_RESET_2FA=true` (2FA comes back off).
+  [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
+- **`/node/*` router passthrough** takes GET, HEAD, POST and DELETE only,
+  is admin-gated, and refuses routes that send or approve funds, open
+  sessions, create providers, models or bids, change the wallet, router
+  users, permissions or config, access router files, or make the router
+  contact a caller-chosen address (403, audited). Reads (GET, HEAD) pass
+  through, wallet, router-user and config reads included. [Details](docs/06-developers.md#router-access-and-restart-safety)
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
 Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.
@@ -495,7 +528,8 @@ First boot → funded wallet → GUI login. **No git clone** — download the pu
 
 **Default path is SecretVM** ([Secret Labs](https://docs.scrt.network/)). Use
 generic VPS if you already run your own Docker + TLS. **Railway** is a
-scaffold overlay (same image pair; secrets in Railway Secrets only).
+scaffold overlay (same image pair; secrets in Railway Secrets only; the
+release ships a digest-pinned reference compose for it).
 Supported hosts: SecretVM, generic VPS, and this scaffold only -- not third-party
 consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 
@@ -504,17 +538,17 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.14.0**). Pick the skin that matches your host:
+proxy-router **v7.15.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
 | **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS (Traefik) | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
-| **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `deploy/railway/` + [operator checklist](../deploy/railway/README.md) |
+| **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `docker-compose.railway.deployed.yml` + `env.railway.example` (reference; Railway does not run compose) + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556` (digest-pinned in compose)
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
 
-**Pin note:** tag `v7.14.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.15.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
@@ -566,12 +600,24 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 `environment:` key (literals too), so tunables stay in compose `configs:`
 (change via code / compose only -- not operator forms):
 
+> To change a SecretVM tunable, edit the `configs:` block
+> (`uplink_bake_env` / `router_network_env`) in
+> `deploy/secretvm/docker-compose.yml` (or your downloaded
+> `docker-compose.secretvm.deployed.yml`). SecretVM turns every `${...}` in
+> the compose file into an operator prompt, and the form deliberately stays
+> at the six secrets, so SecretVM has no `${VAR:-default}` overrides.
+
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
   `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
-  `HOUSEKEEPING=true`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
-  `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`,
+  `HOUSEKEEPING=true`, and master key admin access fixed off
+  (`MASTER_KEY_ADMIN=false`). Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
+  `DATA_DIR`, `USAGE_PRUNE_DAYS`,
   `CLOSE_SESSIONS_ON_EXIT`) are Uplink process env too. Diamond /
   `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+  2FA is turned on in the GUI, not here (see [2FA](#admin-2fa-switch)).
+  2FA emergency recovery: add `UPLINK_RESET_2FA=true` to `uplink_bake_env`,
+  redeploy once, then remove it and redeploy
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 - **Router** (`router_network_env`; godotenv -- process env wins):
   `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`,
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
@@ -597,7 +643,13 @@ API_KEY_SEED=PASTE_openssl_rand_hex_32_HERE
 WEB_PUBLIC_URL=https://uplink.yourdomain.com
 ```
 
-Tunables are baked in compose (change via code only). Keep ownership separate:
+Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
+keeps the default; set one in `.env` to override (the list is in
+[06](06-developers.md#environment-variables)). Master key admin access
+defaults to off (`MASTER_KEY_ADMIN=false`); turning it on weakens admin
+security. 2FA is turned on in the GUI (see [2FA](#admin-2fa-switch)).
+2FA emergency recovery: `UPLINK_RESET_2FA=true` in `.env` for one restart,
+then remove it. Keep ownership separate:
 **Uplink** session/catalog/housekeeping (+ wiring defaults);
 **Router** `PROXY_*` / `LOG_LEVEL_*` / chain / Diamond / MOR. Never describe
 router `PROXY_*` / `LOG_LEVEL_*` as Uplink knobs.
@@ -618,8 +670,16 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are baked in compose (Uplink vs router ownership stays separate;
-see SecretVM block above). Full checklist:
+Railway does not run compose, so no compose default applies there: an
+unset variable takes the process's own default, which can differ from the
+compose value (table in [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway)).
+Set plain values as Railway Variables (Uplink vs router ownership stays
+separate; see SecretVM block above). On proxy-router set
+`PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context),
+`LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses from
+`env.railway.example`. Then turn 2FA on in the GUI (recommended; see
+[2FA](#admin-2fa-switch)), and keep `DATA_DIR` on a persistent volume so the
+2FA switch and enrollment survive redeploys. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -627,12 +687,12 @@ see SecretVM block above). Full checklist:
 <details>
 <summary><strong>Var ownership (Uplink vs router)</strong></summary>
 
-Product rule: **form stays six**; tunables change via compose/code, not Encrypted Secrets.
+Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM keeps them in compose `configs:`; generic and local compose take them as env-overridable defaults (`${VAR:-default}`); Railway does not run compose and applies none of them.
 
 | Bucket | Where | Vars |
 |--------|-------|------|
 | **Minimum to run** | Operator fillables everywhere | `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, `WEB_PUBLIC_URL` |
-| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT` |
+| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT` |
 | **Router tunable / additional** | proxy-router only (`router_network_env`; godotenv -- process env wins) | `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `TCP` / `ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not** Uplink operator knobs. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
@@ -644,13 +704,24 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 | Var | Used by | Notes |
 |-----|---------|--------|
-| `WALLET_PRIVATE_KEY` | Router (+ Uplink reclaim) | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. |
-| `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
-| `COOKIE_CONTENT` | Router + Uplink | `user:password` Basic auth for the router API. Same value in both containers. |
+| `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
+| `ETH_NODE_ADDRESS` | Router only | Base HTTPS RPC. Uplink reads chain state through the router API. |
+| `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
-| `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
+| `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
 | `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
 | `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt (platform-specific; not one of the six). |
+
+</details>
+
+<details>
+<summary><strong>Session stake (locks, not spends)</strong></summary>
+
+A session stake is locked while the session runs and is returned to this
+wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink
+only opens staking-mode sessions (`directPayment` is always false). Use a
+dedicated wallet: the boot reconcile and a graceful stop act on every open
+session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
 
 </details>
 
@@ -661,8 +732,12 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
-4. Deploy. Wait for health (`uplink … listening`, router healthy).
+4. Deploy. Wait until `uplink` is healthy (proxy-router has no container
+   healthcheck); after login, the GUI Status line should read Healthy.
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
+6. Turn 2FA on (recommended): Security tab → 2FA switch → scan the QR
+   code, confirm a code, and save the 10 recovery codes (shown once).
+   See [2FA](#admin-2fa-switch).
 
 ---
 
@@ -682,24 +757,56 @@ nano .env   # or your editor
 docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 ```
 
-Open `https://$PUBLIC_HOST/gui/`.
+Open `https://$PUBLIC_HOST/gui/` and turn 2FA on with the switch on the
+Security tab (recommended; off by default, as on every deploy).
 
 ---
 
 ## First start — Railway
 
-Scaffold only — same digests as SecretVM/generic; pin images; single-replica
+Scaffold — the release's `docker-compose.railway.deployed.yml` is the
+reference (same digests as SecretVM/generic); single-replica
 proxy-router. Full step→done checklist:
 **[deploy/railway/README.md](../deploy/railway/README.md)**.
 
 1. Create a Railway project with uplink + proxy-router on a private network.
 2. Set secret-class vars as **Railway Secrets** only (see Secrets above).
-3. Pin uplink (and router) to release digests — not bare `:latest`.
+3. Use the uplink and router digests from `docker-compose.railway.deployed.yml` — not bare `:latest`.
 4. Replicas = **1** for wallet-bearing `proxy-router`.
 5. Confirm only uplink is public (`:8080` behind Railway HTTPS).
-6. Open `https://<public>/gui/` → fund wallet → Probe (same as other hosts).
+6. Open `https://<public>/gui/`, turn 2FA on with the switch on the
+   Security tab (recommended; off by default), then fund wallet → Probe
+   (same as other hosts).
 
 Done when GUI login works and Probe returns a completion.
+
+---
+
+## Admin 2FA switch
+
+2FA (TOTP) is an operator choice in the GUI, the same on SecretVM,
+generic, Railway and local: there is no environment variable for it.
+
+- **Default off.** The first login is password only. While 2FA is off the
+  Security tab shows a short note recommending turning it on; nothing is
+  forced.
+- **Turn on:** Security tab → 2FA switch. Scan the QR code (or enter the
+  secret), confirm a code, and save the 10 recovery codes (shown once).
+  2FA is on only once a code is confirmed; from then on every login needs a
+  TOTP or recovery code.
+- **Turn off:** the switch asks for the password plus a current TOTP or
+  recovery code. It removes the secret and recovery codes and signs out
+  every session; login is password only again.
+- **Reset lockdown:** after a Reset the switch stays on, and the next
+  password login gets 403 on every admin route except 2FA status,
+  enrollment and logout until a new enrollment is confirmed.
+- **Persistent:** the switch is stored with the 2FA state in `DATA_DIR`
+  (`uplink-state.json`), so it survives restarts and redeploys. Keep
+  `DATA_DIR` on a persistent volume.
+- **Emergency recovery** (authenticator and recovery codes lost):
+  `UPLINK_RESET_2FA=true` for one restart wipes 2FA and all sessions; 2FA
+  comes back off. Remove the variable, log in with the password and turn
+  2FA on again ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 
 ---
 
@@ -734,19 +841,64 @@ One topic at a time. You do not need every section on day one.
 - URL: `https://<your-host>/gui/`
 - User: `admin`
 - Password: `ADMIN_PASSWORD`
+- Two steps when 2FA is enrolled: password first, then the 6-digit code (or
+  a recovery code). Wrong password and missing code get the same answer, so
+  the page never reveals whether 2FA is enrolled; lockout and audit apply to
+  both steps.
+- Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
+- Status, top to bottom: a status line (health or the reason it is not
+  healthy, open sessions, versions), the four MOR numbers below, Connect a
+  client, then Add MOR and Support (both collapsed). Hover or focus an &#9432; for help.
+  There is no low-wallet warning: watch the Wallet number, and keep a
+  little ETH on the wallet for gas (check it in your wallet app).
+- Security: the **2FA switch** turns two-factor login on or off. It is off
+  by default on every deploy (password-only login), and the tab shows a
+  short note recommending turning it on; nothing is forced. Turning it on
+  runs the enrollment (scan the QR code, confirm a code). Until a code is
+  confirmed the tab shows one message, "Finish setup", and switching back
+  off cancels the setup (after a reset, below, it cannot be switched off). 2FA is on once the code is confirmed, and 10
+  recovery codes are shown once; save them.
+  Each works once in place of the 6-digit code. The switch is stored in
+  `DATA_DIR`, so it survives restarts and redeploys.
+- Regenerate recovery codes, reset 2FA or turn it off from the same tab:
+  the buttons (and switching off) need both the password and a current
+  code or recovery code.
+- Turn off removes the 2FA secret and all recovery codes and signs out
+  every session; the next login is password only.
+- Reset wipes the 2FA secret and all recovery codes and signs out every
+  session (you land on the login screen), but 2FA stays on. Log in with the
+  password: only the Security tab shows, with a new enrollment and a new QR
+  code, until it is confirmed; the old authenticator entry and old recovery
+  codes no longer work.
+- Locked out (lost authenticator and codes): emergency recovery is one
+  restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
+- **Security alerts** (below 2FA): the last 50 audit events (logins
+  and lockouts, 2FA and key changes, boot session checks, balance drops),
+  newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
+  (bold) | details. The filter box above the list hides rows that do not
+  contain the typed text (case-insensitive). The list is kept in memory and
+  starts empty after a restart; forward the container logs for history. It
+  loads once 2FA is enrolled or off; while an enrollment is required it says
+  so instead.
 
 ---
 
 ## API Keys
 
-| Kind | Survives wipe / redeploy? | Role |
+| Kind | Survives a fresh deploy / volume wipe? | Role |
 |------|---------------------------|------|
-| **Master** | Yes (`API_KEY_SEED`) | Inference + admin API |
+| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off) |
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
-| **Ephemeral** | No — export/import | Named keys for apps/agents |
+| **Ephemeral** | No — export/import (kept across restarts and redeploys on the same data volume) | Named keys for apps/agents |
 
-- Rotate built-ins by changing `API_KEY_SEED` and restarting.
-- Ephemeral: create, red trash to delete, **Export all** / **Import list** after redeploy.
+- Rotate built-ins by changing `API_KEY_SEED` and restarting. This also
+  invalidates the 2FA secret and recovery codes; restart once with
+  `UPLINK_RESET_2FA=true` to clear them, then remove it and enroll again
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
+- Ephemeral: create, red trash to delete, **Export all** / **Import list**
+  after a fresh deploy or a deleted data volume. A restart or redeploy on
+  the same volume keeps them.
 
 ---
 
@@ -771,10 +923,14 @@ Then the clock:
 
 | Bucket | Meaning |
 |--------|---------|
-| **Wallet** | Spendable MOR |
+| **Wallet** | Liquid MOR in the wallet |
 | **Active** | Open session stake |
 | **On hold** | Closed/expired stake still daylocked |
 | **To claim** | Daylock done — reclaim to Wallet |
+
+**Session stake (locks, not spends).** Stake is locked while a session runs
+and returned to this wallet, held at most until the next UTC day. See
+[02-bootstrap](02-bootstrap.md) for the full wording.
 
 **Practical tip:** if you only need a short burst, close the session when you are done so unused duration returns immediately as liquid. If you leave sessions open until they expire, plan float for the **full** stake until the next reclaim cycle.
 
@@ -784,8 +940,19 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 ## Sessions & Usage
 
-- Open sessions rehydrate from chain after restart (still-valid ones are reused).
-- **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
+- On boot Uplink lists the open sessions before opening any: still-valid
+  ones are reused (one per model), expired and duplicate ones are closed so
+  their stake is returned, and sessions for models not in the catalog are
+  left to expire. The Status tab shows the last boot check and its counts.
+  A graceful `docker stop` closes every open session on the wallet before
+  Uplink exits, including sessions for models not in the catalog and, on a
+  shared wallet, the other client's sessions; the stake is returned (a
+  lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
+  dedicated wallet: the boot check and the stop act on every session of
+  the wallet.
+- **Usage** counters are stored on the Uplink data volume: they survive
+  restarts and redeploys, and reset on a fresh deploy or when the volume is
+  deleted. Funds do not depend on them.
 
 ---
 
@@ -793,7 +960,7 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 1. Open **Probe**.
 2. Pick a model (fuzzy search) and an API key.
-3. **Run test** or **Copy curl**.
+3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
 
 ---
@@ -897,7 +1064,7 @@ Response: `{"usage":[…]}` — rows with `day`, `keyId`, `model`, `requests`,
 **WARN — scoping:** Prompt and generated keys see **only their own** rows
 (`keyId` matches the caller). Master Bearer returns the **full instance**
 (same table as `GET /admin/usage`). `keyId` is a public id (`master`,
-`prompt`, or generated id) — never an `sk-` secret. Admin Basic does **not**
+`prompt`, or generated id) — never an `sk-` secret. Basic auth does **not**
 unlock `/v1/usage`.
 
 ---
@@ -918,9 +1085,43 @@ unlock `/v1/usage`.
 ## New Uplink versions
 
 1. GUI header may show a **new release** chip when [GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases) is ahead of the running build (notify only — you still apply the update on the host).
-2. Download the new release compose (`docker-compose.secretvm.deployed.yml` or `docker-compose.generic.deployed.yml`). Keep the **same** secrets / `.env` (`API_KEY_SEED`, `WALLET_PRIVATE_KEY`).
+2. Download the new release compose (`docker-compose.secretvm.deployed.yml`, `docker-compose.generic.deployed.yml`, or for Railway the digests in `docker-compose.railway.deployed.yml`). Keep the **same** secrets / `.env` (`API_KEY_SEED`, `WALLET_PRIVATE_KEY`).
 3. Export ephemeral keys **before** wiping storage if volumes recreate.
 4. After restart: Status health → Probe once → reclaim if **To claim** &gt; 0.
+
+---
+
+## Upgrading from an earlier test build
+
+Upgrades do not remove services that were dropped from the compose file
+(`router-allowance-manager`, `router-user-init`) or their volumes
+(`router_auth`, `manager_cred`, `allowance_status`, `allowance_ctl`). An
+earlier test build may also have left an extra scoped router user in the
+router's config.
+
+- **SecretVM (production):** no shell (no SSH or serial access), so the
+  only fix is a **fresh deploy**: a new VM with the release compose and the
+  same six secrets. It clears the old services, volumes and router user.
+- **Generic hosts and dev VMs:** do a fresh deploy, or clean up in place
+  from the deploy directory (same `-f` / `--env-file` flags you deploy
+  with; Docker prefixes volume names with the compose project name):
+
+  ```bash
+  docker compose up -d --remove-orphans
+  docker volume rm <project>_router_auth <project>_manager_cred \
+    <project>_allowance_status <project>_allowance_ctl
+  ```
+
+  Also delete `router.auth` from the Uplink data volume (`/data`), the
+  router credential an earlier test build wrote there (the current build
+  does not read it), and remove the extra router user, or do a fresh
+  deploy if unsure; it clears both.
+
+A fresh deploy starts with empty Uplink state. Generated (ephemeral) API
+keys and the 2FA state (enrollment, recovery codes) are gone, and 2FA
+comes back off. Master and Prompt keys come back from the same
+`API_KEY_SEED`. Export ephemeral keys first and re-create or import them
+afterwards, then turn 2FA on and enroll again.
 
 ---
 
@@ -932,7 +1133,7 @@ The portable unit is **published compose + env secrets + TLS terminator + public
 |------|---------|
 | **SecretVM** | Release compose + encrypted `${}` secrets + platform certs |
 | **Generic VPS** | Release compose + `.env` + Caddy |
-| **Railway** | `deploy/railway/` scaffold + Railway Secrets; single-replica router |
+| **Railway** | `deploy/railway/` scaffold with the release `docker-compose.railway.deployed.yml` digests + Railway Secrets; single-replica router |
 | **Phala / dstack** | Same generic release assets + their secret injection |
 
 Avoid baking RPC or wallet keys into the image — inject at runtime. Nothing requires SecretVM-specific APIs; only the Traefik cert mount is platform-specific (generic compose uses Caddy instead).
@@ -960,12 +1161,101 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 
 | Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`, `/node/*`) |
 |---|---|---|---|
-| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | yes (same power as admin password) |
+| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA |
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
-GUI login is Basic auth (`admin` + `ADMIN_PASSWORD`). The Master key exists so
-automation can hit admin APIs without that password.
+GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
+code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
+is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
+token only when `MASTER_KEY_ADMIN=true` (default off).
+
+### Admin 2FA and recovery codes
+
+- **2FA switch** (operator choice in the GUI; no environment variable turns
+  2FA on, on any deploy target). Stored as `auth.twoFactorOn` in
+  `uplink-state.json` in `DATA_DIR` (mode 0640, atomic write like the rest
+  of the state), so it survives restarts and redeploys. Default off: the
+  first login is password only, and the Security tab shows a non-blocking
+  note recommending turning it on. The switch and the confirmed TOTP secret
+  change together, in one store update: enroll confirm stores the secret
+  and sets the switch on; Remove wipes the secret and recovery codes and
+  sets it off. Starting an enrollment does not turn it on. While on, every
+  admin route and `/node/*` enforce the second factor exactly as before.
+  Fail closed: login asks for a TOTP or recovery code whenever a secret is
+  stored, whatever the switch says, and a state file that cannot be parsed
+  stops Uplink at boot instead of starting with 2FA off.
+- **`MASTER_KEY_ADMIN` parsing** (`internal/config`): unset, empty or blank
+  means false; a boolean (`true`/`false`/`1`/`0`, surrounding space
+  ignored) is that value; anything else stays false, logs one warning
+  naming the variable (never its value) and shows it on the Security tab
+  (`configWarn` in `/admin/2fa/status` and `/admin/status`).
+- **TOTP** (RFC 6238, 30 s, one step of clock skew). The last accepted step
+  is stored, so a code works once; replays get 401 (`bad_totp` or
+  `totp_reuse` in the audit, never the code).
+- **Recovery codes**: enrolling issues 10, shown once (copy, `.txt`
+  download). Format `xxxx-xxxx-xxxx` from `a-z2-7` (12 symbols, 60 bits,
+  `crypto/rand`). Input is case- and dash-insensitive. Stored next to the
+  TOTP secret in `uplink-state.json` (same file, same mode) as
+  HMAC-SHA256(pepper, salt || code) with a 16-byte salt per code; the pepper
+  is derived from `API_KEY_SEED` with HKDF. Rationale in
+  `internal/adminauth/recovery.go`. Matching is constant-time over every
+  stored code and consumes the match inside one store update, so a code
+  works once even under concurrent logins. Recovery logins share the login
+  lockout (and, on SecretVM, the edge rate limit).
+- **Endpoints** (CSRF and session rules as for other admin POSTs):
+  `GET /admin/2fa/status` (`on`, `enrolled`, `need2fa`, `recoveryRemaining`),
+  `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
+  (returns the codes), `POST /admin/2fa/recovery/regen`,
+  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
+  remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
+  code.
+- **Lifecycle.** Turn on (enroll): Security tab switch, scan the QR code,
+  confirm a code; the 10 recovery codes are shown once. Regenerate:
+  replaces all codes (password plus a code), shown once. Reset: below.
+  Turn off (Remove): below. In the GUI, Regenerate, Reset and Turn off stay
+  disabled until both the password and the code field are filled.
+- **Reset** wipes the TOTP secret, all recovery codes and any pending
+  enrollment, and persists that in one store update. It revokes every admin
+  session (this one too), clears the cookie, and audits `2fa_reset` with
+  `sessions_revoked`. The GUI drops to the login screen with the Security
+  view cleared. The next password login goes straight to a new enrollment
+  with a fresh secret; the old secret and old recovery codes never work
+  again. The 2FA switch stays on, so every other admin route answers 403
+  `2fa enrollment required` until that enrollment is confirmed, and the GUI
+  shows only the Security tab. This enroll-only state is the one case where
+  the switch is on without a secret; it grants nothing but enrollment.
+- **Remove** (`POST /admin/2fa/remove`, the switch's off side) needs a
+  valid session, CSRF, the password and a TOTP or recovery code (consumed;
+  a TOTP step works once), under the login lockout. In one
+  store update it wipes the secret and recovery codes and sets the switch
+  off; then it revokes every admin session (this one too), clears the
+  cookie and audits `2fa_remove` with `sessions_revoked`. The next login is
+  password only.
+- **Audit**: `2fa_enroll`, `recovery_codes_issued` (count),
+  `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
+  `2fa_reset` (sessions revoked), `2fa_remove` (sessions revoked; `fail`
+  with the reason on a rejected attempt). Codes and secrets are never
+  logged.
+- **`API_KEY_SEED` rotation** invalidates the TOTP secret (its encryption
+  key is derived from the seed) and every recovery code (their pepper is
+  too). With 2FA enrolled, admin login then fails until 2FA is cleared with
+  `UPLINK_RESET_2FA`.
+- **`UPLINK_RESET_2FA=true`** (emergency recovery, env only, default off):
+  on the next start Uplink wipes the TOTP secret, all recovery codes, any
+  pending enrollment and the 2FA switch (2FA comes back off), ends all
+  admin sessions, clears lockouts, and audits
+  `2fa_reset_breakglass` (`ok`, `wiped`). It then sets a marker, so later
+  restarts with the variable still set do not wipe again; they audit
+  `2fa_reset_breakglass` `blocked` and the Security tab asks you to remove
+  it. Restart once with it set, then unset it and restart; that clears the
+  marker for any future use. Log in with the password and turn 2FA on
+  again with the switch. On SecretVM add
+  `UPLINK_RESET_2FA=true` to the `uplink_bake_env` block (see
+  [02-bootstrap.md](02-bootstrap.md)); on generic, Railway and local set it
+  in the environment (`${UPLINK_RESET_2FA:-false}` in the compose).
+- Logout and **Revoke all sessions** end the server-side session; there is
+  no remembered device, so the next login asks for a fresh code.
 
 ### Soft revoke (tombstone)
 
@@ -991,10 +1281,10 @@ Bearer API keys only (`requireAPIKey`). Response `{"usage":[ UsageRow… ]}`.
 | Prompt / generated | Rows where `keyId` equals the caller’s id |
 | Master | Full instance (intentional ops convenience) |
 
-**WARN:** Master is a full usage reader so automation can poll without admin
-Basic. Prompt/generated never see other keys’ rows. `keyId` is public — not
+**WARN:** Master is a full usage reader so automation can poll without an
+admin session. Prompt/generated never see other keys’ rows. `keyId` is public — not
 `sk-`. Empty `X-Uplink-Key-Id` after auth fails closed (no unfiltered dump).
-Admin Basic on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
+Basic auth on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
 
 The proxy-router still has its own Basic-auth surface (`COOKIE_CONTENT`).
 Uplink uses one full-power router credential and enforces Prompt vs Master at
@@ -1011,7 +1301,7 @@ Same images; different compose. Assets from the
 |--------|---------|--------|
 | **SecretVM (default)** | `docker-compose.secretvm.deployed.yml` | Encrypted Secrets; platform TLS |
 | **Any Docker VPS** | `docker-compose.generic.deployed.yml` | `.env` + Caddy / Let’s Encrypt (`PUBLIC_HOST`) |
-| **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
+| **Railway** | `docker-compose.railway.deployed.yml` (reference) + `deploy/railway/` | Railway does not run compose: copy its digests and vars into the services; single-replica router |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
 Step-by-step: [02-bootstrap.md](02-bootstrap.md). On SecretVM, Uplink bake
@@ -1044,17 +1334,54 @@ go test ./...   # includes mock-router e2e (auth → session → chat → usage)
 
 ## Environment variables
 
-Product rule: **form stays six**; tunables change via compose/code, not
-Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
-`uplink_bake_env` / `router_network_env`.
+Product rule: **form stays six**; tunables are not Encrypted Secrets.
+Sources: `internal/config/config.go`, SecretVM `uplink_bake_env` /
+`router_network_env`.
+
+Generic, Railway and local compose templates take every tunable as an
+env-overridable default (`${VAR:-default}`): leave it unset for the
+default, or set it in `.env` or the shell. Overridable in all three:
+
+- Uplink: `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`,
+  `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `HOUSEKEEPING`,
+  `UPLINK_RESET_2FA` (default `false`).
+- Router: `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`,
+  `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
+  `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
+  `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
+- Generic and Railway only: `MASTER_KEY_ADMIN` (default `false`). Turning
+  the master key admin access on weakens admin security.
+
+2FA has no environment variable: it is the switch on the Security tab
+(default off, recommended on; see [Admin 2FA](#admin-2fa-and-recovery-codes)),
+stored in `DATA_DIR`. Keep `DATA_DIR` on a persistent volume.
+
+The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
+takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
+does not run compose, so `${VAR:-default}` is not evaluated there; set
+plain values in the service variables (Railway's own reference syntax is
+`${{SERVICE.VAR}}`). An unset variable takes the process's own default, not
+the compose one; the Railway env example sets the vars where that is less
+safe (`PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP`, `ETH_NODE_CHAIN_ID`)
+actively, and `scripts/deploy-assets.sh` checks it.
+See [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway).
+
+SecretVM has no `${VAR:-default}` overrides: it turns every `${...}` into a
+form field, so its compose uses exactly the six secrets and keeps tunables
+in the `configs:` block (`uplink_bake_env`, `router_network_env`).
+`MASTER_KEY_ADMIN=false` is fixed there.
+
+Each env example (`env.template`, `env.example`, `.env.example`) lists only
+keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
+[Release assets](#release-assets)).
 
 ### 1. Minimum to run (six operator fillables)
 
 | Var | Required | Purpose |
 |---|---|---|
-| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet (router + Uplink reclaim) |
+| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet, **router only** (Uplink holds no key; reclaim runs via the router API) |
 | `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
-| `COOKIE_CONTENT` | yes | Router basic auth `user:pass` (`ROUTER_AUTH` fallback locally) |
+| `COOKIE_CONTENT` | yes | Router `user:pass` (proxy-router + Uplink). Uplink reads `ROUTER_AUTH` first, then `COOKIE_CONTENT` |
 | `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
 | `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
 | `WEB_PUBLIC_URL` | yes (deploy) | Public HTTPS origin |
@@ -1067,13 +1394,15 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | `true` | Provider failover at open |
-| `HOUSEKEEPING` | on when wallet key present | Post-midnight stake reclaim |
+| `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |
 | `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
-| `SESSION_DIRECT_PAYMENT` | `false` | Direct payment vs stake |
-| `CLOSE_SESSIONS_ON_EXIT` | `true` | Close pooled sessions on shutdown |
+| `SESSION_DIRECT_PAYMENT` | ignored | Removed: sessions are always staking-mode (`directPayment:false`); setting `true` only logs a warning |
+| `CLOSE_SESSIONS_ON_EXIT` | `true` | On a graceful stop, close every open session on the wallet (as of the last scan, including uncatalogued models and other clients' sessions); `false` leaves them for the next boot reconcile |
+| `UPLINK_RECONCILE_GATE_SECONDS` | `60` | Boot reconcile: how long session opens wait for the first session list |
+| `UPLINK_RECONCILE_RETRY_SECONDS` | `30` | Boot reconcile: background retry interval after that |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are
 **not** Uplink operator knobs.
@@ -1096,6 +1425,143 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 ---
 
+## Router access and restart safety
+
+- Uplink calls proxy-router over the internal network with the router's
+  own credential, `ROUTER_AUTH` or else `COOKIE_CONTENT` (the same
+  `user:password` the router uses). There is no separate scoped router user
+  and no allowance service; MOR approvals stay on the router. The router
+  port is never published.
+- `/node/*` is an admin-gated passthrough for read-only router inspection
+  by scripts. The GUI does not link it, and the SecretVM edge (Traefik)
+  does not route `/node` publicly. Only GET, HEAD, POST and DELETE are
+  forwarded; any other method gets 403. Paths are normalized before they
+  are matched, and anything ambiguous is refused. Refused for every method,
+  with a `node_passthrough_block` audit event (method and path only):
+  - sending or approving funds;
+  - opening sessions;
+  - router file-access routes;
+  - routes that make the router contact a caller-chosen address.
+
+  Refused except for reads (GET and HEAD pass through):
+  - wallet, router users and permissions, and router config;
+  - creating providers, models and bids.
+
+  The router receives exactly the normalized path, without method-override
+  headers or the admin cookie, and its redirects are not followed (502).
+  The route list, with router source references, is in
+  `internal/api/nodeproxy.go` and is pinned by `internal/api/nodeproxy_test.go`.
+- Admin responses (`/admin/*`, `/node/*`) carry `Cache-Control: no-store`
+  and `Pragma: no-cache`. Cookie-authenticated non-GET admin requests need
+  both `Sec-Fetch-Site: same-origin` and an `Origin` matching
+  `WEB_PUBLIC_URL`.
+- The router image is `FROM scratch` (no shell, no wget), so it has no
+  container healthcheck and `depends_on` is start order only. Uplink retries
+  the router itself; `/admin/status` reports `routerAuth` (a 401 means the
+  cookies do not match).
+- Uplink never asks for direct-payment sessions: the open-session body pins
+  `directPayment:false`, and the router client refuses to send any body
+  that sets it (`scripts/check-no-direct-payment.sh` guards the source).
+
+Tests: `scripts/check-no-direct-payment.sh`, `scripts/check-compose-policy.sh`,
+the mock-router e2e `scripts/e2e-mock-router.sh` (session logic) and the
+real-router smoke `scripts/e2e-real-router.sh` (pinned v7.15.0 image).
+
+### Sessions across restarts
+
+**Stop.** The `uplink` service has no `init: true`: the entrypoint `exec`s
+`su-exec uplink /usr/local/bin/uplink`, so the app is PID 1 and receives
+`docker stop`'s SIGTERM itself (no CAP_KILL needed). It stops accepting
+requests, lets in-flight ones finish for up to 30 s, then closes sessions
+(`CLOSE_SESSIONS_ON_EXIT`, default `true`). The whole stop is bounded to
+40 s from SIGTERM, with at most 8 s per close; a session not closed in time
+is logged as "left for boot reconcile". `stop_grace_period: 45s` leaves
+room for this. CI checks every template for it
+(`check-compose-policy.sh`, rule S).
+
+A graceful `docker stop` closes every open session on the wallet, as of
+Uplink's most recent session scan: its own pooled sessions, sessions for
+models that are not in the catalog, and, on a shared wallet, the other
+client's sessions. Closing returns the stake (on hold at most until the next
+UTC day); it is a lock, not a loss, and costs gas per close. Set
+`CLOSE_SESSIONS_ON_EXIT=false` to opt out: sessions then stay open across a
+stop and the next boot reconcile adopts or closes them.
+
+**Boot reconcile.** A close on stop is best-effort; a crash, `docker kill`
+or a VM wipe leaves sessions open with their stake locked. So on every boot,
+before any request may open a session:
+
+- *When:* right after start-up. The first step is `GET /wallet` on the
+  router, so the reconcile only proceeds once the router answers. It then lists the wallet's open sessions.
+- *Scope: the wallet. A dedicated wallet is required.* The router does not
+  report which client opened a session, so the
+  reconcile acts on every open session of the wallet. Recording the ids
+  Uplink opened in `DATA_DIR` was considered and not used: a VM wipe or a
+  lost volume, the case the reconcile exists for, would lose that record
+  too and leave every session orphaned. If the wallet is shared with
+  another client, that client's expired sessions, and its second session
+  for a model Uplink also adopts, may be closed at boot, and a graceful
+  `docker stop` closes all of its open sessions (see *Stop* above).
+  Closing returns the stake (on hold at most until the next UTC day) and
+  costs gas; it is a liveness issue for that client, not a loss.
+- *Listing window:* the list is read newest first and stops after three
+  pages of only closed sessions. A very old open session beyond that is
+  neither adopted nor closed by the reconcile; it expires on its own.
+- *Adopted:* the latest-ending session per model that is not closed and
+  has more than the pool's 90 s expiry buffer left. Never extended; no
+  session is opened by the reconcile.
+- *Closed:* only `expired` (past its end or inside the buffer) and
+  `duplicate` (another usable session for a model that already has an
+  adopted one).
+- *Never closed:* a session whose model is not in the catalog is skipped
+  (counted as `skipped`) and left to expire. Model ids are compared
+  case-insensitively, and the pool keys sessions by the lowercase model
+  id, so a session adopted under a differently cased id is reused. An empty catalog (`{"models":[]}` or `{}`) or one
+  that cannot be read is treated as unknown: nothing is skipped for it and
+  usable sessions are adopted.
+- *Cap:* at most 20 closes per pass (`MaxBootCloses`), expired first. The
+  rest are counted as `deferred` and a `session_reconcile_cap` audit event
+  is written. Deferred expired sessions are closed by later scans; deferred
+  duplicates are left to expire.
+- *Gate:* session opens wait until the list succeeded and adopt/close is
+  decided, so a request that arrives during boot uses the adopted session
+  instead of opening a second one. The gate is then released and the
+  closes run in the background, so a slow router close never holds
+  requests. Status polls during the reconcile show the previous scan.
+- *List failure or partial list:* an error on any page, or a row that
+  cannot be verified (no id, no model, no end time), means no closes and
+  no adopts for that attempt. It is retried with backoff (2 s doubling,
+  15 s cap) for up to 60 s (`UPLINK_RECONCILE_GATE_SECONDS`). After that
+  the gate opens, but Uplink does not open a new session until some session
+  list succeeds (the request gets an error instead), so it never opens next
+  to a session it could not see. The reconcile keeps retrying every 30 s
+  (`UPLINK_RECONCILE_RETRY_SECONDS`); such a late pass closes expired
+  sessions only, because the pool may already be serving a "duplicate".
+- *Failed closes:* counted as `failed`. An expired session whose close
+  failed, or that the cap deferred, is closed by a later scan
+  (housekeeping and the pool close expired sessions they see), with the
+  same `session_reconcile_close` audit event marked `"source":"rescan"`;
+  a duplicate whose close failed is left to expire.
+- *Idempotent:* re-running it adopts the same sessions and closes nothing
+  new.
+- *Audit:* one `session_reconcile_adopt` event per adopted session, one
+  `session_reconcile_close` event per close (reason `expired` or
+  `duplicate`, result, first 10 characters of the session id), a
+  `session_reconcile_cap` event when the cap is hit, and one
+  `session_reconcile` summary line per pass (`open`, `adopted`, `closed`,
+  `failed`, `skipped`, `deferred`, `attempts`, `late`, and `catalog`, the
+  number of catalog models, `-1` when unknown); a
+  `"result":"deferred"` line when the gate opened before a list succeeded.
+  No secrets; no full session ids.
+- *Visibility:* `/admin/status` (`sessionReconcile`), the GUI Status tab,
+  and the status file `DATA_DIR/session-reconcile.json` (uplink, 0640,
+  written atomically) show the state (`reconciling`, `closing`, `ok`,
+  `partial`, `deferred`, `retrying`), the time of the last pass, its
+  counts, and whether new opens are held.
+
+Session ids in Uplink's other log lines are shortened to the first 10
+characters as well.
+
 ## CI/CD and versioning
 
 - **PR → `main`:** vet + tests (only when material paths change — see below).
@@ -1112,17 +1578,66 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 | `cmd/**`, `internal/**` | Binary + embedded GUI |
 | `go.mod`, `go.sum` | Module graph |
 | `Dockerfile` | Image build |
-| `deploy/**` | Image entrypoint + release compose/env assets |
+| `deploy/**` | Image entrypoint + release compose/env templates |
 | `docker-compose.local.yml` | Local-stack / ASCII contract in CI |
 | `.github/workflows/build.yml` | Pipeline itself |
 
 **Skipped** (no test run, no version bump): `docs/**`, root markdown
-(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `scripts/**`,
-`.ai-docs/**`, `.env.example`, etc. A PR that mixes docs + `internal/` still
+(`README`, `AGENTS`, `DISCLAIMER`, …), `llms*.txt`, `.ai-docs/**`, etc. A PR that mixes docs + `internal/` still
 runs — any matching path is enough.
 
 Keep the `uplink` GHCR package **public** so SecretVM can pull anonymously.
 Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).
+
+`scripts/**` and `.env.example` also trigger pull_request CI (not a
+release), so the checks, e2e and asset check run when they change.
+
+### Release assets
+
+`scripts/deploy-assets.sh` builds the release assets from the templates and
+checks them; the release job and the pull_request job run the same script.
+The publish job runs `generate` + `check` twice: before the image push
+against a placeholder digest (a bad asset set fails before anything is
+published), and after it with the real digest, which only exists once the
+multi-arch image is pushed.
+
+| Asset | Template | Env example source |
+|-------|----------|--------------------|
+| `docker-compose.secretvm.deployed.yml`, `env.secretvm.example` | `deploy/secretvm/docker-compose.yml` | `deploy/secretvm/env.template` |
+| `docker-compose.generic.deployed.yml`, `env.generic.example` | `deploy/generic/docker-compose.yml` | `deploy/generic/env.example` |
+| `docker-compose.railway.deployed.yml`, `env.railway.example` | `deploy/railway/docker-compose.yml` | `deploy/railway/env.example` |
+
+`docker-compose.local.yml` with `.env.example` is checked too (no asset).
+
+- `generate IMAGE DIGEST DIR` replaces the one Uplink image line with
+  `IMAGE@DIGEST` and copies the env examples.
+- `check IMAGE DIGEST DIR` enforces:
+  - **P**: every image is `@sha256:` pinned, none is `:latest`, and Uplink
+    is exactly `IMAGE@DIGEST`;
+  - **T**: no `TODO` or `REPLACE` in the assets or templates;
+  - **V**: `${...}` variables: SecretVM uses exactly the six secrets; the
+    others use their required variables plus the documented overrides
+    (with defaults);
+  - **E**: each env example is identical to its source, has no duplicate
+    keys, names only variables its compose reads, and sets every required
+    one; `env.secretvm.example` sets exactly the six.
+  - **D**: security defaults (`SECURITY_DEFAULTS`): `MASTER_KEY_ADMIN` is
+    `false` in the SecretVM, generic and Railway templates and absent from
+    the local compose; `UPLINK_RESET_2FA`, `PROXY_STORE_CHAT_CONTEXT` and
+    `PROXY_FORWARD_CHAT_CONTEXT` are `false` wherever they appear. Each
+    pinned variable has exactly that value in the compose and its env
+    example (default or literal, quoted or with `export`) and is assigned
+    at most once per file. Railway's env example must set
+    `PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP` and `ETH_NODE_CHAIN_ID`
+    actively.
+- `pr` (pull_request CI, step "Deploy assets") generates against the fake
+  digest `sha256:000…0`, runs `check`, then the self-tests: broken
+  variants (at least one per failure mode of every rule) that must each be
+  rejected by the matching rule. Run it locally with `bash scripts/deploy-assets.sh pr`.
+
+Other pull_request checks in the same job: `check-router-digest.sh`,
+`check-compose-config.sh`, `check-compose-policy.sh`,
+`check-no-direct-payment.sh`, `check-gui-js.sh`.
 
 ---
 
@@ -1131,7 +1646,7 @@ Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).
 ```
 cmd/uplink/          entrypoint
 internal/config/     env config
-internal/keys/       sk-… generation, deterministic master key
+internal/keymaker/   sk-… generation, deterministic master key
 internal/store/      JSON state (keys, usage), atomic writes
 internal/catalog/    active.mor.org model name → blockchain id
 internal/router/     proxy-router client (sessions, balance, forward)
@@ -1146,6 +1661,13 @@ Concept sketch (optional): [`.ai-docs/UPLINK_CONCEPT.md`](../.ai-docs/UPLINK_CON
 ---
 
 [← Updates](05-updates.md) · [Guide home](README.md)
+
+## Quiet boot / log forwarding
+
+Uplink does not print config or secrets at process start (listen line only).
+Forward container stdout/stderr with your host log driver (json-file rotation
+is set in compose) or a SIEM agent. Do not scrape environment variables from
+the runtime.
 
 
 ================================================================
@@ -1174,15 +1696,25 @@ The operator guide is split into short chapters so you can open one topic at a t
 # SecretVM overlay
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
-certs; Encrypted Secrets supply only the six operator fillables (wallet /
-RPC / cookie / admin / seed / WEB_PUBLIC_URL). Form stays six; tunables
-change via compose/code, not Encrypted Secrets:
+certs; Encrypted Secrets supply only the operator fillables (wallet /
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). The form has exactly six
+fields: SecretVM makes a field of every `environment:` key (literals too),
+so the compose has no other. Tunables change via compose/code, not
+Encrypted Secrets:
 
 - **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
   ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
-  SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT). Diamond / ETH_NODE_CHAIN_ID
-  are not Uplink operator knobs.
+  CLOSE_SESSIONS_ON_EXIT), and master key admin access fixed off
+  (MASTER_KEY_ADMIN=false; bake values win over environment:). Diamond /
+  ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **2FA** is off by default and turned on with the switch on the GUI
+  Security tab (recommended); there is no variable for it. The switch is
+  kept in the uplink data volume, so it survives redeploys.
+- **2FA emergency recovery**: add `UPLINK_RESET_2FA=true` to
+  `uplink_bake_env`, redeploy once, then remove it and redeploy; 2FA comes
+  back off (see
+  [docs/06-developers.md](../../docs/06-developers.md#admin-2fa-and-recovery-codes)).
 - **Router** (`router_network_env`; godotenv -- process env wins):
   PROXY_STORE_CHAT_CONTEXT, PROXY_FORWARD_CHAT_CONTEXT,
   LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID, ETH_NODE_USE_SUBSCRIPTIONS,
@@ -1190,18 +1722,57 @@ change via compose/code, not Encrypted Secrets:
 
 Never put router PROXY_*/LOG_LEVEL_* into uplink bake docs.
 
+To change a tunable, edit the `configs:` block (`uplink_bake_env` /
+`router_network_env`) in `docker-compose.yml` (or the downloaded
+`docker-compose.secretvm.deployed.yml`). SecretVM turns every `${...}` in
+the compose file into an operator prompt and the form deliberately stays at
+the six secrets, so there are no `${VAR:-default}` overrides here (unlike
+generic / Railway / local).
+
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
-Prefer digest-pinned release assets:
+Deploy the release asset `docker-compose.secretvm.deployed.yml` (every
+image digest-pinned) and fill the form from `env.secretvm.example` (the
+six secrets):
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
+
+## Upgrading from an earlier test build
+
+Upgrades do not remove services that were dropped from the compose file
+(`router-allowance-manager`, `router-user-init`) or their volumes
+(`router_auth`, `manager_cred`, `allowance_status`, `allowance_ctl`). An
+earlier test build may also have left an extra scoped router user in the
+router's config. A production SecretVM has no shell (no SSH or serial
+access), so on SecretVM the only fix is a **fresh deploy**: a new VM with
+the release compose and the same six secrets. It clears all three.
+
+A fresh deploy starts with empty Uplink state. Generated (ephemeral) API
+keys and the 2FA state (enrollment, recovery codes) are gone, and 2FA
+comes back off. Master and Prompt keys come back from the same
+`API_KEY_SEED`. Export ephemeral keys first and re-create or import them
+afterwards, then turn 2FA on and enroll again.
+
+The `docker compose` / `docker volume rm` cleanup in the
+[generic guide](../generic/README.md#upgrading-from-an-earlier-test-build)
+is for generic hosts and dev VMs only. It does not apply to a production
+SecretVM.
+
+## Session stake (locks, not spends)
+
+Uplink talks to proxy-router over the internal network with the router's
+`COOKIE_CONTENT`; the router port is never published. A session stake is
+locked while the session runs and is returned to this wallet, held at most
+until the next UTC day. Sessions cost ETH gas. Uplink only opens
+staking-mode sessions (`directPayment` is always false). Use a dedicated
+wallet.
 
 ## H3 - single replica
 
 Wallet-bearing `proxy-router` must run as **one replica**. Multi-replica is
-unsupported on stock 7.11 (no cross-replica wallet lock).
+unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup or send journal/lease headers.
 Rely on native router expiry + Uplink housekeeping. Sessions can stay locked
@@ -1222,6 +1793,13 @@ Docker provider or Traefik service labels. Do not invent Traefik flags that
 break TEE TLS, and do not put the socket back. Buffering class for
 streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
 
+## Edge allowlist / rate limit
+
+Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
+(`/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck`; else 404 via low-priority
+deny router), and an average/burst rate limit middleware on the allowlist
+router. Router `:8082` is not published. Traefik still gets zero secrets.
+
 
 ================================================================
 
@@ -1232,35 +1810,81 @@ streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
 Caddy + Let's Encrypt; secrets via `.env` (never commit). Same GHCR image
 pair as [SecretVM](../secretvm/) and [Railway](../railway/).
 
-Prefer digest-pinned release assets:
+Deploy the release assets `docker-compose.generic.deployed.yml` (every
+image digest-pinned) and `env.generic.example` (copy to `.env`):
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## Var ownership
 
-Form/`.env` stays the six operator fillables (+ `PUBLIC_HOST` for Caddy).
-Tunables change via compose/code:
+Form/`.env` stays the operator fillables (+ `PUBLIC_HOST` for Caddy).
+Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
+keeps the default; set one in `.env` to override (see `env.example`).
+Master key admin access defaults to off (`MASTER_KEY_ADMIN`, default
+false); turning it on weakens admin security. 2FA is off by default and
+turned on with the switch on the GUI Security tab (recommended; no variable
+for it; kept in the data volume). 2FA emergency recovery:
+`UPLINK_RESET_2FA=true` for one restart, then remove it (2FA comes back
+off).
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
-  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router** (proxy-router process env): PROXY_STORE_CHAT_CONTEXT,
   PROXY_FORWARD_CHAT_CONTEXT, LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID,
   ETH_NODE_USE_SUBSCRIPTIONS, BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS,
   MOR_TOKEN_ADDRESS. Never describe router PROXY_*/LOG_LEVEL_* as Uplink knobs.
 
+## Upgrading from an earlier test build
+
+`docker compose up` without `--remove-orphans` does not remove services
+that were dropped from the compose file (`router-allowance-manager`,
+`router-user-init`) or their volumes. On a generic host or dev VM you can
+clean up in place. Run this in the deploy directory, with the same `-f` and
+`--env-file` flags you deploy with. Docker prefixes volume names with the
+compose project name:
+
+```bash
+docker compose up -d --remove-orphans
+docker volume rm <project>_router_auth <project>_manager_cred \
+  <project>_allowance_status <project>_allowance_ctl
+```
+
+Also delete `router.auth` from the Uplink data volume (`/data`): the
+router credential an earlier test build wrote there. The current build
+does not read it. An earlier test build may also have left an extra scoped
+router user in the router's config: remove it, or do a fresh deploy if
+unsure (a fresh deploy clears both). On a production SecretVM
+(no shell) a fresh deploy is the only fix; see
+[deploy/secretvm](../secretvm/README.md#upgrading-from-an-earlier-test-build).
+
+A fresh deploy starts with empty Uplink state. Generated (ephemeral) API
+keys and the 2FA state (enrollment, recovery codes) are gone, and 2FA
+comes back off. Master and Prompt keys come back from the same
+`API_KEY_SEED`. Export ephemeral keys first and re-create or import them
+afterwards, then turn 2FA on and enroll again.
+
+## Session stake (locks, not spends)
+
+Uplink talks to proxy-router over the internal network with the router's
+`COOKIE_CONTENT`; the router port is never published. A session stake is
+locked while the session runs and is returned to this wallet, held at most
+until the next UTC day. Sessions cost ETH gas. Uplink only opens
+staking-mode sessions (`directPayment` is always false). Use a dedicated
+wallet.
+
 ## H3 - single replica
 
 Wallet-bearing `proxy-router` must run as **one replica**. Multi-replica is
-unsupported on stock 7.11.
+unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked
-until native expiry or manual admin/`/node` close.
+until native expiry or a manual close from the GUI.
 
 ## L1 - privacy env
 
@@ -1271,6 +1895,14 @@ honored; live acceptance pending**). Not TEE privacy.
 
 Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
 
+## Edge allowlist / rate limit
+
+Caddy allowlists `/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck` (else 404) and
+writes JSON access logs to stdout. Stock `caddy:*-alpine` has no rate_limit
+module; put a reverse-proxy / WAF rate limit in front, or rebuild Caddy with
+`github.com/mholt/caddy-ratelimit` if you need in-process limits. Router
+`:8082` stays off the public edge.
+
 
 ================================================================
 
@@ -1280,7 +1912,7 @@ Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.14.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.15.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -1293,12 +1925,14 @@ for the Lumerin node.
 | [Generic](../generic/) | Caddy + Let's Encrypt | `.env` (not committed) |
 | **Railway (this)** | Railway HTTPS in front of uplink `:8080` | Railway **secret** vars (H4) |
 
-Production path: download digest-pinned release assets from
-[GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-(`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
-this scaffold when you cut a real deploy. Stock router pin today:
+Production path: the release ships `docker-compose.railway.deployed.yml`
+(every image digest-pinned) and `env.railway.example` on
+[GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest).
+Railway does not run compose, so use them as the reference: copy the image
+digests and variables into the Railway services instead of `:latest`.
+Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4`
 
 ## Services
 
@@ -1310,7 +1944,7 @@ See `docker-compose.yml` and `railway.toml` (non-secret knobs only).
 ## H4 - operator fillables (Railway Secrets / vars)
 
 Never put these in `railway.toml`, image labels, build args, or committed
-compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
+compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
@@ -1319,27 +1953,77 @@ compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are baked in compose (change via code only; not Railway Secrets).
+Tunables are not Railway Secrets, and Railway applies none of the compose
+defaults (see [Unset on Railway](#unset-on-railway)). 2FA is not a
+variable: it is off by default (first login is password only) and turned on
+with the switch on the GUI Security tab (recommended: scan the QR code,
+confirm a code, save the 10 recovery codes). The switch and enrollment are
+kept in `DATA_DIR`: keep it on a persistent Railway volume, or each
+redeploy starts with 2FA off. `MASTER_KEY_ADMIN=true` weakens admin
+security. 2FA emergency recovery: `UPLINK_RESET_2FA=true` for one restart,
+then remove it (2FA comes back off).
+
+Railway caveat: Railway does not run `docker-compose.yml`; each service's
+environment comes from its Railway Variables. Railway variables have no
+`${VAR:-default}` fallback (its own syntax is `${{SERVICE.VAR}}`
+references). If a compose import leaves a value as the literal
+`${VAR:-default}` string, set the plain value (the default shown here, or
+your override) in that service's Variables. The defaults apply as-is
+under `docker compose`.
+
+## Unset on Railway
+
+Railway applies neither the compose `${VAR:-default}` defaults nor its
+literal values. An unset variable takes the process's own default (Uplink
+code, Uplink image, or stock router v7.15.0):
+
+| Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
+|---|---|---|---|
+| `PROXY_STORE_CHAT_CONTEXT` (router) | `false` | `true`: chat context stored | active line, checked |
+| `LOG_LEVEL_APP` (router) | `warn` | `debug` | active line, checked |
+| `ETH_NODE_CHAIN_ID` (router) | `8453` | `0`: no check that the RPC node is on Base | active line, checked |
+| `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` (router) | Base mainnet values | router does not start | active lines |
+| `LOG_LEVEL_TCP`, `LOG_LEVEL_ETH_RPC` (router) | `warn` | `info` | commented |
+| `ENVIRONMENT` (router) | `production` | `development` (only changes how `/auth/cookie/path` resolves a relative path) | not listed |
+| `AUTH_CONFIG_FILE_PATH`, `COOKIE_FILE_PATH` (router) | `/app/data/proxy.conf`, `/app/data/.cookie` | `/app/proxy.conf`, `/app/.cookie` (outside a volume mounted at `/app/data`) | not listed; set both if you mount `/app/data` |
+| `TRUSTED_PROXY_CIDR` (uplink) | `172.28.0.0/16` | none: `X-Forwarded-For` ignored, lockout keys on the peer address | not listed |
+| `DATA_DIR` (uplink) | `/data` | `/data` (image default) | not listed |
+
+Same when unset: `MASTER_KEY_ADMIN`, `UPLINK_RESET_2FA` (both `false`),
+`PROXY_FORWARD_CHAT_CONTEXT`, `ETH_NODE_USE_SUBSCRIPTIONS` (both `false`),
+`SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`,
+`ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `ROUTER_URL`.
+`scripts/deploy-assets.sh` fails if a checked line is commented out.
+
 Keep ownership separate:
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
-  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router**: PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR (see L1 below).
   Never put router PROXY_*/LOG_LEVEL_* into Uplink bake docs.
 
 No wallet material in logs or (future) journals.
 
+## Session stake (locks, not spends)
+
+Uplink talks to proxy-router over the internal network with the router's
+`COOKIE_CONTENT`; the router port is never published. A session stake is
+locked while the session runs and is returned to this wallet, held at most
+until the next UTC day. Sessions cost ETH gas. Uplink only opens
+staking-mode sessions (`directPayment` is always false). Use a dedicated
+wallet.
+
 ## H3 - single replica (wallet-bearing proxy-router)
 
 This overlay **requires a single replica** for the wallet-bearing
 `proxy-router` service. Multi-replica is **explicitly unsupported** (no
-cross-replica wallet lock on stock 7.11).
+cross-replica wallet lock on the stock router).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.15.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -1349,24 +2033,27 @@ The router can do gateway-managed session cleanup. Uplink does not use it:
 - Keep the native expiry loop. Do not assume a heartbeat/lease.
 - Misconfiguration blast radius: sessions may not expire/cleanup as
   operators expect; collateral can remain locked until native expiry or
-  manual close via admin/`/node` (admin-gated).
+  manual close from the GUI (or admin-gated `/node`).
 - Treat cleanup as **native router expiry + Uplink housekeeping** only.
 
 ## L1 - privacy env honesty
 
-Compose sets on `proxy-router`:
+Compose sets these on `proxy-router`, but Railway does not apply them, so
+set them as `proxy-router` service variables:
 
-- `PROXY_STORE_CHAT_CONTEXT=false`
-- `PROXY_FORWARD_CHAT_CONTEXT=false`
+- `PROXY_STORE_CHAT_CONTEXT=false` (unset: the router stores chat context)
+- `PROXY_FORWARD_CHAT_CONTEXT=false` (unset: also false)
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
+  (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.14.0 digest until verified.
+privacy on the pinned v7.15.0 digest until verified.
 
 ## M1 / keep list
 
-- `/node/*` remains **admin-gated** (Basic admin or Master Bearer)
-- Keep: Basic admin, `sk-` keys, soft-revoke, `GET /v1/usage`,
+- `/node/*` remains **admin-gated** (admin session, or the Master key with
+  `MASTER_KEY_ADMIN=true`), with a block list (see docs/06-developers.md)
+- Keep: password + session-cookie admin login (Basic auth is refused), `sk-` keys, soft-revoke, `GET /v1/usage`,
   `gateway_models.json`, GHCR release-asset deploy
 
 ## Operator checklist
@@ -1374,12 +2061,25 @@ privacy on the pinned v7.14.0 digest until verified.
 | Step | Done when |
 |------|-----------|
 | **1. Project** | Railway project has uplink + proxy-router on a private network (compose plugin or two services). |
-| **2. Secrets** | H4 vars are **Railway Secrets** only; non-secrets are plain vars. |
-| **3. Digests** | Images pinned to [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) digests (not bare `:latest`). |
+| **2. Secrets + vars** | H4 vars are **Railway Secrets** only; every active line of `env.railway.example` (including `PROXY_STORE_CHAT_CONTEXT=false`, `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453`) is set as a plain var on its service. |
+| **3. Digests** | Images pinned to the digests in the [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) `docker-compose.railway.deployed.yml` (not bare `:latest`). |
 | **4. Replicas** | `proxy-router` replicas = **1** (H3). |
 | **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS -> `:8080`). |
-| **6. GUI + fund** | `https://<public>/gui` works; wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |
+| **6. GUI + fund** | `https://<public>/gui` works; 2FA turned on with the Security tab switch (recommended); wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |
 
 **Done** when GUI login works and Probe returns a completion. Bootstrap summary:
 [docs/02-bootstrap.md -- First start -- Railway](../../docs/02-bootstrap.md#first-start--railway).
+
+## Platform edge limits (Railway)
+
+Railway terminates TLS and exposes only the uplink service port you bind
+(`8080`). There is no Traefik/Caddy file provider on this path, so Uplink
+cannot enforce path allowlists or login rate limits at the platform edge.
+
+What Railway can / cannot do for this overlay:
+
+- Can: private networking between uplink and proxy-router; single public port.
+- Cannot (from this compose): Traefik-style path allowlist, access-log middleware,
+  or router-login rate limit. Rely on Railway dashboard networking + Uplink
+  admin lockout (application layer). Do not publish proxy-router `:8082`.
 

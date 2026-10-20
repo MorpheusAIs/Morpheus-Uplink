@@ -31,9 +31,10 @@ name: CI/CD
 #   deploy/            entrypoint in image + SecretVM/generic release assets
 #   docker-compose.local.yml   CI ASCII / local-stack contract
 #   this workflow      CI itself
+#   scripts/**, .env.example   pull_request only (checks, e2e, asset check)
 #
 # Does NOT trigger (examples): docs/**, README.md, AGENTS.md, DISCLAIMER.md,
-# LICENSE, NOTICE, llms*.txt, scripts/**, .ai-docs/**, .env.example
+# LICENSE, NOTICE, llms*.txt, .ai-docs/** (and scripts/** on push)
 #
 # workflow_dispatch always runs (manual prerelease / force publish).
 on:
@@ -48,6 +49,10 @@ on:
       - "Dockerfile"
       - "docker-compose.local.yml"
       - ".github/workflows/build.yml"
+      # The scripts CI runs (asset generator, checks, e2e) and the env example
+      # the asset check reads. PR only: they do not cut a version on their own.
+      - "scripts/**"
+      - ".env.example"
   push:
     branches: [main]
     paths:
@@ -103,9 +108,8 @@ jobs:
               echo "No findings."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          # Keep the gate visible in logs; do not block stock-7.11 hardening PRs on
-          # pre-existing geth call-graph findings.
-          exit 0
+          # Fail the job on findings (stdlib/toolchain bumps must clear the board).
+          exit "$code"
       - name: Deploy files must be ASCII (SecretVM btoa chokes on Latin1+)
         run: |
           if LC_ALL=C grep -rnP '[^\x00-\x7F]' deploy/ docker-compose.local.yml .env.example; then
@@ -130,7 +134,8 @@ jobs:
           # Every environment: assignment must be one of the six fillables.
           while IFS= read -r line; do
             [ -z "$line" ] && continue
-            key=$(echo "$line" | sed -nE 's/^[[:space:]]*-[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p')
+            # grep -n output: strip the "N:" prefix before reading the key.
+            key=$(echo "$line" | sed -nE 's/^[0-9]+:[[:space:]]*-[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p')
             [ -z "$key" ] && continue
             if ! echo "$key" | grep -qE "^(${ALLOWED})$"; then
               echo "❌ environment: key not in six-secret allowlist: $line"
@@ -156,6 +161,32 @@ jobs:
             fi
           done
           echo "✅ SecretVM compose prompts for six secrets only; non-secrets stay in configs:"
+      - name: Templates must not publish router ports 8082 or 3333
+        run: |
+          bash scripts/check-router-ports.sh
+          bash scripts/check-router-ports.sh scripts/testdata/ports-bad.yml
+          bash scripts/check-router-ports.sh scripts/testdata/netmode-host-router.yml scripts/testdata/netmode-host-uplink.yml scripts/testdata/netmode-host-renamed.yml scripts/testdata/netmode-host-renamed-uplink.yml
+          bash scripts/check-router-ports.sh --ok scripts/testdata/ports-ok.yml
+          # A fixture that fails to render is an error, never a rejection.
+          if bash scripts/check-router-ports.sh scripts/testdata/ports-unrenderable.yml; then
+            echo "port guard counted an unrenderable fixture as rejected"; exit 1
+          fi
+          echo "OK: port guard JSON fixtures"
+      - name: Router image digest must stay pinned
+        run: bash scripts/check-router-digest.sh
+      - name: Compose templates must render
+        run: bash scripts/check-compose-config.sh
+      - name: Compose policy (uplink PID 1 stop grace, no router healthcheck gate)
+        run: bash scripts/check-compose-policy.sh
+      - name: Uplink never requests direct-payment sessions
+        run: bash scripts/check-no-direct-payment.sh
+      - name: GUI script must parse
+        run: bash scripts/check-gui-js.sh
+      - name: Deploy assets (digest pins, env sets, env examples; same script as release)
+        # Generates the release assets against a fake digest, checks them and
+        # their templates, then proves every failure mode fires.
+        run: bash scripts/deploy-assets.sh pr
+
 
   pr-image-smoke:
     name: PR image smoke
@@ -183,6 +214,34 @@ jobs:
             test ! -u /usr/local/bin/uplink
           '
           echo "+ Non-root drop (uplink uid 10001) asserted - no GHCR push on PR"
+
+  e2e-mock-router:
+    name: E2E (stateful mock router)
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image (no registry push)
+        run: docker build -t uplink:e2e --build-arg VERSION=e2e .
+      - name: SecretVM stack with a stateful mock router (session logic)
+        # deploy/secretvm compose + scripts/testdata overlay; proxy-router is
+        # a stateful mock. Boot reconcile (adopt, close, cap, list failure,
+        # slow close, case-only ids), graceful stop, no direct payment.
+        run: bash scripts/e2e-mock-router.sh
+
+  e2e-real-router:
+    name: E2E smoke (real pinned v7.15.0 router)
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image (no registry push)
+        run: docker build -t uplink:e2e --build-arg VERSION=e2e .
+      - name: Real router + Uplink (throwaway key, no secrets)
+        # Pinned router digest from deploy/secretvm. No funded wallet, so no
+        # session opens: boot, router reachability, /admin/status, empty
+        # reconcile and graceful stop only.
+        run: bash scripts/e2e-real-router.sh
 
   generate-tag:
     name: Generate Tag
@@ -260,7 +319,7 @@ jobs:
   publish:
     name: Build & Publish Image
     runs-on: ubuntu-latest
-    needs: [generate-tag]
+    needs: [generate-tag, e2e-mock-router, e2e-real-router]
     if: github.event_name != 'pull_request'
     permissions:
       contents: write
@@ -285,6 +344,18 @@ jobs:
             TAGS="${TAGS},${IMAGE_NAME}:latest"
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+      # Before anything is published: build the release asset set against a
+      # placeholder digest and run every check on it (pins, TODO, variables,
+      # env examples, security defaults). The real digest exists only after
+      # the multi-arch push, so the step after the push pins and checks it.
+      - name: Check deploy assets before publishing (placeholder digest)
+        run: |
+          PRE="${RUNNER_TEMP}/deploy-assets-precheck"
+          PLACEHOLDER="sha256:$(printf '0%.0s' $(seq 64))"
+          mkdir -p "$PRE"
+          bash scripts/deploy-assets.sh generate "${IMAGE_NAME}" "${PLACEHOLDER}" "$PRE"
+          bash scripts/deploy-assets.sh check "${IMAGE_NAME}" "${PLACEHOLDER}" "$PRE"
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -303,17 +374,13 @@ jobs:
         run: |
           DIGEST=$(docker buildx imagetools inspect "${IMAGE_NAME}:${VTAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          pin_uplink() {
-            sed -E "s|image: ${IMAGE_NAME}[^[:space:]]*|image: ${IMAGE_NAME}@${DIGEST}|" "$1" > "$2"
-          }
-          pin_uplink deploy/secretvm/docker-compose.yml docker-compose.secretvm.deployed.yml
-          pin_uplink deploy/generic/docker-compose.yml docker-compose.generic.deployed.yml
-          cp deploy/secretvm/env.template env.secretvm.example
-          cp deploy/generic/env.example env.generic.example
+          # Same script and checks as the pull_request job (deploy-assets.sh pr).
+          bash scripts/deploy-assets.sh generate "${IMAGE_NAME}" "${DIGEST}" .
+          bash scripts/deploy-assets.sh check "${IMAGE_NAME}" "${DIGEST}" .
           {
             echo "✅ Image digest: ${DIGEST}"
             echo '```yaml'
-            grep 'image: ' docker-compose.secretvm.deployed.yml docker-compose.generic.deployed.yml
+            grep 'image: ' docker-compose.*.deployed.yml
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -324,8 +391,10 @@ jobs:
           path: |
             docker-compose.secretvm.deployed.yml
             docker-compose.generic.deployed.yml
+            docker-compose.railway.deployed.yml
             env.secretvm.example
             env.generic.example
+            env.railway.example
 
       - name: Create GitHub release
         if: env.IS_RELEASE == 'true'
@@ -339,13 +408,16 @@ jobs:
             echo ""
             echo "- SecretVM: \`docker-compose.secretvm.deployed.yml\` + \`env.secretvm.example\`"
             echo "- Any Docker VPS: \`docker-compose.generic.deployed.yml\` + \`env.generic.example\`"
+            echo "- Railway (reference): \`docker-compose.railway.deployed.yml\` + \`env.railway.example\`"
             echo ""
             echo "Operator guide: https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/README.md"
           } > release-notes.md
           gh release create "${VTAG}" \
             docker-compose.secretvm.deployed.yml \
             docker-compose.generic.deployed.yml \
+            docker-compose.railway.deployed.yml \
             env.secretvm.example \
             env.generic.example \
+            env.railway.example \
             --title "${VTAG}" \
             --notes-file release-notes.md

@@ -78,7 +78,7 @@ Response: `{"usage":[…]}` — rows with `day`, `keyId`, `model`, `requests`,
 **WARN — scoping:** Prompt and generated keys see **only their own** rows
 (`keyId` matches the caller). Master Bearer returns the **full instance**
 (same table as `GET /admin/usage`). `keyId` is a public id (`master`,
-`prompt`, or generated id) — never an `sk-` secret. Admin Basic does **not**
+`prompt`, or generated id) — never an `sk-` secret. Basic auth does **not**
 unlock `/v1/usage`.
 
 ---

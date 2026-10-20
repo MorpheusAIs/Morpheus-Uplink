@@ -1,0 +1,38 @@
+# Overlay for scripts/e2e-real-router.sh. Applied ON TOP of
+# deploy/secretvm/docker-compose.yml: proxy-router stays the pinned
+# morpheus-lumerin-node image from the template. Only swaps / test knobs:
+#   - uplink -> local image, fast healthcheck
+#   - bake.env: the SecretVM content (2FA stays off by default, so the
+#     curl-driven checks log in with the password)
+#   - proxy-router: LOG_LEVEL_APP=info so its request log can be checked
+#   - traefik -> disabled (needs SecretVM certs)
+services:
+  uplink:
+    image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
+    pull_policy: never
+    healthcheck:
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  proxy-router:
+    environment:
+      # Router request log ([HTTP-REQ]) is info level; the e2e checks it.
+      - LOG_LEVEL_APP=info
+
+  traefik:
+    profiles: ["disabled"]
+
+configs:
+  uplink_bake_env:
+    content: |-
+      SESSION_DURATION_SECONDS=600
+      SESSION_FAILOVER=true
+      ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
+      GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
+      HOUSEKEEPING=true
+      ROUTER_URL=http://proxy-router:8082
+      DATA_DIR=/data
+      TRUSTED_PROXY_CIDR=172.28.0.0/16
+      MASTER_KEY_ADMIN=false

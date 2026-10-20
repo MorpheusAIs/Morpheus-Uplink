@@ -1,0 +1,5 @@
+# Fixture: uplink service on host network must be rejected by check-router-ports.sh
+services:
+  uplink:
+    image: ghcr.io/morpheusais/uplink:latest
+    network_mode: host

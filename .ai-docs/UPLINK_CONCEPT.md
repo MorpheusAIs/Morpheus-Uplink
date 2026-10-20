@@ -150,8 +150,18 @@ gateway mode"), at which point Uplink shrinks to just GUI + metering, or disappe
 2. **Stake posture:** GUI slider (economy / balanced / always-warm) with real economics
    shown — session stake scales with duration × price-per-second.
 3. **Router exposure:** :8082 hidden; admin-gated `/node/*` passthrough (injects router
-   basic auth) is the only path to it, including `/node/swagger/index.html`. Only 443
-   is public. A consumer node needs **no inbound :3333**.
+   basic auth) is the only path to it, including `/node/swagger/index.html`. The
+   passthrough normalizes the path (one %-decode; encoded separators, dot and empty
+   segments refused), matches case-insensitively and refuses, for every method with
+   an audit event: `/blockchain/send/*`, `/blockchain/approve`,
+   router file-access routes (`/ipfs*`, `/v1/audio/transcriptions`,
+   `/docker/build*`, `/docker/container/start`), `/proxy/provider/ping`,
+   `/proxy/sessions/initiate` and the session-open routes (`/blockchain/sessions`,
+   `/blockchain/{bids,models}/{id}/session`); and, for every method except GET and
+   HEAD, `/wallet*`, `/auth*`, `/config*` and `/blockchain/{providers,models,bids}`.
+   Only GET, HEAD, POST and DELETE are forwarded. Only the normalized path is forwarded;
+   router redirects are not followed. Only 443 is public. A consumer node needs
+   **no inbound :3333**.
 4. **Tenancy:** single owner, many keys now; F&F tenancy later via per-key budgets on
    the existing per-key metering.
 5. **Endpoints:** chat completions **and** embeddings from day one (the router also
@@ -160,7 +170,9 @@ gateway mode"), at which point Uplink shrinks to just GUI + metering, or disappe
    (`sk-uplink.…`, prompt + admin, can mint/revoke subkeys) and **prompt**
    (`sk-prompt.…`, inference only, safe default for clients). Generated subkeys are
    prompt-scoped, SHA-256 at rest. GUI auth = Basic admin password; master key =
-   Bearer equivalent for automation.
+   Bearer equivalent for automation. *(Superseded: password + session-cookie
+   login, optional TOTP 2FA; Basic auth is refused. The master key is admin
+   only with `MASTER_KEY_ADMIN=true`, default off.)*
 
 ### Persistence stance (ephemeral-storage-proof)
 

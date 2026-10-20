@@ -1,18 +1,19 @@
 # Railway overlay scaffold - same GHCR image pair as SecretVM/generic.
 #
-# Images are stock digests only. Do NOT docker build the Lumerin node here.
-# Operator fillables (H4) belong in Railway Secrets / vars, never in this
-# file or railway.toml: WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED,
-# COOKIE_CONTENT, ETH_NODE_ADDRESS (RPC), WEB_PUBLIC_URL.
+# Uplink talks to proxy-router over Railway private networking with the
+# router's COOKIE_CONTENT. Router ports are never published.
 #
-# H3: single replica for wallet-bearing proxy-router (multi-replica unsupported).
-# H2 blast radius / operator notes: see deploy/railway/README.md.
+# Operator fillables (H4) in Railway Secrets / vars, never in this file:
+# WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED, COOKIE_CONTENT,
+# ETH_NODE_ADDRESS, WEB_PUBLIC_URL (wallet key and RPC go to proxy-router only).
 #
-# Privacy (L1): set / believed honored on pinned v7.14.0; live acceptance pending.
+# Railway does not run this file: no compose default or literal value below
+# applies there. Set the active lines of env.example as service variables
+# (README.md, "Unset on Railway").
 #
-# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
-# NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
-# Diamond / MOR below).
+# H3: single replica for wallet-bearing proxy-router.
+# Lumerin pin: v7.15.0 digest. The Uplink image is pinned to its digest in
+# the release assets (scripts/deploy-assets.sh).
 x-logging: &default-logging
   driver: json-file
   options:
@@ -21,50 +22,56 @@ x-logging: &default-logging
 
 services:
   uplink:
+    # Release assets pin this to the built digest (scripts/deploy-assets.sh).
     image: ghcr.io/morpheusais/uplink:latest
     restart: unless-stopped
     logging: *default-logging
-    init: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # su-exec needs these after cap_drop ALL
     cap_add:
       - CHOWN
       - SETUID
       - SETGID
+    # No init: true here: the entrypoint execs the app as PID 1 so docker stop
+    # delivers SIGTERM to it and open sessions close before exit.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     ports:
       - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # 2FA is turned on in the GUI (Security tab) and kept in DATA_DIR: keep
+      # DATA_DIR on a persistent volume, or each redeploy starts with 2FA off.
+      - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
+      # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
+      - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}
+      - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - API_KEY_SEED=${API_KEY_SEED}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - ROUTER_URL=http://proxy-router:8082
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Behavior bake (change via compose/code only -- not Railway vars forms).
-      - SESSION_DURATION_SECONDS=600
-      - SESSION_FAILOVER=true
-      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
-      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
-      - HOUSEKEEPING=true
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
+      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
+    # Start order only. The router image is FROM scratch (no shell or wget),
+    # so it has no container healthcheck; Uplink retries the router itself.
     depends_on:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -73,31 +80,26 @@ services:
     cap_drop:
       - ALL
     stop_grace_period: 45s
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/healthcheck || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    # No public port on router - only uplink reaches :8082 on the private network.
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
-      - ETH_NODE_USE_SUBSCRIPTIONS=false
+      - ETH_NODE_USE_SUBSCRIPTIONS=${ETH_NODE_USE_SUBSCRIPTIONS:-false}
       - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}
       - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      - PROXY_STORE_CHAT_CONTEXT=false
-      - PROXY_FORWARD_CHAT_CONTEXT=false
-      - LOG_LEVEL_APP=warn
-      - LOG_LEVEL_TCP=warn
-      - LOG_LEVEL_ETH_RPC=warn
+      - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
+      - COOKIE_FILE_PATH=/app/data/.cookie
+      - ENVIRONMENT=production
+      - PROXY_STORE_CHAT_CONTEXT=${PROXY_STORE_CHAT_CONTEXT:-false}
+      - PROXY_FORWARD_CHAT_CONTEXT=${PROXY_FORWARD_CHAT_CONTEXT:-false}
+      - LOG_LEVEL_APP=${LOG_LEVEL_APP:-warn}
+      - LOG_LEVEL_TCP=${LOG_LEVEL_TCP:-warn}
+      - LOG_LEVEL_ETH_RPC=${LOG_LEVEL_ETH_RPC:-warn}
     volumes:
       - router_data:/app/data
-    # H3: deploy with replicas=1 for this wallet-bearing service.
 
 volumes:
   uplink_data:

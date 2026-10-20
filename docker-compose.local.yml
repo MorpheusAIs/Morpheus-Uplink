@@ -7,10 +7,10 @@
 # Gateway:  http://localhost:8080          (OpenAI-compatible /v1, GUI at /gui)
 # Router:   http://localhost:8082          (only bound to localhost for debugging)
 #
-# Privacy env (L1): set / believed honored on pinned v7.14.0; live acceptance
+# Privacy env (L1): set / believed honored on pinned v7.15.0; live acceptance
 # pending. Do not market as TEE privacy.
 #
-# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
+# Lumerin pin note: tag v7.15.0 is Lumerin main (gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453).
 x-logging: &default-logging
   driver: json-file
@@ -20,7 +20,7 @@ x-logging: &default-logging
 
 services:
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -29,12 +29,6 @@ services:
     cap_drop:
       - ALL
     stop_grace_period: 45s
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/healthcheck || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
@@ -47,12 +41,15 @@ services:
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${ROUTER_AUTH}
       - WEB_PUBLIC_URL=http://localhost:8082
+      - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
+      - COOKIE_FILE_PATH=/app/data/.cookie
+      - ENVIRONMENT=production
       # Privacy (L1: set / believed honored; live acceptance pending).
-      - PROXY_STORE_CHAT_CONTEXT=false
-      - PROXY_FORWARD_CHAT_CONTEXT=false
-      - LOG_LEVEL_APP=warn
-      - LOG_LEVEL_TCP=warn
-      - LOG_LEVEL_ETH_RPC=warn
+      - PROXY_STORE_CHAT_CONTEXT=${PROXY_STORE_CHAT_CONTEXT:-false}
+      - PROXY_FORWARD_CHAT_CONTEXT=${PROXY_FORWARD_CHAT_CONTEXT:-false}
+      - LOG_LEVEL_APP=${LOG_LEVEL_APP:-warn}
+      - LOG_LEVEL_TCP=${LOG_LEVEL_TCP:-warn}
+      - LOG_LEVEL_ETH_RPC=${LOG_LEVEL_ETH_RPC:-warn}
       # Consumer mode: no MODELS_CONFIG_CONTENT, nothing served on :3333.
     ports:
       - "127.0.0.1:8082:8082"
@@ -63,7 +60,6 @@ services:
     build: .
     restart: unless-stopped
     logging: *default-logging
-    init: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -73,6 +69,8 @@ services:
       - CHOWN
       - SETUID
       - SETGID
+    # No init: true here: the entrypoint execs the app as PID 1 so docker stop
+    # delivers SIGTERM to it and open sessions close before exit.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
@@ -80,26 +78,31 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    # Start order only. The router image is FROM scratch (no shell or wget),
+    # so it has no container healthcheck; Uplink retries the router itself.
     depends_on:
       - proxy-router
     environment:
       - ROUTER_URL=http://proxy-router:8082
-      - ROUTER_AUTH=${ROUTER_AUTH}
+      - ROUTER_AUTH=${ROUTER_AUTH:-}
+      - COOKIE_CONTENT=${ROUTER_AUTH}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - WEB_PUBLIC_URL=http://localhost:8080
+      - UPLINK_DEV_HTTP=true
+      - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
-      # Behavior bake (change via compose/code only).
-      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
-      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
-      - SESSION_DURATION_SECONDS=600
-      - SESSION_FAILOVER=true
-      - HOUSEKEEPING=true
+      # Tunables: override via env / .env; defaults shown.
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - HOUSEKEEPING=${HOUSEKEEPING:-true}
+      # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
+      - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}
       - DATA_DIR=/data
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - uplink_data:/data
 

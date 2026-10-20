@@ -1,0 +1,5 @@
+# Fixture: router service on host network must be rejected by check-router-ports.sh
+services:
+  proxy-router:
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0
+    network_mode: host

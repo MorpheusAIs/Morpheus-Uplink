@@ -13,9 +13,9 @@
 # Only :80 and :443 need to be public. Router :8082 stays internal.
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* are set and believed honored on
-# pinned v7.14.0; live acceptance pending. Do not market as TEE privacy.
+# pinned v7.15.0; live acceptance pending. Do not market as TEE privacy.
 #
-# Lumerin pin note: tag v7.14.0 is Lumerin main (includes #889 gateway caps).
+# Lumerin pin note: tag v7.15.0 is Lumerin main (gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
 # Diamond / MOR below).
 #
@@ -28,7 +28,7 @@ x-logging: &default-logging
 
 services:
   caddy:
-    image: caddy:2.8-alpine
+    image: caddy:2.9.1-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
     restart: unless-stopped
     logging: *default-logging
     ports:
@@ -48,51 +48,55 @@ services:
       - uplink
 
   uplink:
+    # Release assets pin this to the built digest (scripts/deploy-assets.sh).
     image: ghcr.io/morpheusais/uplink:latest
     restart: unless-stopped
     logging: *default-logging
-    init: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # su-exec needs these after cap_drop ALL
     cap_add:
       - CHOWN
       - SETUID
       - SETGID
+    # No init: true here: the entrypoint execs the app as PID 1 so docker stop
+    # delivers SIGTERM to it and open sessions close before exit.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
+      # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
+      - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}
+      - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - API_KEY_SEED=${API_KEY_SEED}
-      # Same user:pass as the router (ROUTER_AUTH in .env.example works if you also set COOKIE_CONTENT=...).
+      # Same user:pass as the router (ROUTER_AUTH works too).
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
-      - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Behavior bake (change via compose/code only -- not .env forms).
-      - SESSION_DURATION_SECONDS=600
-      - SESSION_FAILOVER=true
-      - ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
-      - GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
-      - HOUSEKEEPING=true
+      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
+      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
+      - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
+      - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
+      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data
     networks:
       - web
+    # Start order only. The router image is FROM scratch (no shell or wget),
+    # so it has no container healthcheck; Uplink retries the router itself.
     depends_on:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -101,33 +105,29 @@ services:
     cap_drop:
       - ALL
     stop_grace_period: 45s
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/healthcheck || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
-      - ETH_NODE_USE_SUBSCRIPTIONS=false
+      - ETH_NODE_USE_SUBSCRIPTIONS=${ETH_NODE_USE_SUBSCRIPTIONS:-false}
       - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}
       - DIAMOND_CONTRACT_ADDRESS=${DIAMOND_CONTRACT_ADDRESS:-0x6aBE1d282f72B474E54527D93b979A4f64d3030a}
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
-      - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
+      - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to admin:password}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Privacy (L1: set / believed honored; live acceptance pending).
-      - PROXY_STORE_CHAT_CONTEXT=false
-      - PROXY_FORWARD_CHAT_CONTEXT=false
-      - LOG_LEVEL_APP=warn
-      - LOG_LEVEL_TCP=warn
-      - LOG_LEVEL_ETH_RPC=warn
+      - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
+      - COOKIE_FILE_PATH=/app/data/.cookie
+      - ENVIRONMENT=production
+      - PROXY_STORE_CHAT_CONTEXT=${PROXY_STORE_CHAT_CONTEXT:-false}
+      - PROXY_FORWARD_CHAT_CONTEXT=${PROXY_FORWARD_CHAT_CONTEXT:-false}
+      - LOG_LEVEL_APP=${LOG_LEVEL_APP:-warn}
+      - LOG_LEVEL_TCP=${LOG_LEVEL_TCP:-warn}
+      - LOG_LEVEL_ETH_RPC=${LOG_LEVEL_ETH_RPC:-warn}
     volumes:
       - router_data:/app/data
     networks:
       - web
-    # H3: single replica for this wallet-bearing proxy-router (multi-replica unsupported).
+    # Intentionally no ports: only uplink can reach :8082.
 
 volumes:
   uplink_data:
@@ -138,12 +138,27 @@ volumes:
 networks:
   web:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 configs:
   caddyfile:
     content: |
       {$PUBLIC_HOST} {
-        reverse_proxy uplink:8080 {
-          flush_interval -1
+        log {
+          output stdout
+          format json
+        }
+        @allowed {
+          path / /gui /gui/* /v1/* /admin/* /healthcheck
+        }
+        handle @allowed {
+          reverse_proxy uplink:8080 {
+            flush_interval -1
+          }
+        }
+        handle {
+          respond 404
         }
       }

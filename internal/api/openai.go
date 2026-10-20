@@ -9,7 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
@@ -114,7 +116,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		// another stake while a usable session is still open on-chain.
 		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
 		if err != nil {
-			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, sessionID, err)
+			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 			if !isSessionDeadError(err) {
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
@@ -131,7 +133,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			sessionID = ensured.SessionID
 			res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
 			if err != nil {
-				log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, sessionID, err)
+				log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
 			}
@@ -174,6 +176,25 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable: "+err.Error())
 		return
 	}
+	s.writeModelList(w, models)
+}
+
+// handleAdminModels is the same list for the admin GUI (session cookie). The
+// GUI only holds masked API keys, so it must not call /v1/models itself.
+// The catalog comes from ACTIVE_MODELS_URL, not the router.
+func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
+	models, err := s.catalog.List()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": "model catalog fetch failed: " + err.Error(),
+			"kind":  "catalog_fetch",
+		})
+		return
+	}
+	s.writeModelList(w, models)
+}
+
+func (s *Server) writeModelList(w http.ResponseWriter, models []catalog.Model) {
 	defaultDur := s.cfg.SessionDurationSec
 	if defaultDur <= 0 {
 		defaultDur = 600
@@ -208,9 +229,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // handleUsageV1 returns usage rows for the calling API key.
 //
-// WARN: Master Bearer is an intentional full-instance usage reader (ops:
-// Seraph can poll without admin Basic). Prompt and generated keys never see
-// other keys' rows — filter is keyId == caller. keyId is a public identifier
+// WARN: Master Bearer is an intentional full-instance usage reader (ops may
+// poll without admin session). Prompt and generated keys never see other
+// keys' rows — filter is keyId == caller. keyId is a public identifier
 // (master / prompt / generated id), never an sk- secret.
 func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
 	caller := r.Header.Get("X-Uplink-Key-Id")

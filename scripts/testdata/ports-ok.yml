@@ -1,0 +1,14 @@
+services:
+  x:
+    image: alpine:3.20
+    ports:
+      - "127.0.0.1:8082:8082"
+      - "::1:3333:3333"
+    environment:
+      - ROUTER_URL=http://proxy-router:8082
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
+  # Unrelated helper on host network is out of scope (router/uplink only).
+  helper:
+    image: alpine:3.20
+    network_mode: host

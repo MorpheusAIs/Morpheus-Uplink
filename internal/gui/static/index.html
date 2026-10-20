@@ -256,7 +256,7 @@
   .sys-line a.ver:hover { color: var(--green-light); }
   .sys-line .ok { color: var(--ok); font-weight: 600; }
   .sys-line .bad { color: var(--bad); font-weight: 600; }
-  .sys-line .sep { color: var(--border); padding: 0 10px; user-select: none; }
+  .sys-line .sep { color: var(--muted); padding: 0 10px; user-select: none; }
   .sys-line .sessions { color: var(--text); font-variant-numeric: tabular-nums; }
   .mor-grid {
     display: grid;
@@ -316,6 +316,17 @@
   .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
   .note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.45; }
   .hidden { display: none !important; }
+  .tf-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+  .tf-switch input { width: 18px; height: 18px; margin: 0; }
+  .otp-input {
+    width: 9ch;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 1.15rem;
+    letter-spacing: 0.3em;
+    text-align: center;
+  }
+  .msg-ok { color: var(--green-light, #4c4); }
+  .msg-err { color: var(--warn, #c90); }
   .callout {
     margin-top: 12px; padding: 14px 16px; border-radius: var(--radius);
     background: var(--green-bg); border: 1px solid rgba(32, 220, 142, 0.35);
@@ -351,7 +362,46 @@
   }
   .connect-hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
   .connect-hint code { font-size: 11px; }
-  #tab-status .mor-grid { margin-top: 14px; }
+  #tab-status .mor-grid { margin-top: 4px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #tab-status .sys-line .dot { font-size: 12px; margin-right: 6px; }
+  #tab-status .sys-line .dot.ok { color: var(--ok); }
+  #tab-status .sys-line .dot.bad { color: var(--bad); }
+  body.enroll-only .tab:not([data-tab="security"]) { display: none; }
+  .tiles-head { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 10px; min-height: 18px; font-size: 12px; color: var(--muted); }
+  .tile {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px; min-width: 0;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 6px; }
+  .tile .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; word-break: break-all; }
+  .tile .v small { font-size: 13px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+  .tile .sub { font-size: 12px; color: var(--muted); min-height: 1em; }
+  .tile .sub.msg-err { color: var(--warn, #c90); }
+  .tile button { align-self: flex-start; font-size: 12px; padding: 6px 12px; margin-top: 4px; }
+  .tip {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--muted); cursor: help; font-size: 13px; line-height: 1; text-transform: none;
+    letter-spacing: 0; font-weight: 400; border-radius: 50%; outline: none;
+  }
+  .tip:hover, .tip:focus-visible { color: var(--green-light); }
+  .tip:focus-visible { box-shadow: 0 0 0 2px rgba(32, 220, 142, 0.45); }
+  .tip[data-tip]:hover::after, .tip[data-tip]:focus::after {
+    content: attr(data-tip); position: absolute; z-index: 20; top: calc(100% + 6px); right: -8px;
+    width: max-content; max-width: 280px; white-space: normal; text-align: left;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.4;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  }
+  details.fold > summary {
+    cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--green); list-style-position: inside;
+  }
+  .sep-dot { color: var(--muted); padding: 0 6px; }
+  #fundSection, #supportSection { padding-top: 12px; padding-bottom: 12px; }
+  @media (max-width: 640px) {
+    #tab-status .mor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
 
   .disk-card { margin-bottom: 0; }
   .disk-banner {
@@ -423,7 +473,6 @@
     white-space: pre-wrap;
   }
 
-  #tab-status .fund-callout { margin-top: 16px; }
   #tab-status .support-actions { margin-top: 4px; }
   /* Keep model picker compact — full-bleed dropdowns get messy on desktop. */
   .connect-model {
@@ -747,6 +796,17 @@
     padding: 4px 10px; font-size: 11px;
   }
   button.danger-ghost:hover { border-color: #ef4444; color: #fecaca; filter: none; }
+  /* 2FA manage buttons: same size as the ghost Regenerate button. */
+  #twoFactorManage button.danger-ghost { padding: 8px 14px; font-size: 13px; }
+  /* Security alerts: time | action | details, one aligned row per event. */
+  .alerts-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .alerts-table td { padding: 4px 10px 4px 0; vertical-align: top; text-align: left; }
+  .alerts-table td + td { border-left: 1px solid var(--line, rgba(127,127,127,.3)); padding-left: 10px; }
+  .alerts-table .alert-at { font-family: 'IBM Plex Mono', ui-monospace, monospace; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .alerts-table .alert-kind { white-space: nowrap; }
+  .alerts-table .alert-detail { word-break: break-word; }
+  .enroll-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: 100%; }
+  .enroll-qr #enrollSecret { margin: 0; max-width: 340px; text-align: center; word-break: break-all; white-space: pre-line; font-family: 'IBM Plex Mono', ui-monospace, monospace; }
   td.model-cell { min-width: 120px; }
   td.model-cell .model-name { display: block; font-weight: 600; color: var(--text); }
   td.model-cell code { font-size: 10px; color: var(--muted); }
@@ -802,11 +862,26 @@
       <div class="eyebrow">Establish connection</div>
       <h2>Operator.<em>_</em></h2>
       <p>Dial into your personal Morpheus gateway. One password opens the console; API keys live behind it.</p>
-      <form class="row" onsubmit="event.preventDefault(); login();">
-        <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
-        <button type="submit">Connect</button>
+      <form id="loginStepPassword" class="stack" onsubmit="event.preventDefault(); login();" style="gap:8px">
+        <div class="row">
+          <input id="pw" type="password" placeholder="admin password" style="flex:1;min-width:160px" autocomplete="current-password">
+          <button type="submit">Connect</button>
+        </div>
       </form>
-      <div class="note" id="loginMsg"></div>
+      <form id="loginStepCode" class="stack hidden" onsubmit="event.preventDefault(); loginWithCode();" style="gap:8px">
+        <label for="totpCode" class="note" style="margin:0">Two-factor code</label>
+        <div class="row">
+          <input id="totpCode" class="otp-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+                 maxlength="6" pattern="\d{6}" placeholder="123456" aria-describedby="loginCodeHint">
+          <button type="submit">Verify</button>
+        </div>
+        <div class="row" style="gap:12px">
+          <button type="button" class="ghost" onclick="toggleRecoveryCode()" id="recoveryToggle">Use a recovery code</button>
+          <button type="button" class="ghost" onclick="loginBack()">Back</button>
+        </div>
+        <p class="note" id="loginCodeHint" style="margin:0">Enter the 6-digit code from your authenticator app.</p>
+      </form>
+      <div class="note" id="loginMsg" role="status"></div>
     </div>
     <div class="login-visual">
       <img src="uplink-phone.png" alt="Matrix green rotary telephone — Uplink">
@@ -820,19 +895,31 @@
     <button class="tab" data-tab="keys" onclick="showTab('keys')">API Keys</button>
     <button class="tab" data-tab="playground" onclick="showTab('playground')">Probe</button>
     <button class="tab" data-tab="activity" onclick="showTab('activity')">Sessions &amp; Usage</button>
+    <button class="tab" data-tab="security" onclick="showTab('security')">Security</button>
   </nav>
 
   <main>
+    <div class="callout warn compact hidden" id="masterKeyAdminBanner" role="status" data-copy="masterKeyAdminOn"></div>
     <!-- STATUS -->
     <div class="panel active" id="tab-status">
+      <!-- 1. Status line + 2. headline numbers. Copy lives in UI_COPY (script). -->
+      <section id="statusOverview" aria-label="Status">
+        <div class="sys-line" id="stats" role="status"></div>
+        <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
+        <div class="tiles-head">
+          <span data-copy="tilesHead"></span>
+          <span class="tip" tabindex="0" data-tip-key="tilesShared">&#9432;</span>
+        </div>
+        <div class="mor-grid" id="morBuckets"></div>
+        <p class="note hidden" id="morNote" style="margin-top:8px"></p>
+      </section>
+
+      <!-- 3. Connect a client -->
       <section id="connectClient">
-        <h2>Connect a client</h2>
-        <p class="note" style="margin:0 0 14px">
-          Three things for Cursor, SDKs, or any OpenAI-compatible harness: base URL, key, model name.
-        </p>
+        <h2 data-copy="connectTitle">Connect a client</h2>
         <div class="connect-grid">
           <div class="connect-field">
-            <label for="connectBaseUrl">Base URL</label>
+            <label for="connectBaseUrl" data-copy="baseUrlLabel">Base URL</label>
             <div class="secret-row">
               <code id="connectBaseUrl">…</code>
               <button type="button" class="icon" title="Copy base URL" onclick="copyConnectBaseUrl(this)" aria-label="Copy base URL">
@@ -841,7 +928,8 @@
             </div>
           </div>
           <div class="connect-field">
-            <label for="connectKeySelect">API key</label>
+            <label for="connectKeySelect"><span data-copy="apiKeyLabel">API key</span>
+              <span class="tip" tabindex="0" id="connectKeyTip" data-tip-key="keyTipPrompt">&#9432;</span></label>
             <div class="secret-row">
               <select id="connectKeySelect" onchange="onConnectKeyChange()"></select>
               <button type="button" class="icon" title="Copy API key" onclick="copyConnectKey(this)" aria-label="Copy API key">
@@ -850,80 +938,147 @@
             </div>
           </div>
           <div class="connect-field connect-model">
-            <label for="connectModelSelect">Model <span id="connectModelDurHint" style="font-weight:500;letter-spacing:0;text-transform:none;color:var(--muted)"></span></label>
+            <label for="connectModelSelect"><span data-copy="modelLabel">Model</span>
+              <span class="tip" tabindex="0" id="connectModelDurHint">&#9432;</span></label>
             <div class="secret-row">
-              <select id="connectModelSelect" title="Estimated lock uses deploy default session length">
+              <select id="connectModelSelect">
                 <option value="">Loading catalog…</option>
               </select>
-              <button type="button" class="icon" title="Copy model name" onclick="copyConnectModel(this)" aria-label="Copy model name">
+              <button type="button" class="icon" title="Copy model ID" onclick="copyConnectModel(this)" aria-label="Copy model ID">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
               </button>
             </div>
           </div>
         </div>
-        <p class="connect-hint" id="connectKeyHint">
-          Prompt key is inference-only (recommended). Model list shows ~MOR lock for the deploy default session.
-        </p>
       </section>
 
-      <section>
-        <h2>Status &amp; wallet</h2>
-        <div class="sys-line" id="stats"></div>
-        <div class="mor-grid" id="morBuckets"></div>
-        <p class="note" id="morNote" style="margin-top:8px"></p>
-        <div class="callout fund-callout">
-          <strong>Need more MOR?</strong>
-          <p class="note" style="margin:4px 0 0">
-            Fund this consumer address from MetaMask / Rabby on Base — swap ETH → MOR, then send MOR plus a little ETH for gas.
-          </p>
+      <!-- 4. Add MOR (always collapsed) -->
+      <section id="fundSection">
+        <details id="fundDetails" class="fold">
+          <summary id="fundSummary" data-copy="fundSummary">Add MOR</summary>
+          <p class="note" style="margin:8px 0 0" data-copy="fundHow">Send MOR plus a little ETH for gas to this wallet on Base.</p>
           <div class="secret-row">
-            <span class="note" style="margin:0">Wallet:</span>
+            <span class="note" style="margin:0" data-copy="walletLabel">Wallet:</span>
             <code id="walletMasked">…</code>
+            <span class="note" id="walletSourceNote" style="margin:0"></span>
             <button type="button" class="icon" title="Copy full address" onclick="copySecret('wallet', this)" aria-label="Copy wallet address">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
             </button>
+            <a class="btn ghost" href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
+               target="_blank" rel="noopener noreferrer" data-copy="fundUniswap">Get MOR on Uniswap</a>
           </div>
-          <div class="row" style="margin-top:12px">
-            <a class="btn" href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
-               target="_blank" rel="noopener noreferrer">Get MOR on Uniswap</a>
-          </div>
-        </div>
+        </details>
       </section>
 
-      <section>
-        <h2>Support</h2>
-        <p class="note" style="margin:0 0 12px">
-          Bundle exports versions, health, sessions, and reclaim status — no private keys.
-          Container logs: host <code>docker logs</code> or your VPS log panel.
-        </p>
-        <div class="disk-banner" id="diskWarnBannerSupport">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
-        <div class="disk-meters" id="diskMetersSupport"></div>
-        <div class="disk-actions" style="margin-bottom:12px">
-          <button type="button" class="ghost" onclick="pruneUsageHistory()">Clear older usage history</button>
-          <span class="note" id="diskPruneMsgSupport" style="margin:0"></span>
-        </div>
-        <div class="disk-host-hint" id="diskHostHintSupport">
-          <div class="callout warn">
-            <strong>Disk still full — reclaim Docker logs on host</strong>
-            <p class="note" style="margin:4px 0 0">
-              Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
-              <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
-            </p>
-            <pre># SecretVM
+      <!-- 5. Support (collapsed by default; opens itself on a disk warning) -->
+      <section id="supportSection">
+        <details id="supportDetails" class="fold">
+          <summary data-copy="supportSummary">Support</summary>
+          <div class="row support-actions" style="margin-top:10px">
+            <button class="ghost" type="button" onclick="downloadSupportBundle()" data-copy="supportBundle">Download support bundle</button>
+            <span class="tip" tabindex="0" data-tip-key="supportBundleTip">&#9432;</span>
+            <span class="note" id="supportMsg" style="margin:0"></span>
+          </div>
+          <p class="note" style="margin:10px 0 0">
+            <span id="sessionReconcileLine"></span>
+          </p>
+          <p class="note" style="margin:6px 0 0">
+            <span data-copy="supportStop">Stopping Uplink closes open sessions on this wallet.</span>
+            <span class="tip" tabindex="0" data-tip-key="supportStopTip">&#9432;</span>
+            <span class="sep-dot">·</span>
+            <span data-copy="supportRouterApi">Router admin API</span>
+            <span class="tip" tabindex="0" data-tip-key="supportRouterApiTip">&#9432;</span>
+          </p>
+          <div class="disk-banner" id="diskWarnBannerSupport" style="margin-top:12px">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
+          <div class="disk-meters" id="diskMetersSupport" style="margin-top:12px"></div>
+          <div class="disk-actions">
+            <button type="button" class="ghost" onclick="pruneUsageHistory()">Clear older usage history</button>
+            <span class="note" id="diskPruneMsgSupport" style="margin:0"></span>
+          </div>
+          <div class="disk-host-hint" id="diskHostHintSupport">
+            <div class="callout warn">
+              <strong>Disk still full — reclaim Docker logs on host</strong>
+              <p class="note" style="margin:4px 0 0">
+                Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
+                <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
+              </p>
+              <pre># SecretVM
 docker compose -f docker-compose.secretvm.deployed.yml up -d --force-recreate --no-deps uplink proxy-router traefik
 
 # Generic
 docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --no-deps caddy uplink proxy-router</pre>
+            </div>
+          </div>
+        </details>
+      </section>
+    </div>
+
+
+    <div class="panel" id="tab-security">
+      <section>
+        <h2>Two-factor auth</h2>
+        <label class="tf-switch" style="margin-bottom:8px">
+          <input type="checkbox" id="tfSwitch" role="switch" onchange="toggleTwoFactor(this.checked)">
+          <span data-copy="tfSwitchLabel">Require an authenticator code at login (2FA)</span>
+        </label>
+        <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
+        <div class="callout compact hidden" id="twoFactorOffNote" role="status" data-copy="tfOffNote" style="margin:0 0 10px"></div>
+        <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
+          <div class="enroll-qr">
+            <img id="enrollQr" alt="" style="display:none;max-width:200px;background:#fff;padding:8px;border-radius:8px">
+            <div id="enrollSecret" class="note"></div>
+          </div>
+          <div class="row">
+            <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
+          </div>
+          <form id="enrollConfirmForm" class="row" onsubmit="event.preventDefault(); confirmTotpEnroll();" style="display:none">
+            <input id="enrollCode" class="otp-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" pattern="\d{6}" placeholder="123456" aria-label="6-digit code from authenticator">
+            <button type="submit">Confirm code</button>
+          </form>
+        </div>
+        <p class="note" id="enrollMsg" role="status" style="margin:0"></p>
+        <div id="recoveryBox" class="callout hidden" style="margin-top:10px">
+          <strong data-copy="recoveryShownOnce">Recovery codes (shown once).</strong>
+          <pre id="recoveryCodes" class="note" style="white-space:pre-wrap;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px"></pre>
+          <div class="row">
+            <button type="button" class="ghost" onclick="copyRecoveryCodes()">Copy</button>
+            <button type="button" class="ghost" onclick="downloadRecoveryCodes()">Download .txt</button>
+            <button type="button" class="ghost" onclick="hideRecoveryCodes()">I saved them</button>
           </div>
         </div>
-        <div class="row support-actions">
-          <button class="ghost" type="button" onclick="downloadSupportBundle()">Download support bundle</button>
-          <span class="note" id="supportMsg" style="margin:0"></span>
+        <form id="twoFactorManage" class="stack hidden" style="gap:8px;margin-top:12px" onsubmit="event.preventDefault()">
+          <p class="note" style="margin:0" data-copy="factorNeeded">Enter your password and a current authenticator code or a recovery code.</p>
+          <div class="row">
+            <input id="managePw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px" oninput="updateManageButtons()">
+            <input id="manageCode" type="text" autocomplete="one-time-code" placeholder="123456 or recovery code" aria-label="Authenticator code or recovery code" style="flex:1;min-width:160px" oninput="updateManageButtons()">
+          </div>
+          <div class="row">
+            <button type="button" class="ghost" id="regenBtn" onclick="regenerateRecoveryCodes()" data-copy="regenTitle" disabled>Regenerate recovery codes</button>
+            <button type="button" class="danger-ghost" id="resetBtn" onclick="resetTwoFactor()" data-copy="resetTitle" disabled>Reset 2FA</button>
+            <button type="button" class="danger-ghost" id="disableBtn" onclick="disableTwoFactor()" data-copy="tfDisableTitle" disabled>Turn off 2FA</button>
+          </div>
+          <p class="note" id="manageMsg" role="status" style="margin:0"></p>
+        </form>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" type="button" onclick="logoutAllSessions()">Revoke all sessions</button>
+          <button class="ghost" type="button" onclick="logout()">Log out</button>
         </div>
-        <p class="note" style="margin-top:12px">
-          Raw node API (Swagger):
-          <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a>
+      </section>
+      <section>
+        <h2>Security alerts</h2>
+        <p class="note" style="margin-top:0">
+          Recent login failures, lockouts, key ops, and balance-drop signals.
+          Forward container logs to your log stack (json-file / journald / SIEM);
+          Uplink does not dump secrets at boot.
         </p>
+        <input id="alertFilter" type="search" autocomplete="off" oninput="filterAlerts()" style="max-width:320px;margin-bottom:8px"
+               placeholder="Filter alerts" aria-label="Filter alerts" data-copy-placeholder="alertsFilter">
+        <div id="securityAlerts" class="note">Loading…</div>
+        <p id="alertsNoMatch" class="note hidden" style="margin:6px 0 0" data-copy="alertsNoMatch">No alerts match the filter.</p>
+        <div class="row" style="margin-top:12px">
+          <button type="button" class="ghost" onclick="refreshSecurity()">Refresh</button>
+        </div>
       </section>
     </div>
 
@@ -936,6 +1091,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <code>API_KEY_SEED</code> in your env settings and restart.
         </p>
         <div id="builtinKeys" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="ghost" onclick="refreshKeys(true).then(() => renderBuiltinKeys())">Reveal full keys</button>
+          <span class="note">Masked by default</span>
+        </div>
       </section>
 
       <section>
@@ -1160,8 +1319,140 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 </div>
 
 <script>
-let auth = sessionStorage.getItem('uplink_auth') || '';
+// ---- GUI copy -------------------------------------------------------------
+// Status page and 2FA text. Text only: a copy pass edits these strings and
+// nothing else. Functions take the values they print.
+const UI_COPY = {
+  // Status line
+  healthy: 'Healthy',
+  routerAuthFail: 'Router rejected Uplink\'s credential',
+  routerDown: 'Router not responding',
+  reconcileHeld: 'Session check retrying',
+  diskLow: 'Disk space low',
+  openSessions: (n) => n + ' open session' + (n === 1 ? '' : 's'),
+  uplinkVer: (v) => 'Uplink ' + v,
+  routerVer: (v) => 'Router ' + v,
+  // Headline numbers
+  tilesHead: 'Sessions lock MOR, they don\'t spend it.',
+  tilesShared: 'Sessions lock MOR, they don\'t spend it. It always comes back to this wallet, by the next UTC day at the latest.',
+  tileWallet: 'Wallet',
+  tileWalletTip: 'MOR in this wallet, ready to use.',
+  tileActive: 'Active',
+  tileActiveTip: 'MOR locked in sessions that are open now.',
+  tileOnHold: 'On hold',
+  tileOnHoldTip: 'MOR from closed sessions. It comes back to Wallet after 00:00 UTC.',
+  onHoldBackBy: (t) => 'Back by ' + t,
+  tileClaim: 'To claim',
+  tileClaimTip: 'MOR you can reclaim now.',
+  reclaim: 'Reclaim',
+  reclaiming: 'Reclaiming…',
+  reclaimFailed: (m) => 'Reclaim failed: ' + m,
+  reclaimLastError: (m) => 'Last reclaim error: ' + m,
+  balancesUnavailable: 'Could not refresh on-hold / to-claim balances right now.',
+  // Connect a client
+  connectTitle: 'Connect a client',
+  baseUrlLabel: 'Base URL',
+  apiKeyLabel: 'API key',
+  modelLabel: 'Model',
+  keyTipPrompt: 'Prompt key: inference only (recommended). Ephemeral keys work the same; create more on the API Keys tab. The master key stays on the API Keys tab.',
+  keyTipEphemeral: 'Ephemeral key: inference only. Export it from API Keys if you need it after a redeploy.',
+  modelTip: (dur) => '~MOR lock · ' + dur + ' default. The copy button copies the full model ID.',
+  modelTipAuth: 'Lock estimate unavailable: router rejected Uplink\'s credential.',
+  modelTipNotReady: 'Lock estimate unavailable: router not ready yet.',
+  modelTipError: 'Lock estimate unavailable.',
+  // Need more MOR?
+  fundSummary: 'Add MOR',
+  masterKeyAdminOn: 'Master key admin access is on: the master key bypasses 2FA.',
+  fundHow: 'Fund this wallet from MetaMask / Rabby on Base: swap ETH to MOR, then send MOR plus a little ETH for gas.',
+  walletLabel: 'Wallet:',
+  fundUniswap: 'Get MOR on Uniswap',
+  // Support
+  supportSummary: 'Support',
+  supportBundle: 'Download support bundle',
+  supportBundleTip: 'The bundle has versions, health, sessions and reclaim status. It has no private keys. Container logs: docker logs on the host, or your VPS log panel.',
+  supportStop: 'Stopping Uplink closes open sessions on this wallet.',
+  supportStopTip: 'A graceful docker stop closes every open session on this wallet, including sessions for models not in the catalog and, on a shared wallet, the other client\'s sessions. Stakes are returned. CLOSE_SESSIONS_ON_EXIT=false opts out. Use a dedicated wallet.',
+  supportRouterApi: 'Router admin API',
+  supportRouterApiTip: 'The router admin API isn\'t exposed through Uplink: the router port is never published and the public edge does not route to it.',
+  // Two-factor auth (Security tab)
+  tfEnrolled: (n) => '2FA is on · ' + n + ' recovery code' + (n === 1 ? '' : 's') + ' left.',
+  tfNotEnrolled: '2FA is off: login needs only the password.',
+  tfPending: 'Finish setup: scan the QR code and confirm a code.',
+  tfPendingLocked: 'Finish setup: scan the QR code and confirm a code. Other admin actions are available after that.',
+  tfSwitchLabel: 'Require an authenticator code at login (2FA)',
+  alertsNone: 'No recent alerts.',
+  alertsAfterEnroll: 'Security alerts available after 2FA enrollment.',
+  alertsLoadFailed: (m) => 'Failed to load: ' + m,
+  alertsFilter: 'Filter alerts',
+  alertsNoMatch: 'No alerts match the filter.',
+  tfOffNote: 'We recommend turning 2FA on: flip the switch above and scan the QR code with an authenticator app.',
+  tfDisableTitle: 'Turn off 2FA',
+  tfDisableNeedsFactor: 'To turn 2FA off, enter your password and a current authenticator code or a recovery code below, then choose Turn off 2FA.',
+  tfDisableConfirm: 'Turn off 2FA? This removes the authenticator and all recovery codes and logs out every admin session. Login will then need only the password.',
+  tfDisableDone: '2FA is off. All sessions were logged out. Log in with your password.',
+  // Names only (from configWarn); each fell back to its safe value.
+  tfConfigWarn: (names) => ' Warning: ' + names.join(', ') + ' is not true or false, so the safe value'
+    + ' is in use (master key admin off). Set it to true or false.',
+  tfBreakGlass: ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.',
+  enrollFirst: 'Enroll 2FA to continue: scan the new QR code and confirm a code.',
+  recoveryShownOnce: 'Recovery codes (shown once). Each works one time. Store them offline.',
+  recoveryEnrolled: '2FA enabled. Save the recovery codes below; they are shown once.',
+  recoveryRegenerated: 'New recovery codes issued. The old ones no longer work.',
+  recoveryCopied: 'Recovery codes copied.',
+  recoveryNoneLeft: 'No recovery codes left. Regenerate a new set.',
+  regenTitle: 'Regenerate recovery codes',
+  resetTitle: 'Reset 2FA',
+  resetConfirm: 'Reset 2FA? This removes the authenticator and all recovery codes and logs out every admin session. You will enroll again after logging in.',
+  resetDone: '2FA reset. All sessions were logged out. Log in with your password and enroll again.',
+  factorNeeded: 'Enter your password and a current authenticator code or a recovery code.',
+};
+
+let authed = false;
+let lastRouterProblem = null; // { kind, text } from /admin/status
+let catalogState = { state: 'idle', error: '' }; // idle | loading | ok | error
+let stakeEstimateError = null; // { kind, hint } from /admin/estimate-stakes
 let secrets = { wallet: '', prompt: '', master: '' };
+// Full API keys by id ('master', 'prompt' or a key record id). /admin/keys
+// masks keys by default ("sk-p…d04f"): those are display-only and never go
+// into an Authorization header, the clipboard or the curl box.
+let realKeys = {};
+const KEY_PLACEHOLDER = 'YOUR_API_KEY';
+
+function isMaskedKey(s) {
+  return /\u2026|\.\.\.|\*{4,}/.test(String(s || ''));
+}
+
+// usableKey returns k when it can go into an Authorization header, else ''.
+function usableKey(k) {
+  k = String(k || '');
+  if (!k || k === KEY_PLACEHOLDER || isMaskedKey(k) || /[^\x21-\x7e]/.test(k)) return '';
+  return k;
+}
+
+function rememberKeys(ks) {
+  if (!ks) return;
+  if (ks.masked === false) {
+    if (usableKey(ks.masterKey)) realKeys.master = ks.masterKey;
+    if (usableKey(ks.promptKey)) realKeys.prompt = ks.promptKey;
+  }
+  for (const k of (ks.keys || [])) {
+    if (k.revokedAt) { delete realKeys[k.id]; continue; }
+    if (usableKey(k.secret)) realKeys[k.id] = k.secret;
+  }
+}
+
+// fullKey returns the full key for id, fetching it once (audited reveal)
+// when only the masked form is known. '' when unavailable.
+async function fullKey(id) {
+  if (realKeys[id]) return realKeys[id];
+  try {
+    const res = await fetch('/admin/keys?reveal=1', { credentials: 'same-origin' });
+    if (res.status === 401) { showLogin(); return ''; }
+    if (!res.ok) return '';
+    rememberKeys(await res.json());
+  } catch (_) { return ''; }
+  return realKeys[id] || '';
+}
 let promptKey = '';
 let allModels = [];
 let selectedModel = '';
@@ -1217,22 +1508,37 @@ function keyRowHTML({ copyKind, copyId, canDelete, deleteId, name, secret, meta,
 }
 
 function showTab(id) {
+  const switchingToSecurity = (id === 'security' && activeTab !== 'security');
   activeTab = id || 'status';
+  if (switchingToSecurity) refreshSecurity();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
   // Status / Sessions show live wallet + chain state — refresh on every visit.
-  if ((id === 'status' || id === 'activity') && auth && !document.getElementById('app').classList.contains('hidden')) {
+  if ((id === 'status' || id === 'activity') && authed && !document.getElementById('app').classList.contains('hidden')) {
     refresh({ force: true });
   }
 }
 
 async function api(path, opts = {}) {
-  opts.headers = Object.assign({}, opts.headers, { 'Authorization': 'Basic ' + auth });
+  opts = Object.assign({ credentials: 'same-origin' }, opts);
+  opts.headers = Object.assign({}, opts.headers);
+  if (opts.poll) {
+    opts.headers['X-Uplink-Poll'] = '1';
+    delete opts.poll;
+  }
+  // codeCheck: a 401 here can mean a wrong code, not a lost session.
+  const codeCheck = !!opts.codeCheck;
+  delete opts.codeCheck;
   const res = await fetch(path, opts);
-  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  if (res.status === 401) {
+    const t = codeCheck ? (await res.text()).trim() : '';
+    if (codeCheck && t === 'invalid code') throw new Error(t);
+    showLogin(); throw new Error('unauthorized');
+  }
   if (!res.ok) {
     const t = await res.text();
+    if (res.status === 403 && isEnrollRequired(t)) enterEnrollmentOnly();
     throw new Error(t || res.statusText);
   }
   if (res.status === 204) return null;
@@ -1241,8 +1547,61 @@ async function api(path, opts = {}) {
   return res.text();
 }
 
+/** Accessible ⓘ: focusable, announced via aria-label, shown via CSS on hover/focus. */
+function tipHTML(text) {
+  const t = escapeAttr(text);
+  return `<span class="tip" tabindex="0" role="img" data-tip="${t}" aria-label="${t}">&#9432;</span>`;
+}
+function setTip(el, text) {
+  if (!el) return;
+  el.setAttribute('data-tip', text);
+  el.setAttribute('aria-label', text);
+  el.setAttribute('role', 'img');
+}
+/** Fill static text and tooltips from UI_COPY. */
+function applyCopy(root) {
+  const r = root || document;
+  r.querySelectorAll('[data-copy]').forEach(el => {
+    const v = UI_COPY[el.getAttribute('data-copy')];
+    if (typeof v === 'string') el.textContent = v;
+  });
+  r.querySelectorAll('[data-copy-placeholder]').forEach(el => {
+    const v = UI_COPY[el.getAttribute('data-copy-placeholder')];
+    if (typeof v === 'string') { el.placeholder = v; el.setAttribute('aria-label', v); }
+  });
+  r.querySelectorAll('[data-tip-key]').forEach(el => {
+    const v = UI_COPY[el.getAttribute('data-tip-key')];
+    if (typeof v === 'string') setTip(el, v);
+  });
+}
+
+function renderSessionReconcile(sr) {
+  const el = document.getElementById('sessionReconcileLine');
+  if (!el) return;
+  const when = sr.at ? new Date(sr.at).toLocaleString() : '';
+  const counts = 'adopted ' + (sr.adopted || 0) + ', closed ' + (sr.closed || 0)
+    + ', skipped ' + (sr.skipped || 0) + ', deferred ' + (sr.deferred || 0)
+    + ((sr.failed || 0) ? ', failed ' + sr.failed : '');
+  let txt;
+  switch (sr.state) {
+    case 'pending': case 'reconciling':
+      txt = 'Boot session check: listing open sessions… new sessions wait until it finishes.'; break;
+    case 'closing':
+      txt = 'Boot session check: ' + counts + ' (closing stale sessions in the background).'; break;
+    case 'ok': case 'partial':
+      txt = 'Boot session check ' + when + ': ' + counts + (sr.state === 'partial' ? ' (some left for later scans or expiry)' : '') + '.'; break;
+    case 'deferred': case 'retrying':
+      txt = 'Boot session check retrying (open sessions could not be listed' + (sr.attempts ? ', attempt ' + sr.attempts : '') + ').'
+        + (sr.opensHeld ? ' New sessions are not opened until the list succeeds.' : ''); break;
+    default:
+      txt = '';
+  }
+  el.textContent = txt;
+  el.classList.toggle('msg-err', sr.state === 'deferred' || sr.state === 'retrying');
+}
+
 async function copySecret(kind, btn) {
-  const full = secrets[kind];
+  const full = await fullKey(kind);
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
@@ -1274,23 +1633,638 @@ function setLoggedIn(on) {
   else refreshConnectBaseUrl();
 }
 
-function logout() {
-  sessionStorage.removeItem('uplink_auth');
-  auth = '';
+function showLogin() {
+  authed = false;
+  realKeys = {};
+  resetSecurityView();
   setLoggedIn(false);
+  if (document.getElementById('loginStepPassword')) setLoginStep('password');
+}
+
+async function logout() {
+  try {
+    await fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch (_) {}
+  showLogin();
+}
+
+
+// The server answers 403 "2fa enrollment required" on admin routes while
+// the 2FA switch is on and nothing is enrolled (right after a reset). The
+// GUI then shows only the Security tab and a fresh enrollment.
+function isEnrollRequired(text) { return /2fa enrollment required/i.test(text || ''); }
+let enrollOnly = false;
+let enrollAutoStarted = false;
+// Set when the operator turns the 2FA switch on; cleared once enrolled.
+let tfEnrollRequested = false;
+// Last /admin/2fa/status answer (server state behind the switch).
+let tfState = { on: false, enrolled: false };
+// Security tab 2FA state: 'on' (enrolled), 'pending' (switch on, or just
+// turned on, without a confirmed code yet) or 'off'.
+function tfViewState(tf, requested) {
+  if (tf.enrolled) return 'on';
+  if (tf.on || requested) return 'pending';
+  return 'off';
+}
+function enterEnrollmentOnly(fromRefresh) {
+  const first = !enrollOnly;
+  enrollOnly = true;
+  document.body.classList.add('enroll-only');
+  if (activeTab !== 'security') showTab('security');
+  else if (first && !fromRefresh) refreshSecurity();
+  if (!enrollAutoStarted) { enrollAutoStarted = true; startTotpEnroll(); }
+}
+function leaveEnrollmentOnly() {
+  enrollOnly = false;
+  enrollAutoStarted = false;
+  document.body.classList.remove('enroll-only');
+}
+
+// Forget everything the Security tab showed for the previous session.
+function resetSecurityView() {
+  const st = document.getElementById('twoFactorStatus');
+  if (st) st.textContent = 'Loading…';
+  const manage = document.getElementById('twoFactorManage');
+  if (manage) manage.classList.add('hidden');
+  const enrollBox = document.getElementById('twoFactorEnroll');
+  if (enrollBox) enrollBox.style.display = 'none';
+  tfEnrollRequested = false;
+  tfState = { on: false, enrolled: false };
+  const sw = document.getElementById('tfSwitch');
+  if (sw) sw.checked = false;
+  const offNote = document.getElementById('twoFactorOffNote');
+  if (offNote) offNote.classList.add('hidden');
+  const box = document.getElementById('securityAlerts');
+  if (box) box.textContent = 'Loading…';
+  for (const id of ['managePw', 'manageCode']) { const el = document.getElementById(id); if (el) el.value = ''; }
+  setManageMsg('', '');
+  setEnrollMsg('', '');
+  hideRecoveryCodes();
+  hideEnrollSecret();
+  updateManageButtons();
+  leaveEnrollmentOnly();
+}
+
+async function refreshSecurity() {
+  const box = document.getElementById('securityAlerts');
+  const stEl = document.getElementById('twoFactorStatus');
+  const enrollBox = document.getElementById('twoFactorEnroll');
+  if (stEl) {
+    try {
+      const res = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+      if (res.status === 401) { showLogin(); return; }
+      if (!res.ok) throw new Error(await res.text() || res.statusText);
+      const tf = await res.json();
+      const left = Number(tf.recoveryRemaining) || 0;
+      // One message per state: off, pending (finish setup) or on.
+      const view = tfViewState(tf, tfEnrollRequested);
+      let msg = view === 'on' ? UI_COPY.tfEnrolled(left)
+        : view === 'pending' ? (tf.on ? UI_COPY.tfPendingLocked : UI_COPY.tfPending)
+          : UI_COPY.tfNotEnrolled;
+      if (view === 'on' && left === 0) msg += ' ' + UI_COPY.recoveryNoneLeft;
+      if (tf.breakGlassWarn) msg += UI_COPY.tfBreakGlass;
+      if (Array.isArray(tf.configWarn) && tf.configWarn.length) msg += UI_COPY.tfConfigWarn(tf.configWarn);
+      stEl.textContent = msg.trim();
+      // The switch shows the server state; turning it on shows enrollment
+      // until a code is confirmed. The recommendation shows only when off.
+      tfState = { on: !!tf.on, enrolled: !!tf.enrolled };
+      const sw = document.getElementById('tfSwitch');
+      if (sw) sw.checked = view !== 'off';
+      const offNote = document.getElementById('twoFactorOffNote');
+      if (offNote) offNote.classList.toggle('hidden', view !== 'off');
+      if (tf.enrolled) tfEnrollRequested = false;
+      if (enrollBox) enrollBox.style.display = view === 'pending' ? 'grid' : 'none';
+      const manage = document.getElementById('twoFactorManage');
+      if (manage) manage.classList.toggle('hidden', !tf.enrolled);
+      if (tf.enrolled) setRecoveryHint(left);
+      if (tf.need2fa) enterEnrollmentOnly(true);
+      else if (enrollOnly) leaveEnrollmentOnly();
+      updateManageButtons();
+    } catch (e) {
+      stEl.textContent = 'Could not load 2FA status.';
+    }
+  }
+  if (box) {
+    try {
+      const res = await fetch('/admin/security', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+      if (res.status === 401) { showLogin(); return; }
+      if (res.status === 403) {
+        box.textContent = UI_COPY.alertsAfterEnroll;
+      } else if (!res.ok) {
+        box.textContent = UI_COPY.alertsLoadFailed(await res.text() || res.statusText);
+      } else {
+        const data = await res.json();
+        const alerts = data.alerts || [];
+        if (!alerts.length) {
+          box.textContent = UI_COPY.alertsNone;
+        } else {
+          box.innerHTML = alertRowsHtml(alerts);
+        }
+      }
+    } catch (e) {
+      box.textContent = UI_COPY.alertsLoadFailed(e.message);
+    }
+    filterAlerts();
+  }
+}
+
+// Security alerts: one row per event, newest first:
+// local time (YYYY-MM-DD HH:MM:SS) | event name (bold) | details.
+function alertTime(at) {
+  const d = new Date(at);
+  if (!at || isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+// alertDetail: message, result and IP, without any copy of the event time
+// (the time has its own column).
+function alertDetail(a, when) {
+  let t = [a.message, a.result, a.ip].filter(Boolean).join(' · ');
+  const stamps = [when];
+  if (a.at) {
+    const d = new Date(a.at);
+    stamps.push(String(a.at), String(a.at).replace(/\.\d+(?=Z|[+-]\d)/, ''));
+    if (!isNaN(d.getTime())) stamps.push(d.toISOString(), d.toISOString().replace(/\.\d+Z$/, 'Z'), d.toLocaleString());
+  }
+  let cut = false;
+  for (const st of stamps.filter(Boolean).sort((x, y) => y.length - x.length)) {
+    if (t.includes(st)) { cut = true; t = t.split(st).join(''); }
+  }
+  if (cut) {
+    t = t.replace(/\(\s*\)|\[\s*\]/g, '').replace(/\s*\b(at|on)\s*$/i, '').replace(/[\s·|,;:-]+$/, '');
+  }
+  return t.replace(/\s{2,}/g, ' ').trim();
+}
+function alertRowsHtml(alerts) {
+  const rows = alerts.slice().sort((x, y) => (Date.parse(y.at) || 0) - (Date.parse(x.at) || 0));
+  return '<table class="alerts-table"><tbody>' + rows.map(a => {
+    const when = alertTime(a.at);
+    return '<tr class="alert-row"><td class="alert-at">' + escapeHtml(when) + '</td>'
+      + '<td class="alert-kind"><strong>' + escapeHtml(a.kind || '') + '</strong></td>'
+      + '<td class="alert-detail">' + escapeHtml(alertDetail(a, when)) + '</td></tr>';
+  }).join('') + '</tbody></table>';
+}
+// filterAlerts: client-side, case-insensitive substring over the whole row.
+function filterAlerts() {
+  const box = document.getElementById('securityAlerts');
+  const input = document.getElementById('alertFilter');
+  const none = document.getElementById('alertsNoMatch');
+  if (!box || typeof box.querySelectorAll !== 'function') return;
+  const q = ((input && input.value) || '').trim().toLowerCase();
+  let shown = 0;
+  const rows = box.querySelectorAll('tr.alert-row');
+  rows.forEach(tr => {
+    const hit = !q || (tr.textContent || '').toLowerCase().includes(q);
+    tr.classList.toggle('hidden', !hit);
+    if (hit) shown++;
+  });
+  if (none) none.classList.toggle('hidden', !(rows.length && q && !shown));
+}
+
+function setEnrollMsg(text, kind) {
+  const el = document.getElementById('enrollMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('msg-ok', kind === 'ok');
+  el.classList.toggle('msg-err', kind === 'err');
+}
+
+function hideEnrollSecret() {
+  const secretEl = document.getElementById('enrollSecret');
+  const qr = document.getElementById('enrollQr');
+  const form = document.getElementById('enrollConfirmForm');
+  if (secretEl) secretEl.textContent = '';
+  if (qr) { qr.removeAttribute('src'); qr.style.display = 'none'; }
+  if (form) form.style.display = 'none';
+}
+
+async function startTotpEnroll() {
+  const secretEl = document.getElementById('enrollSecret');
+  const qr = document.getElementById('enrollQr');
+  const form = document.getElementById('enrollConfirmForm');
+  const codeEl = document.getElementById('enrollCode');
+  hideRecoveryCodes();
+  setEnrollMsg('', '');
+  try {
+    const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    secretEl.textContent = 'Secret (save offline):\n' + (data.secret || '');
+    if (data.qrPngB64 && qr) {
+      qr.src = 'data:image/png;base64,' + data.qrPngB64;
+      qr.style.display = 'block';
+    } else if (qr) {
+      qr.style.display = 'none';
+    }
+    if (form) form.style.display = 'flex';
+    if (codeEl) { codeEl.value = ''; setTimeout(() => codeEl.focus(), 0); }
+  } catch (e) {
+    setEnrollMsg('Enroll start failed: ' + e.message, 'err');
+  }
+}
+
+async function confirmTotpEnroll() {
+  const codeEl = document.getElementById('enrollCode');
+  const code = ((codeEl || {}).value || '').trim();
+  if (!/^\d{6}$/.test(code)) {
+    setEnrollMsg('Enter the 6 digits shown in your authenticator app.', 'err');
+    if (codeEl) codeEl.focus();
+    return;
+  }
+  setEnrollMsg('Checking…', '');
+  try {
+    const data = await api('/admin/2fa/enroll/confirm', {
+      codeCheck: true,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    hideEnrollSecret();
+    if (codeEl) codeEl.value = '';
+    setTwoFactorHint(true);
+    setEnrollMsg(UI_COPY.recoveryEnrolled, 'ok');
+    showRecoveryCodes(data.recoveryCodes || []);
+    clearReenrollPending();
+    refreshSecurity();
+  } catch (e) {
+    setEnrollMsg('Code not accepted: ' + e.message + '. Check the time on your device and try the next code.', 'err');
+    if (codeEl) { codeEl.select(); codeEl.focus(); }
+  }
+}
+
+// Recovery codes live only in this box until the operator hides them.
+let shownRecoveryCodes = [];
+function showRecoveryCodes(codes) {
+  shownRecoveryCodes = (codes || []).slice();
+  const box = document.getElementById('recoveryBox');
+  const pre = document.getElementById('recoveryCodes');
+  if (!box || !pre) return;
+  pre.textContent = shownRecoveryCodes.join('\n');
+  box.classList.toggle('hidden', !shownRecoveryCodes.length);
+  setRecoveryHint(shownRecoveryCodes.length);
+}
+function hideRecoveryCodes() {
+  shownRecoveryCodes = [];
+  const box = document.getElementById('recoveryBox');
+  const pre = document.getElementById('recoveryCodes');
+  if (pre) pre.textContent = '';
+  if (box) box.classList.add('hidden');
+}
+function recoveryCodesText() {
+  return 'Morpheus Uplink recovery codes (' + location.host + ')\n'
+    + 'Generated ' + new Date().toISOString() + '. Each code works once.\n\n'
+    + shownRecoveryCodes.join('\n') + '\n';
+}
+async function copyRecoveryCodes() {
+  if (!shownRecoveryCodes.length) return;
+  try {
+    await navigator.clipboard.writeText(shownRecoveryCodes.join('\n'));
+    setEnrollMsg(UI_COPY.recoveryCopied, 'ok');
+  } catch (e) { setEnrollMsg('Copy failed: ' + e.message, 'err'); }
+}
+function downloadRecoveryCodes() {
+  if (!shownRecoveryCodes.length) return;
+  const blob = new Blob([recoveryCodesText()], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uplink-recovery-codes-' + location.hostname + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// Regenerate, Reset and Turn off stay disabled until both fields have a value.
+function updateManageButtons() {
+  const f = manageFields();
+  const ready = !!(f.password && f.code);
+  for (const id of ['regenBtn', 'resetBtn', 'disableBtn']) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !ready;
+  }
+}
+function manageFields() {
+  const pw = document.getElementById('managePw');
+  const code = document.getElementById('manageCode');
+  return { pwEl: pw, codeEl: code, password: (pw && pw.value) || '', code: ((code && code.value) || '').trim() };
+}
+function setManageMsg(text, kind) {
+  const el = document.getElementById('manageMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('msg-ok', kind === 'ok');
+  el.classList.toggle('msg-err', kind === 'err');
+}
+async function postFactor(path, f) {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: f.password, code: f.code }),
+  });
+  if (f.pwEl) f.pwEl.value = '';
+  if (f.codeEl) f.codeEl.value = '';
+  updateManageButtons();
+  return res;
+}
+async function factorError(res) {
+  if (res.status === 403) {
+    const t = await res.text();
+    if (isEnrollRequired(t)) { enterEnrollmentOnly(); return UI_COPY.enrollFirst; }
+    return t || res.statusText;
+  }
+  if (res.status === 429) return 'Too many attempts. Retry after ' + (res.headers.get('Retry-After') || '?') + 's.';
+  if (res.status === 401) return 'Password or code not accepted.';
+  return (await res.text()) || res.statusText;
+}
+async function regenerateRecoveryCodes() {
+  const f = manageFields();
+  if (!f.password || !f.code) { setManageMsg(UI_COPY.factorNeeded, 'err'); return; }
+  try {
+    const res = await postFactor('/admin/2fa/recovery/regen', f);
+    if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
+    const data = await res.json();
+    setManageMsg(UI_COPY.recoveryRegenerated, 'ok');
+    showRecoveryCodes(data.recoveryCodes || []);
+    refreshSecurity();
+  } catch (e) { setManageMsg(e.message, 'err'); }
+}
+async function resetTwoFactor() {
+  const f = manageFields();
+  if (!f.password || !f.code) { setManageMsg(UI_COPY.factorNeeded, 'err'); return; }
+  if (!confirm(UI_COPY.resetConfirm)) return;
+  try {
+    const res = await postFactor('/admin/2fa/reset', f);
+    if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
+    hideRecoveryCodes();
+    setTwoFactorHint(false);
+    setRecoveryHint(0);
+    markReenrollPending();
+    showLogin();
+    document.getElementById('loginMsg').textContent = UI_COPY.resetDone;
+  } catch (e) { setManageMsg(e.message, 'err'); }
+}
+
+// The 2FA switch. On: run the enrollment (2FA turns on when a code is
+// confirmed). Off: needs the password plus a current code or recovery code.
+function toggleTwoFactor(on) {
+  const sw = document.getElementById('tfSwitch');
+  if (on) {
+    tfEnrollRequested = true;
+    const enrollBox = document.getElementById('twoFactorEnroll');
+    if (enrollBox) enrollBox.style.display = 'grid';
+    const stEl = document.getElementById('twoFactorStatus');
+    if (stEl) stEl.textContent = UI_COPY.tfPending;
+    const offNote = document.getElementById('twoFactorOffNote');
+    if (offNote) offNote.classList.add('hidden');
+    startTotpEnroll();
+    return;
+  }
+  if (!tfState.enrolled && tfState.on) {
+    // After a reset: 2FA stays on until a new enrollment is confirmed.
+    if (sw) sw.checked = true;
+    setEnrollMsg(UI_COPY.enrollFirst, '');
+    return;
+  }
+  if (!tfState.enrolled) {
+    // Enrollment not confirmed yet: nothing was turned on, just cancel.
+    tfEnrollRequested = false;
+    hideEnrollSecret();
+    setEnrollMsg('', '');
+    const enrollBox = document.getElementById('twoFactorEnroll');
+    if (enrollBox) enrollBox.style.display = 'none';
+    refreshSecurity();
+    return;
+  }
+  if (sw) sw.checked = true; // stays on until the server turns it off
+  const f = manageFields();
+  if (!f.password || !f.code) {
+    setManageMsg(UI_COPY.tfDisableNeedsFactor, 'err');
+    if (f.pwEl) f.pwEl.focus();
+    return;
+  }
+  disableTwoFactor();
+}
+async function disableTwoFactor() {
+  const f = manageFields();
+  if (!f.password || !f.code) { setManageMsg(UI_COPY.tfDisableNeedsFactor, 'err'); return; }
+  if (!confirm(UI_COPY.tfDisableConfirm)) return;
+  try {
+    const res = await postFactor('/admin/2fa/remove', f);
+    if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
+    hideRecoveryCodes();
+    setTwoFactorHint(false);
+    setRecoveryHint(0);
+    clearReenrollPending();
+    showLogin();
+    document.getElementById('loginMsg').textContent = UI_COPY.tfDisableDone;
+  } catch (e) { setManageMsg(e.message, 'err'); }
+}
+
+async function logoutAllSessions() {
+  if (!confirm('Revoke all admin sessions on this instance?')) return;
+  try {
+    await api('/admin/sessions/revoke-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    showLogin();
+  } catch (e) {
+    alert('Revoke failed: ' + e.message);
+  }
+}
+
+// Two-step login. The server keeps one POST /admin/login {password, code?}
+// and answers the same 401 for a wrong password and for a correct password
+// that still needs a code, so nothing about enrollment leaks before a
+// correct password. The browser remembers (locally) whether this instance
+// had 2FA at the last successful login, to skip the code step when it
+// knows there is none.
+let loginPassword = '';
+let recoveryMode = false;
+const TWOFA_HINT_KEY = 'uplink.2fa.enrolled';
+
+function twoFactorHint() {
+  try { return localStorage.getItem(TWOFA_HINT_KEY); } catch (_) { return null; }
+}
+function setTwoFactorHint(enrolled) {
+  try { localStorage.setItem(TWOFA_HINT_KEY, enrolled ? '1' : '0'); } catch (_) {}
+}
+// Local hints only (same idea as TWOFA_HINT_KEY): the server never says
+// before a correct password whether recovery codes exist.
+const RECOVERY_HINT_KEY = 'uplink.2fa.recoveryLeft';
+const REENROLL_KEY = 'uplink.2fa.reenroll';
+function recoveryHint() {
+  try { return localStorage.getItem(RECOVERY_HINT_KEY); } catch (_) { return null; }
+}
+function setRecoveryHint(n) {
+  try { localStorage.setItem(RECOVERY_HINT_KEY, String(Number(n) || 0)); } catch (_) {}
+}
+function markReenrollPending() { try { localStorage.setItem(REENROLL_KEY, '1'); } catch (_) {} }
+function clearReenrollPending() { try { localStorage.removeItem(REENROLL_KEY); } catch (_) {} }
+function reenrollPending() { try { return localStorage.getItem(REENROLL_KEY) === '1'; } catch (_) { return false; } }
+
+function setLoginStep(step) {
+  document.getElementById('loginStepPassword').classList.toggle('hidden', step !== 'password');
+  document.getElementById('loginStepCode').classList.toggle('hidden', step !== 'code');
+  if (step === 'code') {
+    const c = document.getElementById('totpCode');
+    // Hide "Use a recovery code" when this browser knows none are left.
+    const tog = document.getElementById('recoveryToggle');
+    if (tog) tog.classList.toggle('hidden', recoveryHint() === '0');
+    c.value = '';
+    setTimeout(() => c.focus(), 0);
+  } else {
+    loginPassword = '';
+    setRecoveryMode(false);
+    const pw = document.getElementById('pw');
+    if (pw) setTimeout(() => pw.focus(), 0);
+  }
+}
+
+function setRecoveryMode(on) {
+  recoveryMode = !!on;
+  const c = document.getElementById('totpCode');
+  const hint = document.getElementById('loginCodeHint');
+  const tog = document.getElementById('recoveryToggle');
+  if (!c) return;
+  if (recoveryMode) {
+    c.removeAttribute('maxlength');
+    c.removeAttribute('pattern');
+    c.setAttribute('inputmode', 'text');
+    c.setAttribute('autocomplete', 'off');
+    c.placeholder = 'recovery code';
+    c.classList.remove('otp-input');
+    if (hint) hint.textContent = 'Enter one of your single-use recovery codes.';
+    if (tog) tog.textContent = 'Use authenticator code';
+  } else {
+    c.setAttribute('maxlength', '6');
+    c.setAttribute('pattern', '\\d{6}');
+    c.setAttribute('inputmode', 'numeric');
+    c.setAttribute('autocomplete', 'one-time-code');
+    c.placeholder = '123456';
+    c.classList.add('otp-input');
+    if (hint) hint.textContent = 'Enter the 6-digit code from your authenticator app.';
+    if (tog) tog.textContent = 'Use a recovery code';
+  }
+}
+
+function toggleRecoveryCode() {
+  setRecoveryMode(!recoveryMode);
+  const c = document.getElementById('totpCode');
+  if (c) { c.value = ''; c.focus(); }
+}
+
+function loginBack() {
+  document.getElementById('loginMsg').textContent = '';
+  setLoginStep('password');
+}
+
+async function postLogin(password, code) {
+  return fetch('/admin/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password, code: code || undefined }),
+  });
+}
+
+async function finishLogin(res, msg) {
+  const data = await res.json();
+  setTwoFactorHint(!!data.enrolled);
+  if (data.enrolled) { setRecoveryHint(data.recoveryRemaining); clearReenrollPending(); }
+  loginPassword = '';
+  document.getElementById('pw').value = '';
+  document.getElementById('totpCode').value = '';
+  setLoginStep('password');
+  authed = true;
+  setLoggedIn(true);
+  msg.textContent = '';
+  if (data.need2fa) {
+    enterEnrollmentOnly(); // opens Security, reloads it, starts a new enrollment
+    return;
+  }
+  if (!data.enrolled && reenrollPending()) showTab('security');
+  if (activeTab === 'security') refreshSecurity();
+  refresh();
 }
 
 async function login() {
   const pw = document.getElementById('pw').value;
-  auth = btoa('admin:' + pw);
+  const msg = document.getElementById('loginMsg');
+  msg.textContent = '';
+  if (!pw) return;
   try {
-    await api('/admin/status');
-    sessionStorage.setItem('uplink_auth', auth);
-    setLoggedIn(true);
-    refresh();
+    const res = await postLogin(pw);
+    if (res.status === 429) {
+      const ra = res.headers.get('Retry-After') || '?';
+      msg.textContent = 'Too many attempts. Retry after ' + ra + 's.';
+      return;
+    }
+    if (res.ok) { await finishLogin(res, msg); return; }
+    if (res.status === 401 && twoFactorHint() !== '0') {
+      // Either the password was wrong or a code is needed; the server
+      // does not say which. Ask for the code; a wrong password fails there.
+      loginPassword = pw;
+      document.getElementById('pw').value = '';
+      setLoginStep('code');
+      return;
+    }
+    // This browser last saw no 2FA here. Offer the code step anyway in
+    // case 2FA was enabled since.
+    loginPassword = pw;
+    msg.innerHTML = 'Login failed: password not accepted. '
+      + '<button type="button" class="ghost" onclick="document.getElementById(\'pw\').value=\'\'; setLoginStep(\'code\')">I have a 2FA code</button>';
   } catch (e) {
-    document.getElementById('loginMsg').textContent = 'Connection failed: ' + e.message;
+    msg.textContent = 'Connection failed: ' + e.message;
   }
+}
+
+async function loginWithCode() {
+  const msg = document.getElementById('loginMsg');
+  const code = (document.getElementById('totpCode').value || '').trim();
+  msg.textContent = '';
+  if (!recoveryMode && !/^\d{6}$/.test(code)) {
+    msg.textContent = 'Enter the 6 digits from your authenticator.';
+    return;
+  }
+  if (!code || !loginPassword) { setLoginStep('password'); return; }
+  try {
+    const res = await postLogin(loginPassword, code);
+    if (res.status === 429) {
+      const ra = res.headers.get('Retry-After') || '?';
+      msg.textContent = 'Too many attempts. Retry after ' + ra + 's.';
+      setLoginStep('password');
+      return;
+    }
+    if (res.ok) { await finishLogin(res, msg); return; }
+    msg.textContent = 'Login failed: password or code not accepted. Start again.';
+    setLoginStep('password');
+  } catch (e) {
+    msg.textContent = 'Connection failed: ' + e.message;
+  }
+}
+
+async function tryRestoreSession() {
+  try {
+    const res = await fetch('/admin/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+    if (res.ok) {
+      authed = true;
+      setLoggedIn(true);
+      refresh();
+      return;
+    }
+    // 403 with 2FA on and nothing enrolled: session valid, enroll pending.
+    if (res.status === 403) {
+      const st = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+      if (st.ok) {
+        const tf = await st.json();
+        authed = true;
+        setLoggedIn(true);
+        if (tf.need2fa) {
+          showTab('security');
+          return;
+        }
+        refresh();
+        return;
+      }
+    }
+  } catch (_) {}
+  showLogin();
 }
 
 function fmtMor(v) {
@@ -1329,7 +2303,7 @@ function fmtEnds(iso) {
 }
 
 function loggedIn() {
-  return !!auth && !document.getElementById('app').classList.contains('hidden');
+  return !!authed && !document.getElementById('app').classList.contains('hidden');
 }
 
 /** Refresh wallet/sessions/usage. force=true skips the short coalesce window. */
@@ -1347,9 +2321,44 @@ function refresh(opts = {}) {
   return refreshInFlight;
 }
 
+/** Distinct router problems: rejected credential vs router not ready. */
+function routerProblem(st) {
+  const ra = (st && st.routerAuth) || {};
+  if (ra.ok === false) {
+    return {
+      kind: 'router_auth',
+      text: 'Router rejected Uplink\'s credential (401) since '
+        + (ra.since ? new Date(ra.since).toLocaleTimeString() : 'boot')
+        + '. Balances, sessions and stake estimates are unavailable. Check that COOKIE_CONTENT matches on uplink and proxy-router.',
+    };
+  }
+  if (st && st.routerError) {
+    return { kind: 'router_not_ready', text: 'Router not reachable yet (starting or restarting). Retrying automatically.' };
+  }
+  return null;
+}
+
+function renderRouterBanner(st) {
+  const el = document.getElementById('routerAuthBanner');
+  if (!el) return;
+  const p = routerProblem(st);
+  lastRouterProblem = p;
+  el.classList.toggle('hidden', !p);
+  el.textContent = p ? p.text : '';
+}
+
+// Shown on every tab while MASTER_KEY_ADMIN=true (status.twoFactor.masterKeyAdmin).
+function renderMasterKeyBanner(st) {
+  const el = document.getElementById('masterKeyAdminBanner');
+  if (!el) return;
+  const on = !!(st && st.twoFactor && st.twoFactor.masterKeyAdmin === true);
+  el.textContent = on ? UI_COPY.masterKeyAdminOn : '';
+  el.classList.toggle('hidden', !on);
+}
+
 async function doRefresh() {
   try {
-    const st = await api('/admin/status');
+    const st = await api('/admin/status', { poll: true });
     const bal = st.balance || {};
     const mor = st.mor || {};
     lastStatusSnapshot = st;
@@ -1372,60 +2381,41 @@ async function doRefresh() {
     setHeaderBalances(mor.liquidWei ?? bal.mor, bal.eth);
     checkForUpdate(st.version || 'dev');
 
-    renderSysLine(st.version || 'dev', rv, !st.routerError, (st.sessions || []).length);
+    renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).length);
+    renderMasterKeyBanner(st);
     renderDiskStatus(st.disk || null);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
-    const lockedWei = mor.onHoldLockedWei != null ? String(mor.onHoldLockedWei) : null;
     const hk = st.housekeep || {};
     const hkLast = hk.last || {};
     reclaimReady = !!hk.reclaimReady;
-    const canReclaim = BigInt(lastClaimableWei || '0') > 0n;
-
-    let holdNote = '';
-    if (lockedWei != null && mor.nextUnlockUTC) {
-      holdNote = 'On-hold unlocks after 00:00 UTC · next ≈ ' + new Date(mor.nextUnlockUTC).toUTCString();
-    } else if (mor.onHoldReadFailed) {
-      holdNote = 'Could not refresh on-hold / to-claim balances right now.';
+    let hkErr = '';
+    if (hkLast.status === 'error' && hkLast.message && !/estimategas|execution reverted/i.test(hkLast.message)) {
+      hkErr = hkLast.message;
     }
-    document.getElementById('morNote').textContent = holdNote;
+    const walletWei = mor.liquidWei ?? bal.mor;
+    renderMorTiles({
+      walletWei,
+      activeWei: mor.activeWei,
+      onHoldWei: mor.onHoldLockedWei,
+      nextUnlockUTC: mor.nextUnlockUTC || '',
+      claimWei: mor.onHoldClaimableWei,
+      readFailed: !!mor.onHoldReadFailed,
+      hkErr,
+    });
 
-    const claimVal = mor.onHoldClaimableWei != null ? fmtMor(mor.onHoldClaimableWei) + ' MOR' : '—';
-    const lockedVal = lockedWei != null ? fmtMor(lockedWei) + ' MOR' : '—';
-    let hkMsg = 'Nothing to reclaim yet';
-    if (canReclaim) {
-      hkMsg = 'Past daylock — reclaim to wallet';
-    } else if (hkLast.status === 'actioned' && hkLast.message) {
-      hkMsg = hkLast.message;
-    } else if (hkLast.status === 'error' && hkLast.message && /estimategas|execution reverted/i.test(hkLast.message)) {
-      hkMsg = 'Nothing claimable yet (on-hold unlocks at 00:00 UTC)';
-    } else if (hkLast.status === 'skipped' && hkLast.message) {
-      hkMsg = hkLast.message;
-    } else if (hkLast.status === 'error' && hkLast.message) {
-      hkMsg = 'error — ' + hkLast.message;
+    // Keep the last address we saw; the server already falls back to the
+    // last router answer.
+    if (st.walletAddress) secrets.wallet = st.walletAddress;
+    document.getElementById('walletMasked').textContent = secrets.wallet ? shortSecret(secrets.wallet) : '(not reported yet)';
+    const wsn = document.getElementById('walletSourceNote');
+    if (wsn) {
+      wsn.textContent = (st.walletAddressError && secrets.wallet)
+        ? '(last known; router lookup failing)'
+        : '';
     }
-
-    document.getElementById('morBuckets').innerHTML =
-      `<div class="stat"><div class="v">${fmtMor(mor.liquidWei ?? bal.mor)} MOR</div><div class="k">Wallet</div></div>` +
-      `<div class="stat"><div class="v">${fmtMor(mor.activeWei)} MOR</div><div class="k">Active</div></div>` +
-      `<div class="stat"><div class="v">${lockedVal}</div><div class="k">On hold</div></div>` +
-      `<div class="claim-col">
-         <div class="stat">
-           <div class="v">${claimVal}</div>
-           <div class="k">To claim</div>
-         </div>
-         <div class="reclaim-wrap">
-           <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" ${canReclaim ? '' : 'disabled'}>Reclaim</button>
-           <span class="note" id="hkNote">${escapeHtml(hkMsg)}</span>
-         </div>
-       </div>`;
-
-    secrets.wallet = '';
-    try {
-      const w = await api('/node/wallet');
-      secrets.wallet = w.address || '';
-    } catch (e) { /* optional */ }
-    document.getElementById('walletMasked').textContent = shortSecret(secrets.wallet) || '(unavailable)';
+    renderRouterBanner(st);
+    renderSessionReconcile(st.sessionReconcile || {});
 
     const rawSessions = st.sessions || [];
     lastRawSessionIds.clear();
@@ -1496,7 +2486,11 @@ function renderDiskStatus(disk) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('show', warn);
   }
+  const sup = document.getElementById('supportDetails');
+  if (sup && warn && !supportAutoOpened) { sup.open = true; supportAutoOpened = true; }
+  if (!warn) supportAutoOpened = false;
 }
+let supportAutoOpened = false;
 
 function setDiskPruneMsg(msg) {
   for (const id of ['diskPruneMsgSupport']) {
@@ -1529,23 +2523,78 @@ async function pruneUsageHistory() {
   }
 }
 
-function renderSysLine(uplinkVer, routerVer, routerOk, openSessions) {
+/** One plain reason when not healthy (first match wins), else Healthy. */
+function statusHealth(st) {
+  const p = routerProblem(st);
+  if (p && p.kind === 'router_auth') return { ok: false, text: UI_COPY.routerAuthFail };
+  if (p) return { ok: false, text: UI_COPY.routerDown };
+  if (st && st.sessionReconcile && st.sessionReconcile.opensHeld) return { ok: false, text: UI_COPY.reconcileHeld };
+  if (st && st.disk && st.disk.warn) return { ok: false, text: UI_COPY.diskLow };
+  return { ok: true, text: UI_COPY.healthy };
+}
+
+/** ● Healthy · N open sessions · Uplink vX · Router vY */
+function renderSysLine(uplinkVer, routerVer, health, openSessions) {
   const el = document.getElementById('stats');
   if (!el) return;
+  const h = health || { ok: true, text: UI_COPY.healthy };
   const up = escapeHtml(String(uplinkVer).replace(/^v?/, 'v'));
   const rt = routerVer ? escapeHtml(String(routerVer).replace(/^v?/, 'v')) : '—';
-  const health = routerOk
-    ? '<span class="ok">Healthy</span>'
-    : '<span class="bad">Router unhealthy</span>';
   const n = Number(openSessions) || 0;
+  const cls = h.ok ? 'ok' : 'bad';
   el.innerHTML =
-    `<span class="ver" id="uplinkChip" title="Uplink">Uplink ${up}</span>` +
+    `<span class="dot ${cls}" aria-hidden="true">●</span><span class="${cls}">${escapeHtml(h.text)}</span>` +
     `<span class="sep">·</span>` +
-    `<a class="ver" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node">Router ${rt}</a>` +
+    `<span class="sessions">${escapeHtml(UI_COPY.openSessions(n))}</span>` +
     `<span class="sep">·</span>` +
-    health +
+    `<span class="ver" id="uplinkChip">${escapeHtml(UI_COPY.uplinkVer(up))}</span>` +
     `<span class="sep">·</span>` +
-    `<span class="sessions">${n} open session${n === 1 ? '' : 's'}</span>`;
+    `<a class="ver" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node">${escapeHtml(UI_COPY.routerVer(rt))}</a>`;
+}
+
+/** Local time an on-hold stake returns, e.g. "8:00 PM EDT" (weekday added if not today). */
+function fmtUnlockLocal(iso, now) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const ref = now || new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  if (d.toDateString() === ref.toDateString()) return time;
+  return d.toLocaleDateString([], { weekday: 'short' }) + ' ' + time;
+}
+
+function weiIsPositive(v) {
+  try { return BigInt(String(v ?? '0')) > 0n; } catch (_) { return false; }
+}
+
+function morTileHTML(label, tip, value, sub, extra) {
+  return `<div class="tile"><div class="k">${escapeHtml(label)} ${tipHTML(tip)}</div>`
+    + `<div class="v">${value}</div><div class="sub">${sub || ''}</div>${extra || ''}</div>`;
+}
+
+/** Four headline tiles. Reclaim sits under To claim and only shows when > 0. */
+function renderMorTiles(v) {
+  const el = document.getElementById('morBuckets');
+  if (!el) return;
+  const amt = (w) => (w == null || w === '') ? '—' : escapeHtml(fmtMor(w)) + '<small>MOR</small>';
+  const onHoldSub = (weiIsPositive(v.onHoldWei) && v.nextUnlockUTC)
+    ? escapeHtml(UI_COPY.onHoldBackBy(fmtUnlockLocal(v.nextUnlockUTC, v.now)))
+    : '';
+  const canReclaim = weiIsPositive(v.claimWei);
+  const claimExtra = (canReclaim
+    ? `<button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()">${escapeHtml(UI_COPY.reclaim)}</button>`
+    : '');
+  const claimSub = `<span id="hkNote"${v.hkErr ? ' class="msg-err"' : ''}>${v.hkErr ? escapeHtml(UI_COPY.reclaimLastError(v.hkErr)) : ''}</span>`;
+  el.innerHTML =
+    morTileHTML(UI_COPY.tileWallet, UI_COPY.tileWalletTip, amt(v.walletWei), '') +
+    morTileHTML(UI_COPY.tileActive, UI_COPY.tileActiveTip, amt(v.activeWei), '') +
+    morTileHTML(UI_COPY.tileOnHold, UI_COPY.tileOnHoldTip, amt(v.onHoldWei), onHoldSub) +
+    morTileHTML(UI_COPY.tileClaim, UI_COPY.tileClaimTip, amt(v.claimWei), claimSub, claimExtra);
+  const note = document.getElementById('morNote');
+  if (note) {
+    note.textContent = v.readFailed ? UI_COPY.balancesUnavailable : '';
+    note.classList.toggle('hidden', !v.readFailed);
+  }
 }
 
 function setSessNote(msg) {
@@ -1577,8 +2626,10 @@ function renderSessions(sessions, sessionsError) {
   }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
 }
 
-async function refreshKeys() {
-  const ks = await api('/admin/keys');
+async function refreshKeys(reveal) {
+  const qs = reveal ? '?reveal=1' : '';
+  const ks = await api('/admin/keys' + qs);
+  rememberKeys(ks);
   secrets.master = ks.masterKey || '';
   secrets.prompt = ks.promptKey || '';
   promptKey = secrets.prompt;
@@ -1623,22 +2674,12 @@ function populateConnectClient(ks) {
 
 function connectKeySecret() {
   const id = document.getElementById('connectKeySelect')?.value || 'prompt';
-  if (id === 'prompt') return secrets.prompt || '';
-  const fromGen = generatedKeySecrets[id];
-  if (fromGen) return fromGen;
-  const row = (window.__lastEphemeralKeys || []).find(k => k.id === id);
-  return (row && row.secret) || '';
+  return fullKey(id);
 }
 
 function onConnectKeyChange() {
   const id = document.getElementById('connectKeySelect')?.value || 'prompt';
-  const hint = document.getElementById('connectKeyHint');
-  if (!hint) return;
-  if (id === 'prompt') {
-    hint.textContent = 'Prompt key is inference-only (recommended). Ephemeral keys work the same — create more on the API Keys tab. Master stays on API Keys only.';
-  } else {
-    hint.textContent = 'Ephemeral key — inference only. Export it from API Keys if you need it after a redeploy.';
-  }
+  setTip(document.getElementById('connectKeyTip'), id === 'prompt' ? UI_COPY.keyTipPrompt : UI_COPY.keyTipEphemeral);
 }
 
 function flashIconCopied(btn) {
@@ -1655,7 +2696,7 @@ async function copyConnectBaseUrl(btn) {
 }
 
 async function copyConnectKey(btn) {
-  const full = connectKeySecret();
+  const full = await connectKeySecret();
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
@@ -1699,33 +2740,48 @@ function connectStakeMor(id) {
   return st.stakeMor * (toDur / fromDur);
 }
 
-function connectModelOptionLabel(id) {
+/** Option text: name and ~lock only. The ID stays behind the copy button. */
+function connectModelOptionLabel(id, dupIndex) {
   const m = modelBySendableId(id);
   const stake = connectStakeMor(id);
-  const name = m ? modelTitle(m) : id;
-  const twin = (m && m.name && m.name !== m.id) ? ' ' + shortSecret(m.id) : '';
-  // Duration/unit live in the field label — keep options to name + lock amount.
+  const name = (m ? modelTitle(m) : id) + (dupIndex > 1 ? ' (' + dupIndex + ')' : '');
   if (stake != null) {
-    return name + twin + '\u2003\u2003~\u202f' + fmtMorRate(stake);
+    return name + '\u2003\u2003~\u202f' + fmtMorRate(stake);
   }
-  return name + twin;
+  return name;
 }
 
 function populateConnectModels() {
   const sel = document.getElementById('connectModelSelect');
   if (!sel) return;
-  const hint = document.getElementById('connectModelDurHint');
   const dur = connectDefaultDurationSec();
-  if (hint) hint.textContent = '(~MOR lock · ' + fmtDuration(dur) + ' default)';
+  let h = UI_COPY.modelTip(fmtDuration(dur));
+  if (stakeEstimateError) {
+    h = stakeEstimateError.kind === 'router_auth' ? UI_COPY.modelTipAuth
+      : stakeEstimateError.kind === 'router_not_ready' ? UI_COPY.modelTipNotReady
+        : UI_COPY.modelTipError;
+  }
+  setTip(document.getElementById('connectModelDurHint'), h);
   const prev = sel.value || selectedModel || '';
   if (!allModels.length) {
-    sel.innerHTML = '<option value="">Catalog unavailable — open Probe or retry</option>';
+    let label = 'Loading model catalog…';
+    if (catalogState.state === 'error') {
+      label = 'Catalog fetch failed — ' + (catalogState.error || 'see Probe') + ' (retry from Probe)';
+    } else if (catalogState.state === 'idle') {
+      label = authed ? 'Loading model catalog…' : 'Connect first';
+    }
+    sel.innerHTML = `<option value="">${escapeHtml(label)}</option>`;
     return;
   }
   const ids = allModels.map(m => m.id).sort((a, b) => a.localeCompare(b));
-  sel.innerHTML = ids.map(id =>
-    `<option value="${escapeAttr(id)}">${escapeHtml(connectModelOptionLabel(id))}</option>`
-  ).join('');
+  const seenNames = {};
+  sel.innerHTML = ids.map(id => {
+    const m = modelBySendableId(id);
+    const nm = m ? modelTitle(m) : id;
+    seenNames[nm] = (seenNames[nm] || 0) + 1;
+    // value is the full model ID; copyConnectModel copies it as-is.
+    return `<option value="${escapeAttr(id)}">${escapeHtml(connectModelOptionLabel(id, seenNames[nm]))}</option>`;
+  }).join('');
   if (prev && ids.includes(prev)) sel.value = prev;
   else if (selectedModel && ids.includes(selectedModel)) sel.value = selectedModel;
   else sel.selectedIndex = 0;
@@ -1788,7 +2844,7 @@ function todayUTC() {
   return utcDayString(new Date());
 }
 
-/** Josh residual: custom dates must be YYYY-MM-DD UTC only; from <= to. */
+/** Custom usage dates must be YYYY-MM-DD UTC only; from <= to. */
 function isValidUTCDate(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split('-').map(Number);
@@ -2231,7 +3287,7 @@ function parseKeyList(text) {
 }
 
 async function copyGeneratedKey(id, btn) {
-  const full = generatedKeySecrets[id];
+  const full = await fullKey(id);
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
@@ -2256,6 +3312,7 @@ async function createKey() {
     const ks = await refreshKeys();
     if (created && created.key && created.record && created.record.id) {
       generatedKeySecrets[created.record.id] = created.key;
+      if (usableKey(created.key)) realKeys[created.record.id] = created.key;
       const keys = (ks.keys || []).map(k =>
         k.id === created.record.id ? Object.assign({}, k, { secret: created.key }) : k
       );
@@ -2334,7 +3391,7 @@ async function closeAll() {
   try {
     const res = await fetch('/admin/pool/close-all', {
       method: 'POST',
-      headers: { 'Authorization': 'Basic ' + auth },
+      credentials: 'same-origin',
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok && !(body.ok > 0)) {
@@ -2501,8 +3558,8 @@ function refreshModelStakes() {
   const dur = probeDurationSec();
   const seq = ++stakesSeq;
   lockPreviewTimer = setTimeout(async () => {
-    if (!auth) {
-      // Preview mode: fake stakes from MOR/h × hours (display only).
+    if (!authed) {
+      // Preview mode: fake stakes from MOR/h x hours (display only).
       modelStakes = {};
       modelStakesDurationSec = dur;
       for (const m of allModels) {
@@ -2516,8 +3573,19 @@ function refreshModelStakes() {
       return;
     }
     try {
-      const data = await api('/admin/estimate-stakes?duration=' + dur);
+      const res = await fetch('/admin/estimate-stakes?duration=' + dur, { credentials: 'same-origin' });
+      if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+      if (!res.ok) {
+        let j = {};
+        try { j = await res.json(); } catch (_) {}
+        const err = new Error(j.error || res.statusText);
+        err.kind = j.kind || 'router_error';
+        err.hint = j.hint || '';
+        throw err;
+      }
+      const data = await res.json();
       if (seq !== stakesSeq) return;
+      stakeEstimateError = null;
       if (data.liquidWei != null) liquidWei = String(data.liquidWei);
       modelStakes = {};
       modelStakesDurationSec = Number(data.durationSec) || dur;
@@ -2535,6 +3603,7 @@ function refreshModelStakes() {
     } catch (e) {
       if (seq !== stakesSeq) return;
       console.warn('estimate-stakes failed', e);
+      stakeEstimateError = { kind: e.kind || 'router_error', hint: e.hint || e.message };
       filterModels();
       populateConnectModels();
     }
@@ -2614,13 +3683,13 @@ async function runHousekeep() {
   const btn = document.getElementById('hkBtn');
   const note = document.getElementById('hkNote');
   if (btn) btn.disabled = true;
-  if (note) note.textContent = 'Reclaiming…';
+  if (note) note.textContent = UI_COPY.reclaiming;
   try {
     const res = await api('/admin/housekeep', { method: 'POST' });
     if (note) note.textContent = (res.status || '') + ' — ' + (res.message || 'done');
     refresh();
   } catch (e) {
-    if (note) note.textContent = 'Reclaim failed: ' + e.message;
+    if (note) note.textContent = UI_COPY.reclaimFailed(e.message);
     if (btn) btn.disabled = !(reclaimReady && BigInt(lastClaimableWei || '0') > 0n);
   }
 }
@@ -2646,9 +3715,10 @@ function populatePgKeys(ks) {
   updateCurlPreview();
 }
 
+// selectedKeySecret: the full key for the Probe selection, or '' when only
+// the masked form is known (see fullKey).
 function selectedKeySecret() {
-  const k = pgKeys.find(x => x.id === selectedKeyId);
-  return (k && k.secret) || promptKey || '';
+  return usableKey(realKeys[selectedKeyId || 'prompt']);
 }
 
 function onPgKeyChange() {
@@ -2675,10 +3745,19 @@ function fuzzyScore(q, text) {
 
 async function loadModels() {
   const box = document.getElementById('modelList');
-  if (!promptKey) { box.innerHTML = '<div class="note" style="padding:12px">Connect first…</div>'; return; }
+  if (!authed) { box.innerHTML = '<div class="note" style="padding:12px">Connect first…</div>'; return; }
+  catalogState = { state: 'loading', error: '' };
+  populateConnectModels();
   try {
-    const res = await fetch('/v1/models', { headers: { 'Authorization': 'Bearer ' + promptKey } });
-    if (!res.ok) throw new Error(await res.text());
+    // Admin-session catalog: the GUI only holds masked API keys, so it must
+    // not call /v1/models with them. Catalog comes from ACTIVE_MODELS_URL.
+    const res = await fetch('/admin/models', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
+    if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+    if (!res.ok) {
+      let m = res.statusText;
+      try { const j = await res.json(); m = j.error || m; } catch (_) {}
+      throw new Error(m);
+    }
     const data = await res.json();
     allModels = (data.data || []).map(m => {
       const mor = m.morpheus || {};
@@ -2691,11 +3770,13 @@ async function loadModels() {
         pricePerSecondWei: mor.pricePerSecondWei || '',
       };
     });
+    catalogState = { state: 'ok', error: '' };
     filterModels();
     refreshModelStakes();
     populateConnectModels();
   } catch (e) {
-    box.innerHTML = `<div class="note" style="padding:12px">Catalog error: ${escapeHtml(e.message)}</div>`;
+    catalogState = { state: 'error', error: e.message };
+    box.innerHTML = `<div class="note" style="padding:12px">Catalog fetch failed: ${escapeHtml(e.message)}</div>`;
     populateConnectModels();
   }
 }
@@ -2793,7 +3874,7 @@ function buildCurl() {
   const model = selectedModel || 'MODEL';
   const prompt = document.getElementById('pgPrompt').value;
   const max = Number(document.getElementById('pgMaxTokens').value) || 128;
-  const key = selectedKeySecret() || 'sk-….';
+  const key = selectedKeySecret() || KEY_PLACEHOLDER;
   // Pretty JSON in one single-quoted -d (newlines are fine inside quotes).
   // Backslashes only continue between curl flags.
   const bodyPretty =
@@ -2855,6 +3936,7 @@ function parseCurlCommand(text) {
 }
 
 async function postChatCompletion({ key, duration, body }) {
+  if (!usableKey(key)) throw new Error('No full API key available (masked keys cannot be sent). Use Reveal full keys on API Keys.');
   document.getElementById('pgStatus').textContent = 'Running…';
   document.getElementById('pgOut').textContent = '…';
   const res = await fetch('/v1/chat/completions', {
@@ -2876,6 +3958,7 @@ async function postChatCompletion({ key, duration, body }) {
 async function runCurlCommand() {
   try {
     const parsed = parseCurlCommand(document.getElementById('pgCurl').value);
+    if (!usableKey(parsed.key)) parsed.key = await fullKey(selectedKeyId || 'prompt');
     if (!parsed.key) throw new Error('No Authorization Bearer key in curl');
     if (!(parsed.duration >= MIN_SESSION_DURATION)) throw new Error('Session duration must be ≥ 600');
     await postChatCompletion(parsed);
@@ -2887,7 +3970,7 @@ async function runCurlCommand() {
 
 async function runPlayground() {
   if (!selectedModel) { document.getElementById('pgStatus').textContent = 'Select a model first.'; return; }
-  const key = selectedKeySecret();
+  const key = await fullKey(selectedKeyId || 'prompt');
   if (!key) { document.getElementById('pgStatus').textContent = 'Select an API key first.'; return; }
   const rawDur = Number(document.getElementById('pgDuration')?.value);
   if (Number.isFinite(rawDur) && rawDur < MIN_SESSION_DURATION) {
@@ -2983,23 +4066,14 @@ function enterUiPreview() {
   liquidWei = String(135864n * 10n ** 14n); // 13.5864 MOR
   const ethWei = String(374n * 10n ** 13n); // 0.00374 ETH
   setHeaderBalances(liquidWei, ethWei);
-  renderSysLine('preview', 'preview', true, 0);
-  document.getElementById('morBuckets').innerHTML =
-    `<div class="stat"><div class="v">13.5864 MOR</div><div class="k">Wallet</div></div>` +
-    `<div class="stat"><div class="v">0 MOR</div><div class="k">Active</div></div>` +
-    `<div class="stat"><div class="v">0.3636 MOR</div><div class="k">On hold</div></div>` +
-    `<div class="claim-col">
-       <div class="stat">
-         <div class="v">0 MOR</div>
-         <div class="k">To claim</div>
-       </div>
-       <div class="reclaim-wrap">
-         <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" disabled>Reclaim</button>
-         <span class="note" id="hkNote">Nothing to reclaim yet</span>
-       </div>
-     </div>`;
-  document.getElementById('morNote').textContent = 'On-hold unlocks after 00:00 UTC · next ≈ Tue, 11 Aug 2026 00:00:00 GMT';
-  document.getElementById('walletMasked').textContent = '0xf24e9…7897598';
+  renderSysLine('v1.0.15', 'v7.15.0', { ok: true, text: UI_COPY.healthy }, 0);
+  const nextMidnight = new Date(); nextMidnight.setUTCHours(24, 0, 0, 0);
+  renderMorTiles({
+    walletWei: liquidWei, activeWei: '0', onHoldWei: String(3636n * 10n ** 14n),
+    nextUnlockUTC: nextMidnight.toISOString(), claimWei: String(1212n * 10n ** 14n), readFailed: false, hkErr: '',
+  });
+  renderSessionReconcile({ state: 'ok', at: new Date().toISOString(), adopted: 0, closed: 0, skipped: 0, deferred: 0 });
+  document.getElementById('walletMasked').textContent = '0x0000…0000';
   allModels = [
     { id: 'glm-5.2', tags: ['LLM', 'glm', 'size:l'], priceMorPerHour: 0.0959 },
     { id: 'glm-5.2:web', tags: ['LLM', 'glm', 'web'], priceMorPerHour: 0.1583 },
@@ -3042,11 +4116,12 @@ themeMq.addEventListener('change', () => {
 });
 applyTheme(themePref);
 
+applyCopy();
 startMatrixRain();
 
 const previewMode = new URLSearchParams(location.search).has('preview')
   || location.protocol === 'file:';
-if (previewMode && !auth) {
+if (previewMode && !authed) {
   enterUiPreview();
   showTab('status');
 } else {
@@ -3058,15 +4133,7 @@ if (previewMode && !auth) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && loggedIn()) refresh({ force: true });
   });
-  if (auth) {
-    (async () => {
-      try {
-        await api('/admin/status');
-        setLoggedIn(true);
-        refresh({ force: true });
-      } catch (e) { logout(); }
-    })();
-  }
+  tryRestoreSession();
 }
 </script>
 </body>
