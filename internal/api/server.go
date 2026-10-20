@@ -7,14 +7,9 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -109,9 +104,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
 
-	// Raw router passthrough for power users (Swagger, MyGateway-style GUIs).
-	mux.Handle("/node/", s.requireAdminHandler(s.nodeProxy()))
-
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))
 	mux.HandleFunc("GET /gui", func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +114,21 @@ func (s *Server) Handler() http.Handler {
 		http.Redirect(w, r, "/gui/", http.StatusFound)
 	})
 
-	return mux
+	// Raw router passthrough (admin-gated, deny list in nodeproxy.go). It is
+	// dispatched on the raw request path, ahead of ServeMux path cleaning, so
+	// every /node/ request is checked by the passthrough itself.
+	node := s.requireAdminHandler(s.nodeProxy())
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := r.URL.Path; p == "/admin" || strings.HasPrefix(p, "/admin/") || strings.HasPrefix(p, "/node/") {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+		}
+		if strings.HasPrefix(rawRequestPath(r), "/node/") {
+			node.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
@@ -153,44 +159,6 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) requireAdminHandler(next http.Handler) http.Handler {
 	return s.requireAdmin(next.ServeHTTP)
-}
-
-// nodeProxy reverse-proxies /node/* to the proxy-router, injecting the
-// router's Basic auth so the admin doesn't need the router credentials.
-func (s *Server) nodeProxy() http.Handler {
-	target, _ := url.Parse(s.cfg.RouterURL)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	director := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		director(req)
-		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/node")
-		if req.URL.Path == "" {
-			req.URL.Path = "/"
-		}
-		req.SetBasicAuth(s.cfg.RouterUser, s.cfg.RouterPass)
-		req.Host = target.Host
-	}
-	// The router's swagger spec declares basePath "/", so swagger-ui's
-	// "Try it out" would drop the /node prefix and miss the passthrough.
-	// Rewrite the spec so requests stay under /node/*.
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		if !strings.HasSuffix(resp.Request.URL.Path, "/swagger/doc.json") || resp.StatusCode != http.StatusOK {
-			return nil
-		}
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return err
-		}
-		for _, old := range []string{`"basePath": "/"`, `"basePath":"/"`} {
-			body = bytes.Replace(body, []byte(old), []byte(`"basePath": "/node"`), 1)
-		}
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		resp.ContentLength = int64(len(body))
-		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		return nil
-	}
-	return proxy
 }
 
 // Version is set from main at startup (build-time ldflags).
