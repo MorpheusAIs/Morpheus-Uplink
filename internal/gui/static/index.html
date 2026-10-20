@@ -1354,6 +1354,9 @@ const UI_COPY = {
   tfEnrolled: (n) => '2FA enrolled · ' + n + ' recovery code' + (n === 1 ? '' : 's') + ' left.',
   tfNotEnrolled: '2FA not enrolled.',
   tfRequired: ' Enrollment required before other admin actions.',
+  // Names only (from configWarn); each fell back to its safe value.
+  tfConfigWarn: (names) => ' Warning: ' + names.join(', ') + ' is not true or false, so the safe value'
+    + ' is in use (2FA required, master key admin off). Set it to true or false.',
   tfBreakGlass: ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.',
   tfReenroll: '2FA was reset. Enroll again below; new recovery codes are issued when you confirm.',
   enrollFirst: 'Enroll 2FA to continue: scan the new QR code and confirm a code.',
@@ -1662,6 +1665,7 @@ async function refreshSecurity() {
       if (tf.enrolled && left === 0) msg += ' ' + UI_COPY.recoveryNoneLeft;
       if (tf.required && !tf.enrolled) msg += UI_COPY.tfRequired;
       if (tf.breakGlassWarn) msg += UI_COPY.tfBreakGlass;
+      if (Array.isArray(tf.configWarn) && tf.configWarn.length) msg += UI_COPY.tfConfigWarn(tf.configWarn);
       if (!tf.enrolled && reenrollPending()) msg = UI_COPY.tfReenroll + ' ' + msg;
       stEl.textContent = msg;
       if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';

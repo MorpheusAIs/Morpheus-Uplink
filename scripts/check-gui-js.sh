@@ -368,6 +368,8 @@ const $ = (id) => document.getElementById(id);
   if ($('securityAlerts').textContent !== 'Loading…' || $('manageMsg').textContent) fail('stale alerts or message after showLogin');
   if ($('managePw').value || $('manageCode').value || !$('resetBtn').disabled) fail('manage fields not cleared');
   if (!extract('showLogin').includes('resetSecurityView();')) fail('showLogin must call resetSecurityView');
+  // Malformed security switch (configWarn, names only) is shown on Security.
+  if (!/if \(Array\.isArray\(tf\.configWarn\) && tf\.configWarn\.length\) msg \+= UI_COPY\.tfConfigWarn\(tf\.configWarn\)/.test(src)) fail('Security must show configWarn');
   // Re-login while 2FA is required and not enrolled: Security only, reloaded, new enrollment started once.
   if (!/if \(data\.need2fa\) \{\s*enterEnrollmentOnly\(\)/.test(src)) fail('finishLogin must enter enrollment-only mode on need2fa');
   T.setTab('security');

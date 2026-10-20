@@ -35,6 +35,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	for _, name := range cfg.MalformedBoolVars {
+		// Name only: the value is never logged.
+		slog.Warn(name + " is not true or false; using the safe value (ADMIN_2FA_REQUIRED: required, MASTER_KEY_ADMIN: off). Set it to true or false.")
+	}
 	if cfg.DirectPaymentIgnored {
 		slog.Warn("SESSION_DIRECT_PAYMENT is ignored (set to true): Uplink only opens staking-mode sessions (stake locked and returned, never paid out)")
 	}

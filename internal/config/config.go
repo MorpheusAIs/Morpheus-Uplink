@@ -53,8 +53,15 @@ type Config struct {
 	WebPublicURL string
 	// MASTER_KEY_ADMIN: when true, Bearer master key may access /admin (audited). Default false.
 	MasterKeyAdmin bool
-	// ADMIN_2FA_REQUIRED: when true and nothing enrolled, only login+enroll work. Default false.
+	// ADMIN_2FA_REQUIRED: when true and nothing enrolled, only login+enroll work.
+	// Unset or empty: false (the code default). Set but not a boolean (for
+	// example a literal "${ADMIN_2FA_REQUIRED:-true}" from a host that does not
+	// interpolate): true, fail closed, and listed in MalformedBoolVars.
 	Admin2FARequired bool
+	// MalformedBoolVars names security switches that were set to something
+	// that is not a boolean (names only, never values). Each fell back to its
+	// safe value: ADMIN_2FA_REQUIRED true, MASTER_KEY_ADMIN false.
+	MalformedBoolVars []string
 	// UPLINK_DEV_HTTP: allow non-Secure cookie for localhost only.
 	DevHTTP bool
 	// TRUSTED_PROXY_CIDR: comma-separated CIDRs that may supply X-Forwarded-For.
@@ -84,12 +91,14 @@ func FromEnv() (*Config, error) {
 		ReconcileRetrySec:    getenvInt("UPLINK_RECONCILE_RETRY_SECONDS", 30),
 		EthRPCURL:            firstNonEmpty(os.Getenv("ETH_RPC_URL"), os.Getenv("ETH_NODE_ADDRESS")),
 		WebPublicURL:         strings.TrimRight(os.Getenv("WEB_PUBLIC_URL"), "/"),
-		MasterKeyAdmin:       getenvBool("MASTER_KEY_ADMIN", false),
-		Admin2FARequired:     getenvBool("ADMIN_2FA_REQUIRED", false),
 		DevHTTP:              getenvBool("UPLINK_DEV_HTTP", false),
 		TrustedProxyCIDRs:    splitCSV(os.Getenv("TRUSTED_PROXY_CIDR")),
 		Reset2FA:             getenvBool("UPLINK_RESET_2FA", false),
 	}
+
+	// Security switches fall back to their safe value when malformed.
+	c.Admin2FARequired = c.securityBool("ADMIN_2FA_REQUIRED", true)
+	c.MasterKeyAdmin = c.securityBool("MASTER_KEY_ADMIN", false)
 
 	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.
 	// COOKIE_CONTENT is accepted as a fallback so a single secret can feed
@@ -173,6 +182,23 @@ func getenvBool(key string, def bool) bool {
 		}
 	}
 	return def
+}
+
+// securityBool reads a security switch. Unset, empty or blank: false (the
+// code default). A boolean (strconv.ParseBool, surrounding space ignored):
+// that value. Anything else: safe, and the name is recorded in
+// MalformedBoolVars so it can be logged and shown (without the value).
+func (c *Config) securityBool(key string, safe bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		c.MalformedBoolVars = append(c.MalformedBoolVars, key)
+		return safe
+	}
+	return b
 }
 
 var weakPasswords = map[string]struct{}{

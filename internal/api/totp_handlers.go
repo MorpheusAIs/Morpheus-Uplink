@@ -305,6 +305,9 @@ func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 		"required":       s.cfg.Admin2FARequired,
 		"breakGlassWarn": s.breakGlassWarn(),
 		"need2fa":        s.cfg.Admin2FARequired && !auth.Enrolled,
+		// Security switches set to a non-boolean (names only); each fell back
+		// to its safe value.
+		"configWarn": s.cfg.MalformedBoolVars,
 		// Count only; lets the GUI hide "Use a recovery code" when none are left.
 		"recoveryRemaining": auth.RecoveryRemaining(),
 	})
