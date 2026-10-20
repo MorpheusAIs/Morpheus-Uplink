@@ -8,6 +8,10 @@
 #    so there is no container healthcheck)
 #  - Uplink boots, reaches the router with the router cookie, serves
 #    /admin/status (routerAuth ok, wallet from the router)
+#  - /node/* passthrough: /node/healthcheck and the Swagger spec pass
+#    (basePath rewritten); /node/blockchain/send/eth and spelling variants
+#    get 403 for every method, are audited, and never reach the router
+#    (checked in the router's own request log)
 #  - boot reconcile on an empty session list: ok, nothing adopted or closed
 #  - docker stop: Uplink is PID 1, exits 0 within the 45 s grace
 #  - no secrets in logs
@@ -95,6 +99,35 @@ login
 router_ok() { status_json | jq -e '.routerAuth.ok == true and .walletAddressSource == "router" and (.walletAddress // "" | test("^0x[0-9a-fA-F]{40}$"))' >/dev/null; }
 wait_for "/admin/status 200 with routerAuth ok and the router's wallet" 60 router_ok
 echo "OK /admin/status 200: routerAuth ok, wallet from the router"
+
+echo "== /node passthrough =="
+# node_req METHOD PATH -> HTTP code (admin session + CSRF headers, raw path).
+node_req() {
+  dc exec -T uplink curl -sS --path-as-is -o /dev/null -w '%{http_code}' -X "$1" \
+    -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
+    -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:8080$2"
+}
+rlog() { dc logs --no-color proxy-router 2>&1; }
+c=$(node_req GET /node/healthcheck); [ "$c" = 200 ] || fail "/node/healthcheck did not pass through ($c)"
+spec=$(dc exec -T uplink curl -sS -f -H "Cookie: $SESSION" http://127.0.0.1:8080/node/swagger/doc.json)
+printf '%s' "$spec" | jq -e '.basePath == "/node"' >/dev/null || fail "swagger basePath not rewritten"
+seen_spec() { rlog | grep -q 'HTTP-REQ\] GET /swagger/doc.json'; }
+wait_for "router request log shows the passthrough" 20 seen_spec
+echo "OK /node/healthcheck 200 and Swagger spec (basePath /node) pass through; router logs them"
+n=0
+for p in /node/blockchain/send/eth /node/BLOCKCHAIN/Send/ETH/ /node/blockchain/s%65nd/eth \
+         /node/blockchain/%2e%2e/blockchain/send/eth /node/healthcheck/../blockchain/send/eth \
+         /node/blockchain%2fsend/eth /node/blockchain//send/eth /node/blockchain/send/mor /node/wallet/privateKey; do
+  for m in GET POST PUT PATCH DELETE; do
+    c=$(node_req "$m" "$p"); n=$((n + 1))
+    [ "$c" = 403 ] || fail "$m $p: $c, want 403"
+  done
+done
+sleep 1
+if rlog | grep -iE 'HTTP-REQ\] [A-Z]+ [^ ]*(send|wallet/privatekey)'; then fail "a blocked request reached the router"; fi
+blocks=$(dc logs --no-color uplink | grep -c '"event":"node_passthrough_block"' || true)
+[ "$blocks" -ge "$n" ] || fail "audit: $blocks node_passthrough_block events, want >= $n"
+echo "OK /node deny list: $n blocked requests -> 403, audited, none in the router request log"
 
 rec_lines() { dc logs --no-color uplink | grep -o '{.*' | jq -cR 'fromjson? | select(.msg == "audit" and (.event // "" | startswith("session_reconcile")))'; }
 summary() { rec_lines | jq -s -c '[.[] | select(.event == "session_reconcile" and .result != "deferred")] | last // empty'; }

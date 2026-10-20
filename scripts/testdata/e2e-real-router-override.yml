@@ -2,6 +2,7 @@
 # deploy/secretvm/docker-compose.yml: proxy-router stays the pinned
 # morpheus-lumerin-node image from the template. Only swaps / test knobs:
 #   - uplink -> local image, 2FA not required (curl-driven), fast healthcheck
+#   - proxy-router: LOG_LEVEL_APP=info so its request log can be checked
 #   - traefik -> disabled (needs SecretVM certs)
 services:
   uplink:
@@ -14,6 +15,11 @@ services:
       timeout: 3s
       retries: 60
       start_period: 5s
+
+  proxy-router:
+    environment:
+      # Router request log ([HTTP-REQ]) is info level; the e2e checks it.
+      - LOG_LEVEL_APP=info
 
   traefik:
     profiles: ["disabled"]
