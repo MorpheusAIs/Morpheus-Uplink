@@ -962,7 +962,7 @@
             <span class="note" style="margin:0" data-copy="walletLabel">Wallet:</span>
             <code id="walletMasked">…</code>
             <span class="note" id="walletSourceNote" style="margin:0"></span>
-            <button type="button" class="icon" title="Copy full address" onclick="copySecret('wallet', this)" aria-label="Copy wallet address">
+            <button type="button" class="icon" title="Copy full address" onclick="copyWallet(this)" aria-label="Copy wallet address">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
             </button>
             <a class="btn ghost" href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
@@ -1601,7 +1601,17 @@ function renderSessionReconcile(sr) {
 }
 
 async function copySecret(kind, btn) {
-  const full = await fullKey(kind);
+  await copyText(await fullKey(kind), btn);
+}
+
+// copyWallet copies the full router wallet address (the page shows it
+// shortened). It is not a key, so it does not go through fullKey.
+async function copyWallet(btn) {
+  await copyText(secrets.wallet, btn);
+}
+
+// copyText writes text to the clipboard with the copy-button feedback.
+async function copyText(full, btn) {
   if (!full) return;
   try {
     await navigator.clipboard.writeText(full);
