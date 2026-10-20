@@ -394,7 +394,6 @@
     cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.12em; color: var(--green); list-style-position: inside;
   }
-  details.fold.low > summary { color: #fbbf24; }
   .sep-dot { color: var(--muted); padding: 0 6px; }
   #fundSection, #supportSection { padding-top: 12px; padding-bottom: 12px; }
   @media (max-width: 640px) {
@@ -938,7 +937,7 @@
         </div>
       </section>
 
-      <!-- 4. Need more MOR? (collapsed unless the wallet is low) -->
+      <!-- 4. Add MOR (always collapsed) -->
       <section id="fundSection">
         <details id="fundDetails" class="fold">
           <summary id="fundSummary" data-copy="fundSummary">Add MOR</summary>
@@ -1337,7 +1336,6 @@ const UI_COPY = {
   modelTipError: 'Lock estimate unavailable.',
   // Need more MOR?
   fundSummary: 'Add MOR',
-  fundSummaryLow: 'Need more MOR? This wallet is low',
   fundHow: 'Fund this wallet from MetaMask / Rabby on Base: swap ETH to MOR, then send MOR plus a little ETH for gas.',
   walletLabel: 'Wallet:',
   fundUniswap: 'Get MOR on Uniswap',
@@ -2147,7 +2145,6 @@ async function doRefresh() {
       readFailed: !!mor.onHoldReadFailed,
       hkErr,
     });
-    renderFund(walletWei);
 
     // Keep the last address we saw; the server already falls back to the
     // last router answer.
@@ -2340,40 +2337,6 @@ function renderMorTiles(v) {
     note.textContent = v.readFailed ? UI_COPY.balancesUnavailable : '';
     note.classList.toggle('hidden', !v.readFailed);
   }
-}
-
-// "Add MOR" opens (and is highlighted) only when the wallet is low: less than
-// LOW_WALLET_STAKES x the median estimated session stake at the deploy
-// default duration, or less than LOW_WALLET_MIN_MOR when no estimate is known.
-const LOW_WALLET_STAKES = 2;
-const LOW_WALLET_MIN_MOR = 1;
-
-function lowWalletThresholdMor(stakesMor) {
-  const xs = (stakesMor || []).filter(x => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
-  if (!xs.length) return LOW_WALLET_MIN_MOR;
-  const mid = xs.length >> 1;
-  const median = xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
-  return LOW_WALLET_STAKES * median;
-}
-
-function isWalletLow(walletWei, stakesMor) {
-  if (walletWei == null || walletWei === '') return false;
-  const mor = Number(walletWei) / 1e18;
-  if (!Number.isFinite(mor)) return false;
-  return mor < lowWalletThresholdMor(stakesMor);
-}
-
-let fundAutoOpened = false;
-function renderFund(walletWei) {
-  const det = document.getElementById('fundDetails');
-  const sum = document.getElementById('fundSummary');
-  if (!det || !sum) return;
-  const stakes = allModels.map(m => connectStakeMor(m.id)).filter(x => x != null);
-  const low = isWalletLow(walletWei, stakes);
-  det.classList.toggle('low', low);
-  sum.textContent = low ? UI_COPY.fundSummaryLow : UI_COPY.fundSummary;
-  if (low && !fundAutoOpened) { det.open = true; fundAutoOpened = true; }
-  if (!low) fundAutoOpened = false;
 }
 
 function setSessNote(msg) {
@@ -3852,7 +3815,6 @@ function enterUiPreview() {
     nextUnlockUTC: nextMidnight.toISOString(), claimWei: String(1212n * 10n ** 14n), readFailed: false, hkErr: '',
   });
   renderSessionReconcile({ state: 'ok', at: new Date().toISOString(), adopted: 0, closed: 0, skipped: 0, deferred: 0 });
-  renderFund(liquidWei);
   document.getElementById('walletMasked').textContent = '0x0000…0000';
   allModels = [
     { id: 'glm-5.2', tags: ['LLM', 'glm', 'size:l'], priceMorPerHour: 0.0959 },

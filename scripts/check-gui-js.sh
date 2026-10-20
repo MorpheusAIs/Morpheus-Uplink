@@ -211,14 +211,14 @@ Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText
 eval([
   constBlock('UI_COPY'),
   'let allModels = []; let modelStakes = {}; let modelStakesDurationSec = 600; let defaultSessionDuration = 600; const MIN_SESSION_DURATION = 600; let selectedModel = "";',
-  'let stakeEstimateError = null; let catalogState = { state: "ok" }; let authed = true; let fundAutoOpened = false;',
-  'const LOW_WALLET_STAKES = 2; const LOW_WALLET_MIN_MOR = 1; const RECOVERY_HINT_KEY = "uplink.2fa.recoveryLeft"; let loginPassword = ""; let recoveryMode = false;',
+  'let stakeEstimateError = null; let catalogState = { state: "ok" }; let authed = true;',
+  'const RECOVERY_HINT_KEY = "uplink.2fa.recoveryLeft"; let loginPassword = ""; let recoveryMode = false;',
   'function flashIconCopied() {} function probeDurationSec() { return 600; }',
   ...['escapeHtml', 'escapeAttr', 'tipHTML', 'setTip', 'fmtMor', 'fmtUnlockLocal', 'weiIsPositive', 'morTileHTML', 'renderMorTiles',
-      'lowWalletThresholdMor', 'isWalletLow', 'renderFund', 'routerProblem', 'statusHealth', 'renderSysLine',
+      'routerProblem', 'statusHealth', 'renderSysLine',
       'modelBySendableId', 'stakeKeyFor', 'stakeRecord', 'modelTitle', 'connectDefaultDurationSec', 'connectStakeMor', 'fmtMorRate', 'fmtDuration',
       'connectModelOptionLabel', 'populateConnectModels', 'copyConnectModel', 'recoveryHint', 'setLoginStep', 'setRecoveryMode'].map(extract),
-  'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, isWalletLow, lowWalletThresholdMor, statusHealth, renderSysLine, renderFund,',
+  'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, statusHealth, renderSysLine,',
   '  populateConnectModels, copyConnectModel, setLoginStep, setModels(m, st) { allModels = m; modelStakes = st || {}; } };',
 ].join('\n'));
 const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
@@ -242,14 +242,9 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (T.fmtUnlockLocal(unlock, new Date('2026-10-19T12:00:00Z')).indexOf('Tue') !== 0) fail('weekday prefix when not today: ' + T.fmtUnlockLocal(unlock, new Date('2026-10-19T12:00:00Z')));
   if (/onHold.*00:00 UTC.*next/i.test(src)) fail('old on-hold repeat paragraph still present');
 
-  // Low wallet: fixed floor without estimates, 2x median stake with them.
-  if (!T.isWalletLow(MOR(0.5), []) || T.isWalletLow(MOR(1.5), [])) fail('fixed low-wallet floor');
-  if (T.lowWalletThresholdMor([1, 3, 2]) !== 4) fail('2x median threshold');
-  if (!T.isWalletLow(MOR(3.9), [1, 2, 3]) || T.isWalletLow(MOR(4.1), [1, 2, 3])) fail('low wallet vs stakes');
-  T.renderFund(MOR(0.2));
-  if (!els.fundDetails.open || els.fundSummary.textContent !== T.UI_COPY.fundSummaryLow) fail('low wallet must open Add MOR');
-  els.fundDetails.open = false; T.renderFund(MOR(50));
-  if (els.fundDetails.open || els.fundSummary.textContent !== T.UI_COPY.fundSummary) fail('Add MOR must stay collapsed when not low');
+  // Add MOR is a plain section: always collapsed, no low-wallet logic.
+  if (/LOW_WALLET|isWalletLow|lowWalletThreshold|fundSummaryLow|renderFund|fold\.low/.test(html)) fail('low-wallet warning code still present');
+  if (!/<details id="fundDetails" class="fold">/.test(html)) fail('Add MOR must be a collapsed <details> without open');
 
   // Status line: Healthy, or the plain reason.
   if (T.statusHealth({}).text !== 'Healthy') fail('healthy');
@@ -295,6 +290,6 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   delete store['uplink.2fa.recoveryLeft'];
   T.setLoginStep('code');
   if (els.recoveryToggle.classList.contains('hidden')) fail('recovery toggle hidden when unknown');
-  console.log('OK: status tiles, reclaim placement, unlock time, low wallet, health line, model labels, copy keys, login recovery toggle');
+  console.log('OK: status tiles, reclaim placement, unlock time, Add MOR collapsed, health line, model labels, copy keys, login recovery toggle');
 })().catch((e) => fail(e.stack || e));
 NODE
