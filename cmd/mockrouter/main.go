@@ -12,8 +12,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -55,8 +55,8 @@ func main() {
 
 	mux.HandleFunc("GET /blockchain/balance", requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
-			"eth": "42000000000000000",              // 0.042 ETH
-			"mor": "12500000000000000000",           // 12.5 MOR
+			"eth": "42000000000000000",    // 0.042 ETH
+			"mor": "12500000000000000000", // 12.5 MOR
 		})
 	}))
 
@@ -103,8 +103,8 @@ func main() {
 			return
 		}
 		var req struct {
-			Model  string `json:"model"`
-			Stream bool   `json:"stream"`
+			Model    string `json:"model"`
+			Stream   bool   `json:"stream"`
 			Messages []struct {
 				Content string `json:"content"`
 			} `json:"messages"`

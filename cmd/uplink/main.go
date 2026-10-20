@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"os"
@@ -28,10 +29,14 @@ import (
 var version = "dev"
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	api.Version = version
 	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+	if cfg.DirectPaymentIgnored {
+		slog.Warn("SESSION_DIRECT_PAYMENT is ignored (set to true): Uplink only opens staking-mode sessions (stake locked and returned, never paid out)")
 	}
 
 	st, err := store.Open(cfg.DataDir)
@@ -41,13 +46,13 @@ func main() {
 
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
-	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover, cfg.DirectPayment)
+	pl := pool.New(rc, cfg.SessionDurationSec, cfg.SessionFailover)
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {
 		detail, sec, err := rc.AwaitActualDuration(sessionID, 8, 2*time.Second)
 		if err != nil {
-			log.Printf("usage: closed session %s: %v", sessionID, err)
+			log.Printf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
 			return
 		}
 		model := cat.NameByID(detail.ModelAgentID)
@@ -59,15 +64,12 @@ func main() {
 		if detail.ClosedAt <= 0 {
 			src = "open+now"
 		}
-		log.Printf("usage: session %s actual %ds for model %s (%s)", sessionID, sec, model, src)
+		log.Printf("usage: session %s actual %ds for model %s (%s)", pool.ShortID(sessionID), sec, model, src)
 	})
 
 	hk, err := housekeep.New(housekeep.Config{
 		Enabled:            cfg.Housekeeping,
-		EthNodeAddress:     cfg.EthNodeAddress,
-		DiamondAddress:     cfg.DiamondAddress,
-		WalletPrivateKey:   cfg.WalletPrivateKey,
-		ChainID:            cfg.EthNodeChainID,
+		Router:             rc,
 		AfterUTCMinute:     5,
 		WithdrawThreshold:  big.NewInt(0), // personal gateway: reclaim any dust
 		WithdrawIterations: 255,
@@ -80,9 +82,47 @@ func main() {
 
 	srv := api.NewServer(cfg, st, cat, pl, rc, hk)
 
+	// Boot session reconcile: gate session opens until the wallet's open
+	// sessions were listed once, adopting usable ones and closing expired
+	// and duplicate ones; sessions for models not in the catalog are left
+	// to expire (see internal/pool/reconcile.go).
+	pl.SetOnReconcileState(srv.WriteReconcileStatus)
+	pl.SetOnRescanEvent(srv.AuditSessionReconcileEvent)
+	pl.Gate()
+	reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
+	defer reconcileCancel()
+	go pl.StartupReconcile(reconcileCtx, pool.ConfiguredFrom(func() ([]string, error) {
+		models, err := cat.List()
+		ids := make([]string, 0, len(models))
+		for _, m := range models {
+			ids = append(ids, m.ID)
+		}
+		return ids, err
+	}), pool.ReconcileConfig{
+		GateFor:     time.Duration(cfg.ReconcileGateSec) * time.Second,
+		RetryEvery:  time.Duration(cfg.ReconcileRetrySec) * time.Second,
+		OnReconcile: srv.AuditSessionReconcile,
+		OnEvent:     srv.AuditSessionReconcileEvent,
+		OnGiveUp:    srv.AuditSessionReconcileDeferred,
+	})
+
 	hkCtx, hkCancel := context.WithCancel(context.Background())
 	defer hkCancel()
 	go hk.Start(hkCtx)
+
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		srv.CheckOutflow()
+		for {
+			select {
+			case <-hkCtx.Done():
+				return
+			case <-t.C:
+				srv.CheckOutflow()
+			}
+		}
+	}()
 
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -102,11 +142,24 @@ func main() {
 	<-stop
 
 	log.Println("shutting down…")
+	t0 := time.Now()
 	hkCancel()
+	reconcileCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
+	log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
 	if cfg.CloseSessionsOnExit {
-		pl.CloseAll()
+		// Finish inside the 45 s stop grace: 40 s from SIGTERM in total,
+		// at most 8 s per close. Whatever is left is closed (expired) or
+		// adopted by the next boot reconcile.
+		r := pl.CloseAllWithin(t0.Add(shutdownBudget), shutdownPerClose)
+		log.Printf("shutdown: closed %d/%d session(s), %d failed, %d left for boot reconcile, total %s",
+			r.Closed, r.Attempted, r.Failed, r.Left, time.Since(t0).Round(time.Millisecond))
 	}
 }
+
+const (
+	shutdownBudget   = 40 * time.Second
+	shutdownPerClose = 8 * time.Second
+)
