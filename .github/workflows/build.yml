@@ -31,9 +31,10 @@ name: CI/CD
 #   deploy/            entrypoint in image + SecretVM/generic release assets
 #   docker-compose.local.yml   CI ASCII / local-stack contract
 #   this workflow      CI itself
+#   scripts/deploy-assets.sh, .env.example   pull_request only (asset check)
 #
 # Does NOT trigger (examples): docs/**, README.md, AGENTS.md, DISCLAIMER.md,
-# LICENSE, NOTICE, llms*.txt, scripts/**, .ai-docs/**, .env.example
+# LICENSE, NOTICE, llms*.txt, other scripts/**, .ai-docs/**
 #
 # workflow_dispatch always runs (manual prerelease / force publish).
 on:
@@ -48,6 +49,10 @@ on:
       - "Dockerfile"
       - "docker-compose.local.yml"
       - ".github/workflows/build.yml"
+      # Release-asset generator and the env example it checks (PR check only;
+      # they do not cut a version on their own).
+      - "scripts/deploy-assets.sh"
+      - ".env.example"
   push:
     branches: [main]
     paths:
@@ -129,7 +134,8 @@ jobs:
           # Every environment: assignment must be one of the six fillables.
           while IFS= read -r line; do
             [ -z "$line" ] && continue
-            key=$(echo "$line" | sed -nE 's/^[[:space:]]*-[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p')
+            # grep -n output: strip the "N:" prefix before reading the key.
+            key=$(echo "$line" | sed -nE 's/^[0-9]+:[[:space:]]*-[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p')
             [ -z "$key" ] && continue
             if ! echo "$key" | grep -qE "^(${ALLOWED})$"; then
               echo "❌ environment: key not in six-secret allowlist: $line"

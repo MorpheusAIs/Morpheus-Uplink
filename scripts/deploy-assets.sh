@@ -21,7 +21,8 @@
 #      is :latest, and the Uplink image is exactly IMAGE@DIGEST.
 #   T  no TODO or REPLACE in generated assets or their templates.
 #   V  ${...} variables per template: SecretVM uses exactly the six secrets
-#      (tunables live in its configs: block); generic, Railway and local use
+#      and has no other environment: key, literal or not (SecretVM makes a
+#      form field of each; tunables live in its configs: block); generic, Railway and local use
 #      their required variables plus the documented overrides below, each
 #      override with a default (${VAR:-default}).
 #   E  each env example matches its template: every key (set or commented)
@@ -61,6 +62,8 @@ UPLINK_LINE = re.compile(r"^(\s*)image:\s*ghcr\.io/morpheusais/uplink(?:[:@]\S*)
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+])?")
 IMAGE = re.compile(r"^\s*image:\s*(\S+)", re.M)
 PINNED = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
+
+ENV_ITEM = re.compile(r"^\s+-\s*([A-Za-z_][A-Za-z0-9_]*)=", re.M)
 
 def read(p):
     with open(p) as f:
@@ -140,6 +143,11 @@ def check(image, digest, root, out):
             bad.append("V(%s): ${%s:-...} is not a documented override" % (name, v))
         if name == "secretvm" and (r | o) != set(SIX):
             bad.append("V(secretvm): variables %s, want exactly the six secrets" % sorted(r | o))
+        if name == "secretvm":
+            # SecretVM turns every environment: key into a form field, literal
+            # values included, so non-secrets belong in the configs: block.
+            for k in sorted(set(ENV_ITEM.findall(compose)) - set(SIX)):
+                bad.append("V(secretvm): environment key %s is not one of the six secrets (use configs:)" % k)
         for v in sorted(req - r - o):
             bad.append("V(%s): required variable %s is not used" % (name, v))
         # E
@@ -206,12 +214,13 @@ PY
   copy_root; edit "$tmp/out/docker-compose.secretvm.deployed.yml" 'image: ghcr.io/morpheusais/uplink@sha256:0+' 'image: ghcr.io/morpheusais/uplink:latest'; expect_fail uplink-latest 'P\(secretvm\).*:latest'
   copy_root; edit "$tmp/out/docker-compose.secretvm.deployed.yml" '(image: traefik:[^@\s]+)@sha256:[0-9a-f]+' '\1'; expect_fail unpinned 'P\(secretvm\).*not digest-pinned'
   copy_root; edit "$tmp/out/docker-compose.generic.deployed.yml" 'uplink@sha256:0+' 'uplink@sha256:'"$(printf '1%.0s' {1..64})"; expect_fail digest-mismatch 'P\(generic\): Uplink image'
-  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_2FA_REQUIRED=)true' '\1${ADMIN_2FA_REQUIRED:-true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-extra-var 'V\(secretvm\)'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-extra-var 'V\(secretvm\)'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '\$\{WEB_PUBLIC_URL\}' 'https://x.example'; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '\$\{WEB_PUBLIC_URL\}' 'https://x.example'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-missing-secret 'V\(secretvm\): variables'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(- DATA_DIR=/data)' '\1\n      - SURPRISE=${SURPRISE_KNOB:-1}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail undocumented-override 'V\(generic\).*SURPRISE_KNOB'
   copy_root; printf '# NOT_IN_TEMPLATE=1\n' >> "$tmp/root/deploy/railway/env.example"; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail env-extra-key 'E\(railway\).*NOT_IN_TEMPLATE'
   copy_root; edit "$tmp/root/deploy/generic/env.example" '^PUBLIC_HOST=.*$' '# (removed)'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail env-missing-required 'E\(generic\): required PUBLIC_HOST'
   copy_root; printf 'ADMIN_2FA_REQUIRED=true\n' >> "$tmp/root/deploy/secretvm/env.template"; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-env-seven 'E\(secretvm\)'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-literal-env 'V\(secretvm\): environment key MASTER_KEY_ADMIN'
   copy_root; printf 'SESSION_FAILOVER=false\n' >> "$tmp/out/env.generic.example"; expect_fail env-asset-drift 'E\(generic\): env.generic.example differs'
   copy_root; printf '# HOUSEKEEPING=true\n' >> "$tmp/root/.env.example"; expect_fail env-duplicate 'E\(local\): HOUSEKEEPING listed twice'
   echo "OK: deploy-assets self-tests ($n failure modes rejected)"

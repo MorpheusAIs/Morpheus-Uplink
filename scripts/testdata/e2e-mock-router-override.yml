@@ -7,7 +7,10 @@
 #   - short reconcile gate/retry; 2FA not required (curl-driven checks),
 #     except the 2FA reset section (E2E_ADMIN_2FA_REQUIRED=true)
 #   - bake.env: the SecretVM content with the model catalog served by the
-#     mock (two configured models) instead of the public catalog
+#     mock (two configured models) instead of the public catalog, and
+#     without ADMIN_2FA_REQUIRED / MASTER_KEY_ADMIN, so the environment:
+#     knob below applies (bake.env wins over environment:; code default for
+#     MASTER_KEY_ADMIN is false)
 services:
   uplink:
     image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
