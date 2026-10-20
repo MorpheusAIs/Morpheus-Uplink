@@ -8,7 +8,8 @@
 # COOKIE_CONTENT, WALLET_PRIVATE_KEY, ETH_NODE_ADDRESS, WEB_PUBLIC_URL.
 # WALLET_PRIVATE_KEY and ETH_NODE_ADDRESS go to proxy-router only.
 #
-# Lumerin pin: v7.15.0 digest. Uplink image TODO digest until release pin.
+# Lumerin pin: v7.15.0 digest. The Uplink image is pinned to its digest in
+# the release assets (scripts/deploy-assets.sh).
 # H2/H3: see deploy/secretvm/README.md.
 x-logging: &default-logging
   driver: json-file
@@ -18,8 +19,8 @@ x-logging: &default-logging
 
 services:
   uplink:
-    # TODO digest: pin at release (CI release check fails if still :latest or TODO)
-    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
+    # Release assets pin this to the built digest (scripts/deploy-assets.sh).
+    image: ghcr.io/morpheusais/uplink:latest
     restart: unless-stopped
     logging: *default-logging
     security_opt:

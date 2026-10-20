@@ -48,8 +48,8 @@ services:
       - uplink
 
   uplink:
-    # TODO digest: pin at release (CI release check fails if still :latest or TODO)
-    image: ghcr.io/morpheusais/uplink:latest # TODO digest=@sha256:REPLACE_AT_RELEASE
+    # Release assets pin this to the built digest (scripts/deploy-assets.sh).
+    image: ghcr.io/morpheusais/uplink:latest
     restart: unless-stopped
     logging: *default-logging
     security_opt:
@@ -73,6 +73,8 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}
       - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
+      # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
+      - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}
       - TRUSTED_PROXY_CIDR=172.28.0.0/16
       - API_KEY_SEED=${API_KEY_SEED}
       # Same user:pass as the router (ROUTER_AUTH works too).

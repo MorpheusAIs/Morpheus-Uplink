@@ -98,6 +98,8 @@ services:
       - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
       - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
       - HOUSEKEEPING=${HOUSEKEEPING:-true}
+      # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
+      - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}
       - DATA_DIR=/data
     ports:
       - "127.0.0.1:8080:8080"

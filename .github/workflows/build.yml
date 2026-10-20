@@ -176,9 +176,10 @@ jobs:
         run: bash scripts/check-no-direct-payment.sh
       - name: GUI script must parse
         run: bash scripts/check-gui-js.sh
-      - name: Uplink image lines must not be :latest without TODO (script self-check)
-        run: |
-          bash scripts/check-uplink-image-pins.sh --allow-todo
+      - name: Deploy assets (digest pins, env sets, env examples; same script as release)
+        # Generates the release assets against a fake digest, checks them and
+        # their templates, then proves every failure mode fires.
+        run: bash scripts/deploy-assets.sh pr
 
 
   pr-image-smoke:
@@ -355,17 +356,13 @@ jobs:
         run: |
           DIGEST=$(docker buildx imagetools inspect "${IMAGE_NAME}:${VTAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          pin_uplink() {
-            sed -E "s|image: ${IMAGE_NAME}[^[:space:]]*|image: ${IMAGE_NAME}@${DIGEST}|" "$1" > "$2"
-          }
-          pin_uplink deploy/secretvm/docker-compose.yml docker-compose.secretvm.deployed.yml
-          pin_uplink deploy/generic/docker-compose.yml docker-compose.generic.deployed.yml
-          cp deploy/secretvm/env.template env.secretvm.example
-          cp deploy/generic/env.example env.generic.example
+          # Same script and checks as the pull_request job (deploy-assets.sh pr).
+          bash scripts/deploy-assets.sh generate "${IMAGE_NAME}" "${DIGEST}" .
+          bash scripts/deploy-assets.sh check "${IMAGE_NAME}" "${DIGEST}" .
           {
             echo "✅ Image digest: ${DIGEST}"
             echo '```yaml'
-            grep 'image: ' docker-compose.secretvm.deployed.yml docker-compose.generic.deployed.yml
+            grep 'image: ' docker-compose.*.deployed.yml
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -376,13 +373,11 @@ jobs:
           path: |
             docker-compose.secretvm.deployed.yml
             docker-compose.generic.deployed.yml
+            docker-compose.railway.deployed.yml
             env.secretvm.example
             env.generic.example
+            env.railway.example
 
-      - name: Fail release if Uplink image still :latest or TODO digest
-        if: env.IS_RELEASE == 'true'
-        run: |
-          bash scripts/check-uplink-image-pins.sh --fail-todo --fail-latest
       - name: Create GitHub release
         if: env.IS_RELEASE == 'true'
         env:
@@ -395,13 +390,16 @@ jobs:
             echo ""
             echo "- SecretVM: \`docker-compose.secretvm.deployed.yml\` + \`env.secretvm.example\`"
             echo "- Any Docker VPS: \`docker-compose.generic.deployed.yml\` + \`env.generic.example\`"
+            echo "- Railway (reference): \`docker-compose.railway.deployed.yml\` + \`env.railway.example\`"
             echo ""
             echo "Operator guide: https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/README.md"
           } > release-notes.md
           gh release create "${VTAG}" \
             docker-compose.secretvm.deployed.yml \
             docker-compose.generic.deployed.yml \
+            docker-compose.railway.deployed.yml \
             env.secretvm.example \
             env.generic.example \
+            env.railway.example \
             --title "${VTAG}" \
             --notes-file release-notes.md
