@@ -346,6 +346,7 @@ conf=$(uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$TOTP_SECRET")\"
 RECOVERY=$(printf '%s' "$conf" | jq -r '.recoveryCodes[]')
 [ "$(printf '%s\n' "$RECOVERY" | grep -cE '^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}$')" = 10 ] || fail "want 10 recovery codes at enrollment"
 try_login "$ADMIN_PASSWORD" "$(totp "$TOTP_SECRET" 1)"
+USED_STEP=$(( $(date +%s) / 30 + 1 ))   # last TOTP step the server accepted
 [ "$LCODE" = 200 ] && [ -n "$LSESSION" ] || fail "password + TOTP login: $LCODE"
 SESSION=$LSESSION
 uapi POST /admin/sessions/revoke-all '{}' >/dev/null
@@ -366,9 +367,58 @@ try_login "$ADMIN_PASSWORD" "$RC1"
 [ "$LCODE" = 401 ] || fail "recovery code accepted twice: $LCODE"
 echo "OK 2FA: revoke-all and logout end every session; password alone stops at 2fa_required; recovery codes are single-use"
 
+echo "== admin 2FA reset with ADMIN_2FA_REQUIRED=true: re-enroll with a new secret =="
+# Recreating uplink drops its container logs; keep them for the final check.
+PRE_LOGS=$(dc logs --no-color 2>&1)
+E2E_ADMIN_2FA_REQUIRED=true dc up -d uplink >/dev/null
+wait_healthy uplink
+[ "$(dc exec -T uplink printenv ADMIN_2FA_REQUIRED)" = true ] || fail "uplink not recreated with ADMIN_2FA_REQUIRED=true"
+RC2=$(printf '%s\n' "$RECOVERY" | sed -n 2p)
+try_login "$ADMIN_PASSWORD" "$RC2"
+[ "$LCODE" = 200 ] || fail "login before reset: $LCODE"
+SESSION=$LSESSION; OLD_SESSION=$LSESSION
+# A TOTP step newer than any the server accepted (a step works once).
+while [ $(( $(date +%s) / 30 )) -le "$USED_STEP" ]; do sleep 1; done
+out=$(uapi POST /admin/2fa/reset "{\"password\":\"$ADMIN_PASSWORD\",\"code\":\"$(totp "$TOTP_SECRET")\"}")
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "reset with password + TOTP (2FA required): $(cat "$E2E_BOOT_DIR/ucode") $out"
+printf '%s' "$out" | jq -e '.ok == true and .reenroll == true and .required == true' >/dev/null || fail "reset response: $out"
+dc logs --no-color uplink | grep -q '"event":"2fa_reset","result":"ok".*"reason":"sessions_revoked=' || fail "no 2fa_reset audit"
+SESSION=$OLD_SESSION; uapi GET /admin/2fa/status >/dev/null
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "old cookie after reset: $(cat "$E2E_BOOT_DIR/ucode")"
+dc exec -T uplink cat /data/uplink-state.json | jq -e '.auth // {} | (has("totpBlob") or has("recoveryCodes") or has("enrolled") or has("pendingSecretEnc")) | not' >/dev/null \
+  || fail "state file still holds 2FA material after reset"
+try_login "$ADMIN_PASSWORD" ""
+[ "$LCODE" = 200 ] && [ -n "$LSESSION" ] || fail "password-only login after reset: $LCODE"
+SESSION=$LSESSION
+uapi GET /admin/2fa/status | jq -e '.enrolled == false and .need2fa == true' >/dev/null || fail "want the enrollment-required state after reset"
+body=$(uapi GET /admin/status)
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 403 ] && printf '%s' "$body" | grep -q '2fa enrollment required' || fail "admin routes before re-enroll: $(cat "$E2E_BOOT_DIR/ucode") $body"
+start=$(uapi POST /admin/2fa/enroll/start '{}')
+NEW_SECRET=$(printf '%s' "$start" | jq -r .secret)
+[ -n "$NEW_SECRET" ] && [ "$NEW_SECRET" != null ] && [ "$NEW_SECRET" != "$TOTP_SECRET" ] || fail "re-enroll must issue a new secret"
+if [ "$(totp "$TOTP_SECRET")" != "$(totp "$NEW_SECRET")" ]; then
+  uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$TOTP_SECRET")\"}" >/dev/null
+  [ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "OLD secret accepted at enroll confirm: $(cat "$E2E_BOOT_DIR/ucode")"
+fi
+conf=$(uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$NEW_SECRET")\"}")
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "enroll confirm with new secret: $conf"
+NEW_RECOVERY=$(printf '%s' "$conf" | jq -r '.recoveryCodes[]')
+[ "$(printf '%s\n' "$NEW_RECOVERY" | grep -c .)" = 10 ] || fail "want 10 new recovery codes"
+if [ "$(totp "$TOTP_SECRET" 1)" != "$(totp "$NEW_SECRET" 1)" ]; then
+  try_login "$ADMIN_PASSWORD" "$(totp "$TOTP_SECRET" 1)"
+  [ "$LCODE" = 401 ] || fail "OLD TOTP accepted at login after re-enroll: $LCODE"
+fi
+try_login "$ADMIN_PASSWORD" "$RC2"
+[ "$LCODE" = 401 ] || fail "old recovery code accepted after re-enroll: $LCODE"
+try_login "$ADMIN_PASSWORD" "$(totp "$NEW_SECRET" 1)"
+[ "$LCODE" = 200 ] || fail "login with the new TOTP: $LCODE"
+SESSION=$LSESSION; uapi GET /admin/status >/dev/null
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "admin access after re-enroll: $(cat "$E2E_BOOT_DIR/ucode")"
+echo "OK 2FA reset (required): wiped on disk, sessions ended, new secret enrolled, old secret and codes rejected"
+
 echo "== logs carry no secrets; no direct payment ever requested =="
-logs=$(dc logs --no-color 2>&1)
-for s in "$COOKIE_SECRET" "$ADMIN_PASSWORD" "$API_KEY_SEED" "${WALLET_PRIVATE_KEY#0x}" "$APIKEY" "$TOTP_SECRET" $RECOVERY; do
+logs="$PRE_LOGS$(dc logs --no-color 2>&1)"
+for s in "$COOKIE_SECRET" "$ADMIN_PASSWORD" "$API_KEY_SEED" "${WALLET_PRIVATE_KEY#0x}" "$APIKEY" "$TOTP_SECRET" "$NEW_SECRET" $RECOVERY $NEW_RECOVERY; do
   if printf '%s' "$logs" | grep -qF -- "$s"; then fail "a secret appears in the compose logs"; fi
 done
 [ "$(stats | jq -r .direct_payment_requests)" = 0 ] || fail "a direct-payment request reached the router"
