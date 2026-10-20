@@ -124,7 +124,7 @@ const MASKED = 'sk-p\u2026d04f';
 let sent = [], reveals = 0, clip = [];
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || { value: '', textContent: '', classList: { add() {}, remove() {} } }) };
-global.navigator = { clipboard: { writeText: async (t) => { clip.push(t); } } };
+Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { clip.push(t); } } }, configurable: true, writable: true });
 global.showLogin = () => {};
 global.flashIconCopied = () => {};
 global.probeDurationSec = () => 600;
