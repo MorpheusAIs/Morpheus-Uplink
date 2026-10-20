@@ -466,7 +466,7 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   one `data: {"error":{"message":...,"type":"provider_error","code":N}}`
   event and the stream ends. The provider goes into cool-down and the
   session is retired (only when another provider exists), so the next
-  request opens elsewhere.
+  request opens elsewhere (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short
   address, the status class (`402`, `429`, `5xx`, ...), and the outcome:

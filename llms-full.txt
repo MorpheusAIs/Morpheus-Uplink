@@ -1065,7 +1065,8 @@ print(client.chat.completions.create(
   router.
 - Streaming: if the provider fails after part of the answer was sent, the
   stream ends with one `data: {"error":{...,"type":"provider_error"}}`
-  event. Send the request again; the next one goes to another provider.
+  event. Send the request again; the next one goes to another provider
+  (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
 - See [Provider failover](06-developers.md#provider-failover).
 
 </details>
@@ -1639,7 +1640,7 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   one `data: {"error":{"message":...,"type":"provider_error","code":N}}`
   event and the stream ends. The provider goes into cool-down and the
   session is retired (only when another provider exists), so the next
-  request opens elsewhere.
+  request opens elsewhere (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short
   address, the status class (`402`, `429`, `5xx`, ...), and the outcome:

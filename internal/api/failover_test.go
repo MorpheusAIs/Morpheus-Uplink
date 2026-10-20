@@ -152,6 +152,9 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 	if v, ok := body["failover"]; ok && v != false {
 		m.t.Errorf("open body carries failover=%v", v)
 	}
+	if _, ok := body["failover"]; byBid != "" && !ok {
+		m.t.Errorf("open-by-bid body has no explicit failover=false")
+	}
 	if v := body["directPayment"]; v != false {
 		m.t.Errorf("open body directPayment=%v", v)
 	}
@@ -607,6 +610,59 @@ func TestFailoverMidStream(t *testing.T) {
 	opens, _ := m.snapshot()
 	if len(opens) != 2 || opens[1].provider != provB {
 		t.Fatalf("opens %+v", opens)
+	}
+}
+
+// A mid-stream failure on the failover retry acts on the retried session
+// (B), not the one that failed first (A): B cools, its session is retired
+// and the next request opens on C.
+func TestFailoverRetryMidStream(t *testing.T) {
+	m := newFakeMarket(t, provA, provB, provC)
+	m.behave[provA] = pme402
+	m.behave[provB] = func(n int, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n"))
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte(`{"providerModelError":{"error":{"message":"Insufficient balance"}},"statusCode":402}`))
+	}
+	e := newFailoverEnv(t, m, nil)
+	code, body := e.chat(t, true)
+	if code != 200 || !strings.Contains(body, `"Hel"`) || !strings.Contains(body, `data: {"error":`) || strings.Contains(body, "providerModelError") {
+		t.Fatalf("got %d %q", code, body)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, closes := m.snapshot(); len(closes) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, closes := m.snapshot()
+			t.Fatalf("B's session was not retired: closes %v", closes)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, closes := m.snapshot()
+	if !strings.HasSuffix(closes[0], "aaaa") || !strings.HasSuffix(closes[1], "bbbb") {
+		t.Fatalf("closes %v", closes)
+	}
+	if !e.srv.pool.IsCooling(testModelID, provB) || !e.srv.pool.IsCooling(testModelID, provA) {
+		t.Fatal("A and B should both be cooling")
+	}
+	if a := e.failoverAudits(); len(a) != 2 || a[0] != "stream_retired" || a[1] != "retried_ok" { // newest first
+		t.Fatalf("audits %v", a)
+	}
+	// Retired: a rehydrate does not adopt B's session back.
+	_ = e.srv.pool.RehydrateForce()
+	if id := e.pooled(); strings.HasSuffix(id, "bbbb") {
+		t.Fatalf("B's session re-adopted: %s", id)
+	}
+	if code, _ := e.chat(t, false); code != 200 {
+		t.Fatalf("next request %d", code)
+	}
+	opens, _ := m.snapshot()
+	if last := opens[len(opens)-1]; last.provider != provC {
+		t.Fatalf("next request opened on %s: %+v", last.provider, opens)
 	}
 }
 

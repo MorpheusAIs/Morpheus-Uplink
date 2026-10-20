@@ -142,10 +142,14 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 					return
 				}
 			case dec == decFailover && s.cfg.SessionFailover:
-				res, err = s.failoverAndRetry(w, r, routerPath, body, keyID, reqModel, modelID, sessionID, durationSec, err)
+				var retryID string
+				res, retryID, err = s.failoverAndRetry(w, r, routerPath, body, keyID, reqModel, modelID, sessionID, durationSec, err)
 				if err != nil {
 					return // already answered
 				}
+				// The answer came from the replacement session: a
+				// mid-stream failure below must act on that one.
+				sessionID = retryID
 			default:
 				relayRouterError(w, err)
 				return
@@ -163,9 +167,10 @@ var errAnswered = errors.New("answered")
 
 // failoverAndRetry moves the model to another provider and sends the
 // request once more. Exactly one retry: a provider failure on it cools
-// that provider too and is relayed, with no second failover.
+// that provider too and is relayed, with no second failover. On success it
+// returns the session the retry ran on.
 func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
-	keyID, reqModel, modelID, failedID string, durationSec int, firstErr error) (*router.ForwardResult, error) {
+	keyID, reqModel, modelID, failedID string, durationSec int, firstErr error) (*router.ForwardResult, string, error) {
 	class := statusClass(firstErr)
 	fr, ferr := s.pool.Failover(modelID, failedID, durationSec, true)
 	if fr.CloseFailed {
@@ -179,7 +184,7 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 		log.Printf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
 		relayRouterError(w, firstErr) // the original status and body
-		return nil, errAnswered
+		return nil, "", errAnswered
 	}
 	if fr.Opened {
 		s.store.TrackSessionOpen(fr.SessionID, keyID, reqModel)
@@ -193,9 +198,9 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 				s.pool.MarkSessionCooling(modelID, fr.SessionID)
 			}
 			relayRouterError(w, err)
-			return nil, errAnswered
+			return nil, "", errAnswered
 		}
-		return res, nil
+		return res, fr.SessionID, nil
 	}
 	if err != nil {
 		log.Printf("api: forward retry after failover (model %s, session %s): %v", reqModel, pool.ShortID(fr.SessionID), err)
@@ -204,10 +209,10 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 		}
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "retry_failed")
 		relayRouterError(w, err)
-		return nil, errAnswered
+		return nil, "", errAnswered
 	}
 	s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "retried_ok")
-	return res, nil
+	return res, fr.SessionID, nil
 }
 
 // afterStreamProviderError handles a provider failure after part of an
@@ -216,12 +221,12 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 // another provider exists) so the next request opens elsewhere. In the
 // background: the response is finished.
 func (s *Server) afterStreamProviderError(reqModel, modelID, sessionID string, durationSec, status int) {
+	if !s.cfg.SessionFailover {
+		return
+	}
 	class := fmt.Sprint(status)
 	if status >= 500 {
 		class = "5xx"
-	}
-	if !s.cfg.SessionFailover {
-		return
 	}
 	go func() {
 		fr, err := s.pool.Failover(modelID, sessionID, durationSec, false)

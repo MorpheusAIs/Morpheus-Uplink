@@ -75,7 +75,8 @@ print(client.chat.completions.create(
   router.
 - Streaming: if the provider fails after part of the answer was sent, the
   stream ends with one `data: {"error":{...,"type":"provider_error"}}`
-  event. Send the request again; the next one goes to another provider.
+  event. Send the request again; the next one goes to another provider
+  (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
 - See [Provider failover](06-developers.md#provider-failover).
 
 </details>

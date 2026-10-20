@@ -306,7 +306,8 @@ func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error)
 	body := struct {
 		SessionDuration int  `json:"sessionDuration"`
 		DirectPayment   bool `json:"directPayment"`
-	}{durationSec, false}
+		Failover        bool `json:"failover"`
+	}{durationSec, false, false}
 	var res struct {
 		SessionID string `json:"sessionID"`
 	}
