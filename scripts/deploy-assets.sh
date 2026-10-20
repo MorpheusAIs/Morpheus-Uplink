@@ -30,7 +30,8 @@
 #      duplicates; env.secretvm.example sets exactly the six secrets.
 #   D  security defaults (SECURITY_DEFAULTS, FALSE_WHEREVER below): each
 #      pinned variable has exactly the pinned value wherever the compose or
-#      its env example gives one (${VAR:-x} default or literal).
+#      its env example gives one (${VAR:-x} default or literal, quoted or
+#      with "export"), and is assigned at most once per file.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/scripts/deploy-assets.sh"
@@ -76,22 +77,33 @@ SECURITY_DEFAULTS = {
 # False wherever they appear, in every template and env example.
 FALSE_WHEREVER = ("UPLINK_RESET_2FA", "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT")
 
+def _assign(var):
+    # var at key position: optional list dash, optional quote (single or
+    # double), optional "export ", optional closing quote, then = or ": ".
+    return re.compile(r"""^\s*(?:-\s*)?["']?(?:export\s+)?""" + var +
+                      r"""["']?\s*(?:=|:\s)\s*(.*)$""")
+
 def compose_values(text, var):
-    """Every value the compose gives var: ${var:-x} defaults and literals
-    (environment items "- var=x" / "var: x", configs content "var=x")."""
+    """Every value the compose gives var, and how many times it is assigned:
+    ${var:-x} defaults and literals (environment items "- var=x",
+    '- "var=x"', "var: x", configs content "var=x" / "export var=x")."""
     vals = re.findall(r"\$\{" + var + r":?-([^}]*)\}", text)
-    lit = re.compile(r"^\s*(?:-\s*)?" + var + r"\s*(?:=|:\s)\s*(.*)$")
+    lit, count = _assign(var), 0
     for line in text.splitlines():
         if re.match(r"^\s*#", line):
             continue
         m = lit.match(line)
-        if m and "${" not in m.group(1):
+        if not m:
+            continue
+        count += 1
+        if "${" not in m.group(1):
             vals.append(m.group(1).split(" #")[0].strip().strip("'\""))
-    return vals
+    return vals, count
 
 def env_values(text, var):
     """Values set or shown (commented) for var in an env example."""
-    return re.findall(r"^#?\s*" + var + r"=(\S*)", text, re.M)
+    lit = re.compile(r"""^#?\s*["']?(?:export\s+)?""" + var + r"""["']?=["']?([^\s"']*)""")
+    return [m.group(1) for m in map(lit.match, text.splitlines()) if m]
 
 UPLINK_LINE = re.compile(r"^(\s*)image:\s*ghcr\.io/morpheusais/uplink(?:[:@]\S*)?(?:\s+#.*)?$", re.M)
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+])?")
@@ -203,7 +215,12 @@ def check(image, digest, root, out):
         for var in FALSE_WHEREVER:
             pins.setdefault(var, "false")
         for var, want in sorted(pins.items()):
-            got = compose_values(compose, var)
+            got, count = compose_values(compose, var)
+            evals = env_values(envtext, var)
+            if count > 1:
+                bad.append("D(%s): %s is assigned %d times in %s" % (name, var, count, tpl))
+            if len(evals) > 1:
+                bad.append("D(%s): %s is assigned %d times in %s" % (name, var, len(evals), env))
             if want is ABSENT:
                 if got or re.search(r"\b" + var + r"\b", "\n".join(
                         l for l in compose.splitlines() if not re.match(r"^\s*#", l))):
@@ -214,7 +231,7 @@ def check(image, digest, root, out):
             for v in got:
                 if v != want:
                     bad.append("D(%s): %s defaults to %s in %s, want %s" % (name, var, v, tpl, want))
-            for v in env_values(envtext, var):
+            for v in evals:
                 if v != want:
                     bad.append("D(%s): %s=%s in %s, want %s" % (name, var, v, env, want))
     if bad:
@@ -289,6 +306,11 @@ PY
   copy_root; edit "$tmp/root/deploy/generic/env.example" '^(MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-env-master-key-true 'D\(generic\): MASTER_KEY_ADMIN=true in deploy/generic/env.example'
   copy_root; edit "$tmp/root/docker-compose.local.yml" '^(\s+- UPLINK_RESET_2FA=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail local-master-key-set 'D\(local\): MASTER_KEY_ADMIN must not be set'
   copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{ADMIN_2FA_REQUIRED:-)true\}' '\1false}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-2fa-false 'D\(railway\): ADMIN_2FA_REQUIRED defaults to false'
+  copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '^(\s+)- MASTER_KEY_ADMIN=\$\{MASTER_KEY_ADMIN:-false\}$' '\1- "MASTER_KEY_ADMIN=true"'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-quoted-master-key-true 'D\(generic\): MASTER_KEY_ADMIN defaults to true'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)MASTER_KEY_ADMIN=false$' '\1export MASTER_KEY_ADMIN=true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-export-master-key-true 'D\(secretvm\): MASTER_KEY_ADMIN defaults to true'
+  copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '^(\s+- MASTER_KEY_ADMIN=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-master-key-twice 'D\(generic\): MASTER_KEY_ADMIN is assigned 2 times in deploy/generic/docker-compose.yml'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)(ADMIN_2FA_REQUIRED=true)$' '\1\2\n\1\2'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-twice 'D\(secretvm\): ADMIN_2FA_REQUIRED is assigned 2 times in deploy/secretvm/docker-compose.yml'
+  copy_root; edit "$tmp/root/deploy/railway/env.example" '^(# MASTER_KEY_ADMIN=false)$' '\1\nexport MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-master-key-twice 'D\(railway\): MASTER_KEY_ADMIN is assigned 2 times in deploy/railway/env.example'
   echo "OK: deploy-assets self-tests ($n failure modes rejected)"
 }
 
