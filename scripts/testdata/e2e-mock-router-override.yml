@@ -1,0 +1,45 @@
+# Overlay for scripts/e2e-mock-router.sh. Applied ON TOP of
+# deploy/secretvm/docker-compose.yml so caps, volumes, networks and the
+# bake.env config are exactly the SecretVM ones. Only swaps / test knobs:
+#   - uplink -> local image
+#   - proxy-router -> stateful python mock (same service name, port 8082)
+#   - traefik -> disabled (needs SecretVM certs)
+#   - short reconcile gate/retry; 2FA not required (curl-driven checks)
+#   - bake.env: the SecretVM content with the model catalog served by the
+#     mock (two configured models) instead of the public catalog
+services:
+  uplink:
+    image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
+    pull_policy: never
+    environment:
+      - ADMIN_2FA_REQUIRED=false
+      - UPLINK_RECONCILE_GATE_SECONDS=6
+      - UPLINK_RECONCILE_RETRY_SECONDS=3
+    healthcheck:
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+
+  proxy-router:
+    image: python:3.12-alpine
+    entrypoint: ["python3", "/mock/e2e_mock_router.py", "8082"]
+    environment:
+      - MOCK_MOR=${E2E_MOCK_MOR:-1000000}
+    volumes:
+      - ${E2E_MOCK_ROUTER:?set E2E_MOCK_ROUTER to absolute path of e2e_mock_router.py}:/mock/e2e_mock_router.py:ro
+
+  traefik:
+    profiles: ["disabled"]
+
+configs:
+  uplink_bake_env:
+    content: |-
+      SESSION_DURATION_SECONDS=600
+      SESSION_FAILOVER=true
+      ACTIVE_MODELS_URL=${E2E_ROUTER_BASE:-http://proxy-router:8082}/e2e/catalog
+      GATEWAY_BIDS_URL=${E2E_ROUTER_BASE:-http://proxy-router:8082}/e2e/bids
+      HOUSEKEEPING=true
+      ROUTER_URL=${E2E_ROUTER_BASE:-http://proxy-router:8082}
+      DATA_DIR=/data
+      TRUSTED_PROXY_CIDR=172.28.0.0/16

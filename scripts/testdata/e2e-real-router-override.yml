@@ -1,0 +1,19 @@
+# Overlay for scripts/e2e-real-router.sh. Applied ON TOP of
+# deploy/secretvm/docker-compose.yml: proxy-router stays the pinned
+# morpheus-lumerin-node image from the template. Only swaps / test knobs:
+#   - uplink -> local image, 2FA not required (curl-driven), fast healthcheck
+#   - traefik -> disabled (needs SecretVM certs)
+services:
+  uplink:
+    image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
+    pull_policy: never
+    environment:
+      - ADMIN_2FA_REQUIRED=false
+    healthcheck:
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  traefik:
+    profiles: ["disabled"]
