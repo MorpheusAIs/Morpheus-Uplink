@@ -29,7 +29,7 @@ One topic at a time. You do not need every section on day one.
   session (you land on the login screen). Log in with the password: you go
   straight to a new enrollment with a new QR code; the old authenticator
   entry and old recovery codes no longer work. While 2FA is required
-  (default on SecretVM and generic) only the Security tab shows until the
+  (default on SecretVM, generic and Railway) only the Security tab shows until the
   new enrollment is confirmed. Removing 2FA outright is refused while it is
   required.
 - Locked out (lost authenticator and codes): restart once with

@@ -44,9 +44,11 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. 2FA is opt-in here (`ADMIN_2FA_REQUIRED`, default false,
-because volume persistence is up to you); set it true once `DATA_DIR` is on
-a persistent volume. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA
+Railway Secrets. 2FA is required by default (`ADMIN_2FA_REQUIRED=true`, as
+on SecretVM and generic): the first login opens only the Security tab until
+you enroll (scan the QR code, confirm a code, save the 10 recovery codes).
+Keep `DATA_DIR` on a persistent Railway volume, or each redeploy asks for a
+new enrollment. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA
 break-glass: `UPLINK_RESET_2FA=true` for one restart, then remove it.
 
 Railway caveat: Railway does not run `docker-compose.yml`; each service's

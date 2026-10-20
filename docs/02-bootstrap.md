@@ -150,8 +150,9 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 Tunables are compose defaults; set one as a Railway Variable to override
 (Uplink vs router ownership stays separate; see SecretVM block above).
 Railway does not run compose, so `${VAR:-default}` is not evaluated there:
-set plain values. 2FA is opt-in on Railway (`ADMIN_2FA_REQUIRED`, default
-`false`); set it `true` once `DATA_DIR` is on a persistent volume. Full checklist:
+set plain values. 2FA is required by default on Railway too
+(`ADMIN_2FA_REQUIRED=true`): enroll on the first login, and keep `DATA_DIR`
+on a persistent volume. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -245,7 +246,8 @@ proxy-router. Full step→done checklist:
 3. Use the uplink and router digests from `docker-compose.railway.deployed.yml` — not bare `:latest`.
 4. Replicas = **1** for wallet-bearing `proxy-router`.
 5. Confirm only uplink is public (`:8080` behind Railway HTTPS).
-6. Open `https://<public>/gui/` → fund wallet → Probe (same as other hosts).
+6. Open `https://<public>/gui/`, enroll 2FA on the Security tab (required by
+   default), then fund wallet → Probe (same as other hosts).
 
 Done when GUI login works and Probe returns a completion.
 

@@ -104,7 +104,7 @@ Same image pair. The [latest release](https://github.com/MorpheusAIs/Morpheus-Up
 | **2. Images** | Use the digests from `docker-compose.railway.deployed.yml` for `ghcr.io/morpheusais/uplink` and Lumerin — not bare `:latest`. |
 | **3. Secrets** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
-| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
+| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required by default) → fund → Probe → `/v1`. |
 
 **Done when:** same as SecretVM — GUI, funded wallet, Probe OK, client on `https://<host>/v1`.
 
@@ -152,9 +152,8 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   2FA (password plus a code). Reset wipes the secret and codes and signs out
   every session; the next password login goes straight to a new enrollment
   with a fresh secret. Removing 2FA is refused while it is required
-  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM and generic
-  templates, off in local dev and the bare binary, and opt-in on Railway
-  for now (default off; set it once `DATA_DIR` is on a persistent volume).
+  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM, generic and
+  Railway templates, off in local dev and the bare binary.
   Locked out: one restart with `UPLINK_RESET_2FA=true`.
   [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.

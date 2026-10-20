@@ -177,8 +177,8 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
-- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true` on
-  generic, `false` on Railway, whose volume persistence is up to you) and
+- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true`; on
+  Railway keep `DATA_DIR` on a persistent volume) and
   `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
   admin access on weakens admin security.
 

@@ -43,9 +43,9 @@ services:
       - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      # Railway volume persistence is operator-managed, so 2FA stays opt-in
-      # here (default false); set ADMIN_2FA_REQUIRED=true on a persistent volume.
-      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-false}
+      # 2FA required by default; keep DATA_DIR on a persistent volume, or each
+      # redeploy asks for a new enrollment.
+      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}
       - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
       # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
       - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}

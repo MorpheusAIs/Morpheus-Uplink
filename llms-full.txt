@@ -361,7 +361,7 @@ Same image pair. The [latest release](https://github.com/MorpheusAIs/Morpheus-Up
 | **2. Images** | Use the digests from `docker-compose.railway.deployed.yml` for `ghcr.io/morpheusais/uplink` and Lumerin — not bare `:latest`. |
 | **3. Secrets** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
-| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
+| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required by default) → fund → Probe → `/v1`. |
 
 **Done when:** same as SecretVM — GUI, funded wallet, Probe OK, client on `https://<host>/v1`.
 
@@ -409,9 +409,8 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   2FA (password plus a code). Reset wipes the secret and codes and signs out
   every session; the next password login goes straight to a new enrollment
   with a fresh secret. Removing 2FA is refused while it is required
-  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM and generic
-  templates, off in local dev and the bare binary, and opt-in on Railway
-  for now (default off; set it once `DATA_DIR` is on a persistent volume).
+  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM, generic and
+  Railway templates, off in local dev and the bare binary.
   Locked out: one restart with `UPLINK_RESET_2FA=true`.
   [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
@@ -669,8 +668,9 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 Tunables are compose defaults; set one as a Railway Variable to override
 (Uplink vs router ownership stays separate; see SecretVM block above).
 Railway does not run compose, so `${VAR:-default}` is not evaluated there:
-set plain values. 2FA is opt-in on Railway (`ADMIN_2FA_REQUIRED`, default
-`false`); set it `true` once `DATA_DIR` is on a persistent volume. Full checklist:
+set plain values. 2FA is required by default on Railway too
+(`ADMIN_2FA_REQUIRED=true`): enroll on the first login, and keep `DATA_DIR`
+on a persistent volume. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -764,7 +764,8 @@ proxy-router. Full step→done checklist:
 3. Use the uplink and router digests from `docker-compose.railway.deployed.yml` — not bare `:latest`.
 4. Replicas = **1** for wallet-bearing `proxy-router`.
 5. Confirm only uplink is public (`:8080` behind Railway HTTPS).
-6. Open `https://<public>/gui/` → fund wallet → Probe (same as other hosts).
+6. Open `https://<public>/gui/`, enroll 2FA on the Security tab (required by
+   default), then fund wallet → Probe (same as other hosts).
 
 Done when GUI login works and Probe returns a completion.
 
@@ -819,7 +820,7 @@ One topic at a time. You do not need every section on day one.
   session (you land on the login screen). Log in with the password: you go
   straight to a new enrollment with a new QR code; the old authenticator
   entry and old recovery codes no longer work. While 2FA is required
-  (default on SecretVM and generic) only the Security tab shows until the
+  (default on SecretVM, generic and Railway) only the Security tab shows until the
   new enrollment is confirmed. Removing 2FA outright is refused while it is
   required.
 - Locked out (lost authenticator and codes): restart once with
@@ -1232,8 +1233,8 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
-- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true` on
-  generic, `false` on Railway, whose volume persistence is up to you) and
+- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true`; on
+  Railway keep `DATA_DIR` on a persistent volume) and
   `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
   admin access on weakens admin security.
 
@@ -1766,9 +1767,11 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. 2FA is opt-in here (`ADMIN_2FA_REQUIRED`, default false,
-because volume persistence is up to you); set it true once `DATA_DIR` is on
-a persistent volume. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA
+Railway Secrets. 2FA is required by default (`ADMIN_2FA_REQUIRED=true`, as
+on SecretVM and generic): the first login opens only the Security tab until
+you enroll (scan the QR code, confirm a code, save the 10 recovery codes).
+Keep `DATA_DIR` on a persistent Railway volume, or each redeploy asks for a
+new enrollment. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA
 break-glass: `UPLINK_RESET_2FA=true` for one restart, then remove it.
 
 Railway caveat: Railway does not run `docker-compose.yml`; each service's

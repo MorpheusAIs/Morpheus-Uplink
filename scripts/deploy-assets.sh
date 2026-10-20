@@ -70,10 +70,7 @@ ABSENT = None
 SECURITY_DEFAULTS = {
     "secretvm": {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
     "generic":  {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
-    # Railway keeps 2FA opt-in (volume persistence is operator-managed). To
-    # default it on, set "true" here and in deploy/railway/docker-compose.yml
-    # and env.example (and the docs).
-    "railway":  {"ADMIN_2FA_REQUIRED": "false", "MASTER_KEY_ADMIN": "false"},
+    "railway":  {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
     "local":    {"ADMIN_2FA_REQUIRED": ABSENT, "MASTER_KEY_ADMIN": ABSENT},
 }
 # False wherever they appear, in every template and env example.
@@ -291,6 +288,7 @@ PY
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+PROXY_FORWARD_CHAT_CONTEXT=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-forward-chat-true 'D\(secretvm\): PROXY_FORWARD_CHAT_CONTEXT defaults to true'
   copy_root; edit "$tmp/root/deploy/generic/env.example" '^(MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-env-master-key-true 'D\(generic\): MASTER_KEY_ADMIN=true in deploy/generic/env.example'
   copy_root; edit "$tmp/root/docker-compose.local.yml" '^(\s+- UPLINK_RESET_2FA=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail local-master-key-set 'D\(local\): MASTER_KEY_ADMIN must not be set'
+  copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{ADMIN_2FA_REQUIRED:-)true\}' '\1false}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-2fa-false 'D\(railway\): ADMIN_2FA_REQUIRED defaults to false'
   echo "OK: deploy-assets self-tests ($n failure modes rejected)"
 }
 
