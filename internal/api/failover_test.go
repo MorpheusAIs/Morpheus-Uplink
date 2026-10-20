@@ -32,7 +32,7 @@ func TestClassifyForwardError(t *testing.T) {
 		err  error
 		want forwardDecision
 	}{
-		{"402 provider backend out of credit", se(402, pme("Insufficient USDC balance")), decFailover},
+		{"402 provider backend out of credit", se(402, pme("Insufficient balance")), decFailover},
 		{"400 provider error, no pattern", se(400, pme("invalid parameter top_k")), decRelay},
 		{"400 provider error, rate limit", se(400, pme("rate limit reached")), decFailover},
 		{"400 provider error, statusCode 503 in body", se(400, `{"providerModelError":{"error":"x"},"statusCode": 503}`), decFailover},
@@ -104,7 +104,7 @@ type fakeProvider func(n int, w http.ResponseWriter)
 func pme402(n int, w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(402)
-	_, _ = w.Write([]byte(`{"providerModelError":{"error":{"message":"Insufficient USDC balance"}},"statusCode":402}`))
+	_, _ = w.Write([]byte(`{"providerModelError":{"error":{"message":"Insufficient balance"}},"statusCode":402}`))
 }
 
 func ok200(n int, w http.ResponseWriter) {
@@ -581,7 +581,7 @@ func TestFailoverMidStream(t *testing.T) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n"))
 		w.(http.Flusher).Flush()
-		_, _ = w.Write([]byte(`{"providerModelError":{"error":{"message":"Insufficient USDC balance"}},"statusCode":402}`))
+		_, _ = w.Write([]byte(`{"providerModelError":{"error":{"message":"Insufficient balance"}},"statusCode":402}`))
 	}
 	e := newFailoverEnv(t, m, nil)
 	code, body := e.chat(t, true)
