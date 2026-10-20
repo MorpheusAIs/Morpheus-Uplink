@@ -246,6 +246,9 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (/LOW_WALLET|isWalletLow|lowWalletThreshold|fundSummaryLow|renderFund|fold\.low/.test(html)) fail('low-wallet warning code still present');
   if (!/<details id="fundDetails" class="fold">/.test(html)) fail('Add MOR must be a collapsed <details> without open');
 
+  // 2FA can only be reset from the GUI; remove (refused when required) is API-only.
+  if (html.includes('/admin/2fa/remove')) fail('GUI must not call /admin/2fa/remove; use Reset 2FA');
+
   // MASTER_KEY_ADMIN banner follows status.twoFactor.masterKeyAdmin.
   if (!/id="masterKeyAdminBanner"[^>]*class="[^"]*hidden|class="[^"]*hidden[^"]*" id="masterKeyAdminBanner"/.test(html)) fail('master key banner must start hidden');
   T.renderMasterKeyBanner({ twoFactor: { masterKeyAdmin: true } });

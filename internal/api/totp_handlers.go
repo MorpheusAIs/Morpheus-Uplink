@@ -226,11 +226,26 @@ func wipe2FA(a *store.AuthState) {
 	a.PendingExpires = time.Time{}
 }
 
+// removeRefusedMsg is returned when ADMIN_2FA_REQUIRED=true: removing 2FA
+// would leave a deploy that requires it without it. Reset re-enrolls.
+const removeRefusedMsg = "2FA is required on this deploy (ADMIN_2FA_REQUIRED=true), so it cannot be removed; use Reset 2FA to re-enroll"
+
+// handleTOTPRemove (POST /admin/2fa/remove) needs the password plus a TOTP
+// or recovery code. Refused with 409 when ADMIN_2FA_REQUIRED=true (checked
+// before any code is consumed). Otherwise it wipes 2FA and, like reset,
+// revokes every admin session including this one.
 func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Admin2FARequired {
+		s.auditEvent("2fa_remove", s.lockout.ClientIP(r), "blocked", "2fa_required")
+		http.Error(w, removeRefusedMsg, http.StatusConflict)
+		return
+	}
 	if _, ok := s.passwordAndFactor(w, r, "2fa_remove", wipe2FA); !ok {
 		return
 	}
-	s.auditEvent("2fa_remove", s.lockout.ClientIP(r), "ok", "")
+	n := s.sessions.RevokeAll()
+	adminauth.ClearSessionCookie(w, s.cfg.DevHTTP)
+	s.auditEvent("2fa_remove", s.lockout.ClientIP(r), "ok", "sessions_revoked="+strconv.Itoa(n))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

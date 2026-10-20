@@ -1063,9 +1063,14 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   admin session (this one too) and clears the cookie. With
   `ADMIN_2FA_REQUIRED=true` the next login can only enroll again, which
   issues new codes.
+- **Remove** is refused with 409 when `ADMIN_2FA_REQUIRED=true` (use Reset
+  instead); nothing is consumed. Otherwise it wipes 2FA and, like Reset,
+  revokes every admin session and clears the cookie. The GUI offers Reset
+  only.
 - **Audit**: `2fa_enroll`, `recovery_codes_issued` (count),
   `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
-  `2fa_reset` (sessions revoked), `2fa_remove`. Codes and secrets are never
+  `2fa_reset` (sessions revoked), `2fa_remove` (sessions revoked, or
+  `blocked` when 2FA is required). Codes and secrets are never
   logged.
 - **`API_KEY_SEED` rotation** invalidates the TOTP secret (its encryption
   key is derived from the seed) and every recovery code (their pepper is
