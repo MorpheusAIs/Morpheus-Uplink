@@ -69,7 +69,7 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
-The SecretVM form has exactly these **six** fields (`env.secretvm.example` is the same six). Tunables are **not** Encrypted Secrets: SecretVM keeps them in the compose `configs:` block; generic / Railway / local compose take them as env-overridable `${VAR:-default}` defaults (see [docs/06-developers.md](docs/06-developers.md#environment-variables)):
+The SecretVM form has exactly these **six** fields (`env.secretvm.example` is the same six). Tunables are **not** Encrypted Secrets: SecretVM keeps them in the compose `configs:` block; generic and local compose take them as env-overridable `${VAR:-default}` defaults, while Railway does not run compose and applies none of them (see the Railway steps below and [docs/06-developers.md](docs/06-developers.md#environment-variables)):
 - **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`, and the `UPLINK_RESET_2FA` break-glass; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
@@ -102,9 +102,9 @@ Same image pair. The [latest release](https://github.com/MorpheusAIs/Morpheus-Up
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Use the digests from `docker-compose.railway.deployed.yml` for `ghcr.io/morpheusais/uplink` and Lumerin — not bare `:latest`. |
-| **3. Secrets** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
+| **3. Secrets + vars** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets**. Railway applies no compose defaults, so also set the active lines of `env.railway.example` as plain service variables: `ADMIN_2FA_REQUIRED=true` on uplink (unset means 2FA is off); `PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses on proxy-router. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
-| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required by default) → fund → Probe → `/v1`. |
+| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required once `ADMIN_2FA_REQUIRED=true` is set) → fund → Probe → `/v1`. |
 
 **Done when:** same as SecretVM — GUI, funded wallet, Probe OK, client on `https://<host>/v1`.
 
@@ -152,8 +152,10 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   2FA (password plus a code). Reset wipes the secret and codes and signs out
   every session; the next password login goes straight to a new enrollment
   with a fresh secret. Removing 2FA is refused while it is required
-  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM, generic and
-  Railway templates, off in local dev and the bare binary.
+  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM and generic
+  templates, off in local dev and the bare binary. Railway does not run
+  compose: set `ADMIN_2FA_REQUIRED=true` as a Railway service variable, since
+  unset means off.
   Locked out: one restart with `UPLINK_RESET_2FA=true`.
   [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.

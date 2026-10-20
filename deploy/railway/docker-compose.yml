@@ -7,6 +7,10 @@
 # WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED, COOKIE_CONTENT,
 # ETH_NODE_ADDRESS, WEB_PUBLIC_URL (wallet key and RPC go to proxy-router only).
 #
+# Railway does not run this file: no compose default or literal value below
+# applies there. Set the active lines of env.example as service variables
+# (README.md, "Unset on Railway").
+#
 # H3: single replica for wallet-bearing proxy-router.
 # Lumerin pin: v7.15.0 digest. The Uplink image is pinned to its digest in
 # the release assets (scripts/deploy-assets.sh).
@@ -43,8 +47,9 @@ services:
       - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      # 2FA required by default; keep DATA_DIR on a persistent volume, or each
-      # redeploy asks for a new enrollment.
+      # 2FA required under compose. Railway does not apply this default (unset
+      # means off): set it true as a service variable. Keep DATA_DIR on a
+      # persistent volume, or each redeploy asks for a new enrollment.
       - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}
       - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
       # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).

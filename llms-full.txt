@@ -326,7 +326,7 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 ```
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
-The SecretVM form has exactly these **six** fields (`env.secretvm.example` is the same six). Tunables are **not** Encrypted Secrets: SecretVM keeps them in the compose `configs:` block; generic / Railway / local compose take them as env-overridable `${VAR:-default}` defaults (see [docs/06-developers.md](docs/06-developers.md#environment-variables)):
+The SecretVM form has exactly these **six** fields (`env.secretvm.example` is the same six). Tunables are **not** Encrypted Secrets: SecretVM keeps them in the compose `configs:` block; generic and local compose take them as env-overridable `${VAR:-default}` defaults, while Railway does not run compose and applies none of them (see the Railway steps below and [docs/06-developers.md](docs/06-developers.md#environment-variables)):
 - **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`, and the `UPLINK_RESET_2FA` break-glass; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
@@ -359,9 +359,9 @@ Same image pair. The [latest release](https://github.com/MorpheusAIs/Morpheus-Up
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Use the digests from `docker-compose.railway.deployed.yml` for `ghcr.io/morpheusais/uplink` and Lumerin — not bare `:latest`. |
-| **3. Secrets** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
+| **3. Secrets + vars** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets**. Railway applies no compose defaults, so also set the active lines of `env.railway.example` as plain service variables: `ADMIN_2FA_REQUIRED=true` on uplink (unset means 2FA is off); `PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses on proxy-router. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
-| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required by default) → fund → Probe → `/v1`. |
+| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required once `ADMIN_2FA_REQUIRED=true` is set) → fund → Probe → `/v1`. |
 
 **Done when:** same as SecretVM — GUI, funded wallet, Probe OK, client on `https://<host>/v1`.
 
@@ -409,8 +409,10 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   2FA (password plus a code). Reset wipes the secret and codes and signs out
   every session; the next password login goes straight to a new enrollment
   with a fresh secret. Removing 2FA is refused while it is required
-  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM, generic and
-  Railway templates, off in local dev and the bare binary.
+  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM and generic
+  templates, off in local dev and the bare binary. Railway does not run
+  compose: set `ADMIN_2FA_REQUIRED=true` as a Railway service variable, since
+  unset means off.
   Locked out: one restart with `UPLINK_RESET_2FA=true`.
   [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
@@ -665,11 +667,15 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are compose defaults; set one as a Railway Variable to override
-(Uplink vs router ownership stays separate; see SecretVM block above).
-Railway does not run compose, so `${VAR:-default}` is not evaluated there:
-set plain values. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
-variable**: unset means 2FA is off, with no warning. A value that is not
+Railway does not run compose, so no compose default applies there: an
+unset variable takes the process's own default, which can differ from the
+compose value (table in [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway)).
+Set plain values as Railway Variables (Uplink vs router ownership stays
+separate; see SecretVM block above). **Set `ADMIN_2FA_REQUIRED=true` as a
+Railway service variable** on uplink: unset means 2FA is off, with no
+warning. On proxy-router set `PROXY_STORE_CHAT_CONTEXT=false` (unset stores
+chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain
+addresses from `env.railway.example`. A value that is not
 true or false (such as the literal `${ADMIN_2FA_REQUIRED:-true}` text)
 fails closed (2FA required, with a warning). Then enroll on the first login,
 and keep `DATA_DIR` on a persistent volume. Full checklist:
@@ -680,7 +686,7 @@ and keep `DATA_DIR` on a persistent volume. Full checklist:
 <details>
 <summary><strong>Var ownership (Uplink vs router)</strong></summary>
 
-Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM keeps them in compose `configs:`; generic / Railway / local compose take them as env-overridable defaults (`${VAR:-default}`).
+Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM keeps them in compose `configs:`; generic and local compose take them as env-overridable defaults (`${VAR:-default}`); Railway does not run compose and applies none of them.
 
 | Bucket | Where | Vars |
 |--------|-------|------|
@@ -822,9 +828,10 @@ One topic at a time. You do not need every section on day one.
   session (you land on the login screen). Log in with the password: you go
   straight to a new enrollment with a new QR code; the old authenticator
   entry and old recovery codes no longer work. While 2FA is required
-  (default on SecretVM, generic and Railway) only the Security tab shows until the
-  new enrollment is confirmed. Removing 2FA outright is refused while it is
-  required.
+  (default on SecretVM and generic; on Railway only when
+  `ADMIN_2FA_REQUIRED=true` is set as a service variable, since unset means
+  off) only the Security tab shows until the new enrollment is confirmed.
+  Removing 2FA outright is refused while it is required.
 - Locked out (lost authenticator and codes): restart once with
   `UPLINK_RESET_2FA=true`, then remove it
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
@@ -1243,9 +1250,9 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
-- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true`; on
-  Railway set it as a service variable, since Railway does not evaluate the
-  compose default, and keep `DATA_DIR` on a persistent volume) and
+- Generic and Railway only: `ADMIN_2FA_REQUIRED` (compose default `true`;
+  Railway does not apply it, so set it as a service variable there, since
+  unset means off, and keep `DATA_DIR` on a persistent volume) and
   `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
   admin access on weakens admin security.
 
@@ -1253,7 +1260,11 @@ The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
 takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
 does not run compose, so `${VAR:-default}` is not evaluated there; set
 plain values in the service variables (Railway's own reference syntax is
-`${{SERVICE.VAR}}`), see [deploy/railway/README.md](../deploy/railway/README.md).
+`${{SERVICE.VAR}}`). An unset variable takes the process's own default, not
+the compose one; the Railway env example sets the vars where that is less
+safe (`ADMIN_2FA_REQUIRED`, `PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP`,
+`ETH_NODE_CHAIN_ID`) actively, and `scripts/deploy-assets.sh` checks it.
+See [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway).
 
 SecretVM has no `${VAR:-default}` overrides: it turns every `${...}` into a
 form field, so its compose uses exactly the six secrets and keeps tunables
@@ -1777,8 +1788,8 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
+Tunables are not Railway Secrets, and Railway applies none of the compose
+defaults (see [Unset on Railway](#unset-on-railway)). **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
 variable on uplink.** Railway does not evaluate the compose default, so if
 the variable is unset 2FA is off, with no warning. A value that is not true
 or false (for example the literal `${ADMIN_2FA_REQUIRED:-true}` text) fails
@@ -1796,6 +1807,31 @@ references). If a compose import leaves a value as the literal
 `${VAR:-default}` string, set the plain value (the default shown here, or
 your override) in that service's Variables. The defaults apply as-is
 under `docker compose`.
+
+## Unset on Railway
+
+Railway applies neither the compose `${VAR:-default}` defaults nor its
+literal values. An unset variable takes the process's own default (Uplink
+code, Uplink image, or stock router v7.15.0):
+
+| Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
+|---|---|---|---|
+| `ADMIN_2FA_REQUIRED` (uplink) | `true` | `false`: 2FA off | active line, checked |
+| `PROXY_STORE_CHAT_CONTEXT` (router) | `false` | `true`: chat context stored | active line, checked |
+| `LOG_LEVEL_APP` (router) | `warn` | `debug` | active line, checked |
+| `ETH_NODE_CHAIN_ID` (router) | `8453` | `0`: no check that the RPC node is on Base | active line, checked |
+| `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` (router) | Base mainnet values | router does not start | active lines |
+| `LOG_LEVEL_TCP`, `LOG_LEVEL_ETH_RPC` (router) | `warn` | `info` | commented |
+| `ENVIRONMENT` (router) | `production` | `development` (only changes how `/auth/cookie/path` resolves a relative path) | not listed |
+| `AUTH_CONFIG_FILE_PATH`, `COOKIE_FILE_PATH` (router) | `/app/data/proxy.conf`, `/app/data/.cookie` | `/app/proxy.conf`, `/app/.cookie` (outside a volume mounted at `/app/data`) | not listed; set both if you mount `/app/data` |
+| `TRUSTED_PROXY_CIDR` (uplink) | `172.28.0.0/16` | none: `X-Forwarded-For` ignored, lockout keys on the peer address | not listed |
+| `DATA_DIR` (uplink) | `/data` | `/data` (image default) | not listed |
+
+Same when unset: `MASTER_KEY_ADMIN`, `UPLINK_RESET_2FA` (both `false`),
+`PROXY_FORWARD_CHAT_CONTEXT`, `ETH_NODE_USE_SUBSCRIPTIONS` (both `false`),
+`SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`,
+`ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `ROUTER_URL`.
+`scripts/deploy-assets.sh` fails if a checked line is commented out.
 
 Keep ownership separate:
 
@@ -1840,11 +1876,13 @@ The router can do gateway-managed session cleanup. Uplink does not use it:
 
 ## L1 - privacy env honesty
 
-Compose sets on `proxy-router`:
+Compose sets these on `proxy-router`, but Railway does not apply them, so
+set them as `proxy-router` service variables:
 
-- `PROXY_STORE_CHAT_CONTEXT=false`
-- `PROXY_FORWARD_CHAT_CONTEXT=false`
+- `PROXY_STORE_CHAT_CONTEXT=false` (unset: the router stores chat context)
+- `PROXY_FORWARD_CHAT_CONTEXT=false` (unset: also false)
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
+  (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
 privacy on the pinned v7.15.0 digest until verified.
@@ -1861,7 +1899,7 @@ privacy on the pinned v7.15.0 digest until verified.
 | Step | Done when |
 |------|-----------|
 | **1. Project** | Railway project has uplink + proxy-router on a private network (compose plugin or two services). |
-| **2. Secrets** | H4 vars are **Railway Secrets** only; non-secrets are plain vars. |
+| **2. Secrets + vars** | H4 vars are **Railway Secrets** only; every active line of `env.railway.example` (including `ADMIN_2FA_REQUIRED=true`, `PROXY_STORE_CHAT_CONTEXT=false`, `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453`) is set as a plain var on its service. |
 | **3. Digests** | Images pinned to the digests in the [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) `docker-compose.railway.deployed.yml` (not bare `:latest`). |
 | **4. Replicas** | `proxy-router` replicas = **1** (H3). |
 | **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS -> `:8080`). |

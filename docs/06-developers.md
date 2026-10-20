@@ -185,9 +185,9 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
-- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true`; on
-  Railway set it as a service variable, since Railway does not evaluate the
-  compose default, and keep `DATA_DIR` on a persistent volume) and
+- Generic and Railway only: `ADMIN_2FA_REQUIRED` (compose default `true`;
+  Railway does not apply it, so set it as a service variable there, since
+  unset means off, and keep `DATA_DIR` on a persistent volume) and
   `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
   admin access on weakens admin security.
 
@@ -195,7 +195,11 @@ The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
 takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
 does not run compose, so `${VAR:-default}` is not evaluated there; set
 plain values in the service variables (Railway's own reference syntax is
-`${{SERVICE.VAR}}`), see [deploy/railway/README.md](../deploy/railway/README.md).
+`${{SERVICE.VAR}}`). An unset variable takes the process's own default, not
+the compose one; the Railway env example sets the vars where that is less
+safe (`ADMIN_2FA_REQUIRED`, `PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP`,
+`ETH_NODE_CHAIN_ID`) actively, and `scripts/deploy-assets.sh` checks it.
+See [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway).
 
 SecretVM has no `${VAR:-default}` overrides: it turns every `${...}` into a
 form field, so its compose uses exactly the six secrets and keeps tunables

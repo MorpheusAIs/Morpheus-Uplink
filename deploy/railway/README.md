@@ -43,8 +43,8 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
+Tunables are not Railway Secrets, and Railway applies none of the compose
+defaults (see [Unset on Railway](#unset-on-railway)). **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
 variable on uplink.** Railway does not evaluate the compose default, so if
 the variable is unset 2FA is off, with no warning. A value that is not true
 or false (for example the literal `${ADMIN_2FA_REQUIRED:-true}` text) fails
@@ -62,6 +62,31 @@ references). If a compose import leaves a value as the literal
 `${VAR:-default}` string, set the plain value (the default shown here, or
 your override) in that service's Variables. The defaults apply as-is
 under `docker compose`.
+
+## Unset on Railway
+
+Railway applies neither the compose `${VAR:-default}` defaults nor its
+literal values. An unset variable takes the process's own default (Uplink
+code, Uplink image, or stock router v7.15.0):
+
+| Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
+|---|---|---|---|
+| `ADMIN_2FA_REQUIRED` (uplink) | `true` | `false`: 2FA off | active line, checked |
+| `PROXY_STORE_CHAT_CONTEXT` (router) | `false` | `true`: chat context stored | active line, checked |
+| `LOG_LEVEL_APP` (router) | `warn` | `debug` | active line, checked |
+| `ETH_NODE_CHAIN_ID` (router) | `8453` | `0`: no check that the RPC node is on Base | active line, checked |
+| `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` (router) | Base mainnet values | router does not start | active lines |
+| `LOG_LEVEL_TCP`, `LOG_LEVEL_ETH_RPC` (router) | `warn` | `info` | commented |
+| `ENVIRONMENT` (router) | `production` | `development` (only changes how `/auth/cookie/path` resolves a relative path) | not listed |
+| `AUTH_CONFIG_FILE_PATH`, `COOKIE_FILE_PATH` (router) | `/app/data/proxy.conf`, `/app/data/.cookie` | `/app/proxy.conf`, `/app/.cookie` (outside a volume mounted at `/app/data`) | not listed; set both if you mount `/app/data` |
+| `TRUSTED_PROXY_CIDR` (uplink) | `172.28.0.0/16` | none: `X-Forwarded-For` ignored, lockout keys on the peer address | not listed |
+| `DATA_DIR` (uplink) | `/data` | `/data` (image default) | not listed |
+
+Same when unset: `MASTER_KEY_ADMIN`, `UPLINK_RESET_2FA` (both `false`),
+`PROXY_FORWARD_CHAT_CONTEXT`, `ETH_NODE_USE_SUBSCRIPTIONS` (both `false`),
+`SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`,
+`ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `ROUTER_URL`.
+`scripts/deploy-assets.sh` fails if a checked line is commented out.
 
 Keep ownership separate:
 
@@ -106,11 +131,13 @@ The router can do gateway-managed session cleanup. Uplink does not use it:
 
 ## L1 - privacy env honesty
 
-Compose sets on `proxy-router`:
+Compose sets these on `proxy-router`, but Railway does not apply them, so
+set them as `proxy-router` service variables:
 
-- `PROXY_STORE_CHAT_CONTEXT=false`
-- `PROXY_FORWARD_CHAT_CONTEXT=false`
+- `PROXY_STORE_CHAT_CONTEXT=false` (unset: the router stores chat context)
+- `PROXY_FORWARD_CHAT_CONTEXT=false` (unset: also false)
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
+  (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
 privacy on the pinned v7.15.0 digest until verified.
@@ -127,7 +154,7 @@ privacy on the pinned v7.15.0 digest until verified.
 | Step | Done when |
 |------|-----------|
 | **1. Project** | Railway project has uplink + proxy-router on a private network (compose plugin or two services). |
-| **2. Secrets** | H4 vars are **Railway Secrets** only; non-secrets are plain vars. |
+| **2. Secrets + vars** | H4 vars are **Railway Secrets** only; every active line of `env.railway.example` (including `ADMIN_2FA_REQUIRED=true`, `PROXY_STORE_CHAT_CONTEXT=false`, `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453`) is set as a plain var on its service. |
 | **3. Digests** | Images pinned to the digests in the [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) `docker-compose.railway.deployed.yml` (not bare `:latest`). |
 | **4. Replicas** | `proxy-router` replicas = **1** (H3). |
 | **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS -> `:8080`). |

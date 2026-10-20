@@ -147,11 +147,15 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are compose defaults; set one as a Railway Variable to override
-(Uplink vs router ownership stays separate; see SecretVM block above).
-Railway does not run compose, so `${VAR:-default}` is not evaluated there:
-set plain values. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
-variable**: unset means 2FA is off, with no warning. A value that is not
+Railway does not run compose, so no compose default applies there: an
+unset variable takes the process's own default, which can differ from the
+compose value (table in [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway)).
+Set plain values as Railway Variables (Uplink vs router ownership stays
+separate; see SecretVM block above). **Set `ADMIN_2FA_REQUIRED=true` as a
+Railway service variable** on uplink: unset means 2FA is off, with no
+warning. On proxy-router set `PROXY_STORE_CHAT_CONTEXT=false` (unset stores
+chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain
+addresses from `env.railway.example`. A value that is not
 true or false (such as the literal `${ADMIN_2FA_REQUIRED:-true}` text)
 fails closed (2FA required, with a warning). Then enroll on the first login,
 and keep `DATA_DIR` on a persistent volume. Full checklist:
@@ -162,7 +166,7 @@ and keep `DATA_DIR` on a persistent volume. Full checklist:
 <details>
 <summary><strong>Var ownership (Uplink vs router)</strong></summary>
 
-Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM keeps them in compose `configs:`; generic / Railway / local compose take them as env-overridable defaults (`${VAR:-default}`).
+Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM keeps them in compose `configs:`; generic and local compose take them as env-overridable defaults (`${VAR:-default}`); Railway does not run compose and applies none of them.
 
 | Bucket | Where | Vars |
 |--------|-------|------|
