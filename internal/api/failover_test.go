@@ -74,7 +74,7 @@ func TestRelayRouterError(t *testing.T) {
 		{"openai-shaped kept", &router.StatusError{Code: 422, Body: `{"error":{"message":"bad","type":"invalid_request_error"}}`}, 422, "bad", "invalid_request_error", false},
 		{"plain router error", &router.StatusError{Code: 409, Body: `{"error":"conflict"}`}, 409, "conflict", "invalid_request_error", false},
 		{"router credential is not the client's", &router.StatusError{Code: 401, Body: `{"error":"unauthorized"}`}, 502, "router rejected", "invalid_request_error", false},
-		{"transport", errors.New("dial tcp: refused"), 502, "inference failed", "invalid_request_error", false},
+		{"transport", errors.New("POST http://proxy-router:8082/v1/chat/completions: dial tcp: refused"), 502, "inference failed", "invalid_request_error", false},
 	}
 	for _, tc := range cases {
 		rec := httptest.NewRecorder()
@@ -91,6 +91,9 @@ func TestRelayRouterError(t *testing.T) {
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatalf("%s: body not JSON: %s", tc.name, rec.Body.String())
+		}
+		if strings.Contains(out.Error.Message, "proxy-router") || strings.Contains(out.Error.Message, "dial") {
+			t.Errorf("%s: router detail reached the client: %q", tc.name, out.Error.Message)
 		}
 		if !strings.Contains(out.Error.Message, tc.wantMsg) || out.Error.Type != tc.wantType || (len(out.PME) > 0) != tc.wantPME {
 			t.Errorf("%s: body %s", tc.name, rec.Body.String())

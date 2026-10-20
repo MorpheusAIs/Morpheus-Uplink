@@ -105,7 +105,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		ensured, err := s.pool.EnsureDuration(modelID, durationSec)
 		if err != nil {
 			log.Printf("api: open session for %s (%s): %v", reqModel, modelID, err)
-			writeOpenAIError(w, http.StatusBadGateway, "failed to open session: "+err.Error())
+			writeOpenAIError(w, http.StatusBadGateway, "failed to open session") // detail logged above; it names router internals
 			return
 		}
 		if ensured.Opened {
@@ -122,13 +122,14 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 			switch dec := classifyForwardError(err); {
 			case dec == decTransport:
-				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
+				writeOpenAIError(w, http.StatusBadGateway, "inference failed") // detail logged above
 				return
 			case dec == decSessionDead:
 				s.pool.Invalidate(modelID)
 				ensured, err = s.pool.EnsureDuration(modelID, durationSec)
 				if err != nil {
-					writeOpenAIError(w, http.StatusBadGateway, "failed to reopen session: "+err.Error())
+					log.Printf("api: reopen session for %s (%s): %v", reqModel, modelID, err)
+					writeOpenAIError(w, http.StatusBadGateway, "failed to reopen session")
 					return
 				}
 				if ensured.Opened {
@@ -138,7 +139,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
 				if err != nil {
 					log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
-					writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
+					writeOpenAIError(w, http.StatusBadGateway, "inference failed") // detail logged above
 					return
 				}
 			case dec == decFailover && s.cfg.SessionFailover:
@@ -278,7 +279,8 @@ func isSessionDeadError(err error) bool {
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.catalog.List()
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable: "+err.Error())
+		log.Printf("api: model catalog: %v", err)
+		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable")
 		return
 	}
 	s.writeModelList(w, models)

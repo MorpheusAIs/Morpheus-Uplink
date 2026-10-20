@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -92,7 +93,9 @@ func classifyForwardError(err error) forwardDecision {
 func relayRouterError(w http.ResponseWriter, err error) {
 	var se *router.StatusError
 	if !errors.As(err, &se) {
-		writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
+		// Transport detail (router host, URL) stays in the log.
+		log.Printf("api: inference failed: %v", err)
+		writeOpenAIError(w, http.StatusBadGateway, "inference failed")
 		return
 	}
 	code := se.Code
