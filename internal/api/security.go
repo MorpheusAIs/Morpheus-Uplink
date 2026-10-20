@@ -4,36 +4,37 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
-// OutflowAlert is a minimal on-chain outflow watch (read-only RPC).
+// OutflowAlert watches the router wallet's ETH and MOR balances (read-only,
+// via the router API) and records one audit event per decrease. A MOR drop
+// is usually a session stake lock, which is returned to the wallet; an ETH
+// drop is usually gas.
 type OutflowAlert struct {
 	mu          sync.Mutex
 	lastETH     *big.Int
 	lastMOR     *big.Int
 	lastChecked time.Time
-	alerts      []AuditEvent
 }
 
+const (
+	balanceDropKind = "balance_drop"
+	morDropNote     = "(session stakes lock and are returned)"
+	ethDropNote     = "(usually gas)"
+)
+
 func (s *Server) handleSecurity(w http.ResponseWriter, r *http.Request) {
-	alerts := s.audit.Recent(50)
-	// Merge outflow stub alerts
-	if s.outflow != nil {
-		s.outflow.mu.Lock()
-		alerts = append(s.outflow.alerts, alerts...)
-		s.outflow.mu.Unlock()
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"alerts": alerts,
+		"alerts": s.audit.Recent(50),
 		"note":   "Application audit events. Forward container logs to your SIEM via json-file/journald; do not scrape secrets from env.",
 	})
 }
 
-// checkOutflow compares router balances (via router API) and records drops.
-// Uses no wallet key. Optional ETH_RPC_URL is reserved for a follow-up
-// direct eth_getLogs watch; for now balance deltas via router are enough.
+// CheckOutflow compares router balances (via router API) and records drops.
+// Uses no wallet key.
 func (s *Server) CheckOutflow() {
 	if s.outflow == nil || s.router == nil {
 		return
@@ -56,26 +57,11 @@ func (s *Server) CheckOutflow() {
 	s.outflow.lastChecked = time.Now().UTC()
 	if s.outflow.lastETH != nil && eth != nil && eth.Cmp(s.outflow.lastETH) < 0 {
 		delta := new(big.Int).Sub(s.outflow.lastETH, eth)
-		s.outflow.alerts = append([]AuditEvent{{
-			At: time.Now().UTC(), Kind: "outflow", Actor: "router-wallet",
-			Message: "ETH balance decreased by " + delta.String() + " wei",
-		}}, s.outflow.alerts...)
-		if len(s.outflow.alerts) > 32 {
-			s.outflow.alerts = s.outflow.alerts[:32]
-		}
-		s.audit.Record("outflow", "router-wallet", "ETH balance decreased")
+		s.audit.Record(balanceDropKind, "router-wallet", "ETH balance decreased by "+formatUnits18(delta)+" ETH "+ethDropNote)
 	}
 	if s.outflow.lastMOR != nil && mor != nil && mor.Cmp(s.outflow.lastMOR) < 0 {
 		delta := new(big.Int).Sub(s.outflow.lastMOR, mor)
-		// Ignore decreases explained by session stake (best-effort signal only).
-		s.outflow.alerts = append([]AuditEvent{{
-			At: time.Now().UTC(), Kind: "outflow", Actor: "router-wallet",
-			Message: "MOR balance decreased by " + delta.String() + " wei",
-		}}, s.outflow.alerts...)
-		if len(s.outflow.alerts) > 32 {
-			s.outflow.alerts = s.outflow.alerts[:32]
-		}
-		s.audit.Record("outflow", "router-wallet", "MOR balance decreased")
+		s.audit.Record(balanceDropKind, "router-wallet", "MOR balance decreased by "+formatUnits18(delta)+" MOR "+morDropNote)
 	}
 	if eth != nil {
 		s.outflow.lastETH = eth
@@ -83,6 +69,16 @@ func (s *Server) CheckOutflow() {
 	if mor != nil {
 		s.outflow.lastMOR = mor
 	}
+}
+
+// formatUnits18 renders an 18-decimal wei amount with up to 6 decimals.
+func formatUnits18(wei *big.Int) string {
+	r := new(big.Rat).SetFrac(wei, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+	out := r.FloatString(6)
+	if strings.Contains(out, ".") {
+		out = strings.TrimRight(strings.TrimRight(out, "0"), ".")
+	}
+	return out
 }
 
 func parseWeiField(raw json.RawMessage) *big.Int {
