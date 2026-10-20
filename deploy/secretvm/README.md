@@ -10,11 +10,15 @@ Encrypted Secrets:
 - **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
   ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
-  CLOSE_SESSIONS_ON_EXIT), and admin auth fixed to ADMIN_2FA_REQUIRED=true,
-  MASTER_KEY_ADMIN=false (bake values win over environment:). Diamond /
+  CLOSE_SESSIONS_ON_EXIT), and master key admin access fixed off
+  (MASTER_KEY_ADMIN=false; bake values win over environment:). Diamond /
   ETH_NODE_CHAIN_ID are not Uplink operator knobs.
-- **2FA break-glass**: add `UPLINK_RESET_2FA=true` to `uplink_bake_env`,
-  redeploy once, then remove it and redeploy (see
+- **2FA** is off by default and turned on with the switch on the GUI
+  Security tab (recommended); there is no variable for it. The switch is
+  kept in the uplink data volume, so it survives redeploys.
+- **2FA emergency recovery**: add `UPLINK_RESET_2FA=true` to
+  `uplink_bake_env`, redeploy once, then remove it and redeploy; 2FA comes
+  back off (see
   [docs/06-developers.md](../../docs/06-developers.md#admin-2fa-and-recovery-codes)).
 - **Router** (`router_network_env`; godotenv -- process env wins):
   PROXY_STORE_CHAT_CONTEXT, PROXY_FORWARD_CHAT_CONTEXT,

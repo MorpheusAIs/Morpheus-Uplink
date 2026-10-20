@@ -87,12 +87,13 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
   `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
-  `HOUSEKEEPING=true`, and admin auth fixed to `ADMIN_2FA_REQUIRED=true`,
-  `MASTER_KEY_ADMIN=false`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
+  `HOUSEKEEPING=true`, and master key admin access fixed off
+  (`MASTER_KEY_ADMIN=false`). Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
   `DATA_DIR`, `USAGE_PRUNE_DAYS`,
   `CLOSE_SESSIONS_ON_EXIT`) are Uplink process env too. Diamond /
   `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
-  2FA break-glass: add `UPLINK_RESET_2FA=true` to `uplink_bake_env`,
+  2FA is turned on in the GUI, not here (see [2FA](#admin-2fa-switch)).
+  2FA emergency recovery: add `UPLINK_RESET_2FA=true` to `uplink_bake_env`,
   redeploy once, then remove it and redeploy
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 - **Router** (`router_network_env`; godotenv -- process env wins):
@@ -122,11 +123,11 @@ WEB_PUBLIC_URL=https://uplink.yourdomain.com
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
 keeps the default; set one in `.env` to override (the list is in
-[06](06-developers.md#environment-variables)). Admin auth defaults to
-2FA required (`ADMIN_2FA_REQUIRED=true`) and master key admin access off
-(`MASTER_KEY_ADMIN=false`); changing either weakens admin security.
-2FA break-glass: `UPLINK_RESET_2FA=true` in `.env` for one restart, then
-remove it. Keep ownership separate:
+[06](06-developers.md#environment-variables)). Master key admin access
+defaults to off (`MASTER_KEY_ADMIN=false`); turning it on weakens admin
+security. 2FA is turned on in the GUI (see [2FA](#admin-2fa-switch)).
+2FA emergency recovery: `UPLINK_RESET_2FA=true` in `.env` for one restart,
+then remove it. Keep ownership separate:
 **Uplink** session/catalog/housekeeping (+ wiring defaults);
 **Router** `PROXY_*` / `LOG_LEVEL_*` / chain / Diamond / MOR. Never describe
 router `PROXY_*` / `LOG_LEVEL_*` as Uplink knobs.
@@ -151,14 +152,12 @@ Railway does not run compose, so no compose default applies there: an
 unset variable takes the process's own default, which can differ from the
 compose value (table in [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway)).
 Set plain values as Railway Variables (Uplink vs router ownership stays
-separate; see SecretVM block above). **Set `ADMIN_2FA_REQUIRED=true` as a
-Railway service variable** on uplink: unset means 2FA is off, with no
-warning. On proxy-router set `PROXY_STORE_CHAT_CONTEXT=false` (unset stores
-chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain
-addresses from `env.railway.example`. A value that is not
-true or false (such as the literal `${ADMIN_2FA_REQUIRED:-true}` text)
-fails closed (2FA required, with a warning). Then enroll on the first login,
-and keep `DATA_DIR` on a persistent volume. Full checklist:
+separate; see SecretVM block above). On proxy-router set
+`PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context),
+`LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses from
+`env.railway.example`. Then turn 2FA on in the GUI (recommended; see
+[2FA](#admin-2fa-switch)), and keep `DATA_DIR` on a persistent volume so the
+2FA switch and enrollment survive redeploys. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -213,9 +212,9 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
 4. Deploy. Wait for health (`uplink … listening`, router healthy).
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
-6. 2FA is required: the first login opens only the Security tab. Scan the
-   QR code, confirm a code, and save the 10 recovery codes (shown once).
-   Every other tab appears after that.
+6. Turn 2FA on (recommended): Security tab → 2FA switch → scan the QR
+   code, confirm a code, and save the 10 recovery codes (shown once).
+   See [2FA](#admin-2fa-switch).
 
 ---
 
@@ -235,8 +234,8 @@ nano .env   # or your editor
 docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 ```
 
-Open `https://$PUBLIC_HOST/gui/` and enroll 2FA on the Security tab (required
-by default, as on SecretVM).
+Open `https://$PUBLIC_HOST/gui/` and turn 2FA on with the switch on the
+Security tab (recommended; off by default, as on every deploy).
 
 ---
 
@@ -252,10 +251,36 @@ proxy-router. Full step→done checklist:
 3. Use the uplink and router digests from `docker-compose.railway.deployed.yml` — not bare `:latest`.
 4. Replicas = **1** for wallet-bearing `proxy-router`.
 5. Confirm only uplink is public (`:8080` behind Railway HTTPS).
-6. Open `https://<public>/gui/`, enroll 2FA on the Security tab (required by
-   default), then fund wallet → Probe (same as other hosts).
+6. Open `https://<public>/gui/`, turn 2FA on with the switch on the
+   Security tab (recommended; off by default), then fund wallet → Probe
+   (same as other hosts).
 
 Done when GUI login works and Probe returns a completion.
+
+---
+
+## Admin 2FA switch
+
+2FA (TOTP) is an operator choice in the GUI, the same on SecretVM,
+generic, Railway and local: there is no environment variable for it.
+
+- **Default off.** The first login is password only. While 2FA is off the
+  Security tab shows a short note recommending turning it on; nothing is
+  forced.
+- **Turn on:** Security tab → 2FA switch. Scan the QR code (or enter the
+  secret), confirm a code, and save the 10 recovery codes (shown once).
+  2FA is on only once a code is confirmed; from then on every login needs a
+  TOTP or recovery code.
+- **Turn off:** the switch asks for the password plus a current TOTP or
+  recovery code. It removes the secret and recovery codes and signs out
+  every session; login is password only again.
+- **Persistent:** the switch is stored with the 2FA state in `DATA_DIR`
+  (`uplink-state.json`), so it survives restarts and redeploys. Keep
+  `DATA_DIR` on a persistent volume.
+- **Emergency recovery** (authenticator and recovery codes lost):
+  `UPLINK_RESET_2FA=true` for one restart wipes 2FA and all sessions; 2FA
+  comes back off. Remove the variable, log in with the password and turn
+  2FA on again ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 
 ---
 

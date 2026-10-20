@@ -12,10 +12,12 @@ https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 Form/`.env` stays the operator fillables (+ `PUBLIC_HOST` for Caddy).
 Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
 keeps the default; set one in `.env` to override (see `env.example`).
-Admin auth defaults to 2FA required (`ADMIN_2FA_REQUIRED`, default true) and
-master key admin access off (`MASTER_KEY_ADMIN`, default false); changing
-either weakens admin security. 2FA break-glass: `UPLINK_RESET_2FA=true` for
-one restart, then remove it.
+Master key admin access defaults to off (`MASTER_KEY_ADMIN`, default
+false); turning it on weakens admin security. 2FA is off by default and
+turned on with the switch on the GUI Security tab (recommended; no variable
+for it; kept in the data volume). 2FA emergency recovery:
+`UPLINK_RESET_2FA=true` for one restart, then remove it (2FA comes back
+off).
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,

@@ -47,10 +47,8 @@ services:
       - "8080:8080"
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      # 2FA required under compose. Railway does not apply this default (unset
-      # means off): set it true as a service variable. Keep DATA_DIR on a
-      # persistent volume, or each redeploy asks for a new enrollment.
-      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}
+      # 2FA is turned on in the GUI (Security tab) and kept in DATA_DIR: keep
+      # DATA_DIR on a persistent volume, or each redeploy starts with 2FA off.
       - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
       # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
       - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}

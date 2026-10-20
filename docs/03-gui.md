@@ -21,20 +21,25 @@ One topic at a time. You do not need every section on day one.
   client, then Add MOR and Support (both collapsed). Hover or focus an &#9432; for help.
   There is no low-wallet warning: watch the Wallet number, and keep a
   little ETH on the wallet for gas (check it in your wallet app).
-- Security: enrolling 2FA (scan the QR code, confirm a code) shows 10
-  recovery codes once; save them. Each works once in place of the 6-digit
-  code. Regenerate them or reset 2FA from the same tab: the buttons enable
-  once both the password and a code are filled in.
+- Security: the **2FA switch** turns two-factor login on or off. It is off
+  by default on every deploy (password-only login), and the tab shows a
+  short note recommending turning it on; nothing is forced. Turning it on
+  runs the enrollment (scan the QR code, confirm a code); 2FA is on once
+  the code is confirmed, and 10 recovery codes are shown once; save them.
+  Each works once in place of the 6-digit code. The switch is stored in
+  `DATA_DIR`, so it survives restarts and redeploys.
+- Regenerate recovery codes, reset 2FA or turn it off from the same tab:
+  the buttons (and switching off) need both the password and a current
+  code or recovery code.
+- Turn off removes the 2FA secret and all recovery codes and signs out
+  every session; the next login is password only.
 - Reset wipes the 2FA secret and all recovery codes and signs out every
-  session (you land on the login screen). Log in with the password: you go
-  straight to a new enrollment with a new QR code; the old authenticator
-  entry and old recovery codes no longer work. While 2FA is required
-  (default on SecretVM and generic; on Railway only when
-  `ADMIN_2FA_REQUIRED=true` is set as a service variable, since unset means
-  off) only the Security tab shows until the new enrollment is confirmed.
-  Removing 2FA outright is refused while it is required.
-- Locked out (lost authenticator and codes): restart once with
-  `UPLINK_RESET_2FA=true`, then remove it
+  session (you land on the login screen), but 2FA stays on. Log in with the
+  password: only the Security tab shows, with a new enrollment and a new QR
+  code, until it is confirmed; the old authenticator entry and old recovery
+  codes no longer work.
+- Locked out (lost authenticator and codes): emergency recovery is one
+  restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 
 ---

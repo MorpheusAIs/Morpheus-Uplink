@@ -128,7 +128,6 @@ configs:
       ROUTER_URL=http://proxy-router:8082
       DATA_DIR=/data
       TRUSTED_PROXY_CIDR=172.28.0.0/16
-      ADMIN_2FA_REQUIRED=true
       MASTER_KEY_ADMIN=false
   router_network_env:
     content: |-

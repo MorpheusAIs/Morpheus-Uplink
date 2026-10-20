@@ -44,16 +44,14 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are not Railway Secrets, and Railway applies none of the compose
-defaults (see [Unset on Railway](#unset-on-railway)). **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
-variable on uplink.** Railway does not evaluate the compose default, so if
-the variable is unset 2FA is off, with no warning. A value that is not true
-or false (for example the literal `${ADMIN_2FA_REQUIRED:-true}` text) fails
-closed: 2FA stays required and Uplink warns at startup and on the Security
-tab. With it set, the first login opens only the Security tab until
-you enroll (scan the QR code, confirm a code, save the 10 recovery codes).
-Keep `DATA_DIR` on a persistent Railway volume, or each redeploy asks for a
-new enrollment. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA
-break-glass: `UPLINK_RESET_2FA=true` for one restart, then remove it.
+defaults (see [Unset on Railway](#unset-on-railway)). 2FA is not a
+variable: it is off by default (first login is password only) and turned on
+with the switch on the GUI Security tab (recommended: scan the QR code,
+confirm a code, save the 10 recovery codes). The switch and enrollment are
+kept in `DATA_DIR`: keep it on a persistent Railway volume, or each
+redeploy starts with 2FA off. `MASTER_KEY_ADMIN=true` weakens admin
+security. 2FA emergency recovery: `UPLINK_RESET_2FA=true` for one restart,
+then remove it (2FA comes back off).
 
 Railway caveat: Railway does not run `docker-compose.yml`; each service's
 environment comes from its Railway Variables. Railway variables have no
@@ -71,7 +69,6 @@ code, Uplink image, or stock router v7.15.0):
 
 | Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
 |---|---|---|---|
-| `ADMIN_2FA_REQUIRED` (uplink) | `true` | `false`: 2FA off | active line, checked |
 | `PROXY_STORE_CHAT_CONTEXT` (router) | `false` | `true`: chat context stored | active line, checked |
 | `LOG_LEVEL_APP` (router) | `warn` | `debug` | active line, checked |
 | `ETH_NODE_CHAIN_ID` (router) | `8453` | `0`: no check that the RPC node is on Base | active line, checked |
@@ -154,11 +151,11 @@ privacy on the pinned v7.15.0 digest until verified.
 | Step | Done when |
 |------|-----------|
 | **1. Project** | Railway project has uplink + proxy-router on a private network (compose plugin or two services). |
-| **2. Secrets + vars** | H4 vars are **Railway Secrets** only; every active line of `env.railway.example` (including `ADMIN_2FA_REQUIRED=true`, `PROXY_STORE_CHAT_CONTEXT=false`, `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453`) is set as a plain var on its service. |
+| **2. Secrets + vars** | H4 vars are **Railway Secrets** only; every active line of `env.railway.example` (including `PROXY_STORE_CHAT_CONTEXT=false`, `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453`) is set as a plain var on its service. |
 | **3. Digests** | Images pinned to the digests in the [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) `docker-compose.railway.deployed.yml` (not bare `:latest`). |
 | **4. Replicas** | `proxy-router` replicas = **1** (H3). |
 | **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS -> `:8080`). |
-| **6. GUI + fund** | `https://<public>/gui` works; wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |
+| **6. GUI + fund** | `https://<public>/gui` works; 2FA turned on with the Security tab switch (recommended); wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |
 
 **Done** when GUI login works and Probe returns a completion. Bootstrap summary:
 [docs/02-bootstrap.md -- First start -- Railway](../../docs/02-bootstrap.md#first-start--railway).

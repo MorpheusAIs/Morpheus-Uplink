@@ -72,6 +72,13 @@ func mockCatalog(t *testing.T) *httptest.Server {
 
 func newTestServer(t *testing.T) (*httptest.Server, *config.Config, *atomic.Int32) {
 	t.Helper()
+	return newTestServerWith(t, func(*config.Config) {})
+}
+
+// newTestServerWith is newTestServer with a config hook that runs before
+// the store opens (for example to reuse a data dir across a restart).
+func newTestServerWith(t *testing.T, edit func(*config.Config)) (*httptest.Server, *config.Config, *atomic.Int32) {
+	t.Helper()
 	var opened atomic.Int32
 	rt := mockRouter(t, &opened)
 	t.Cleanup(rt.Close)
@@ -91,6 +98,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *config.Config, *atomic.Int3
 		DevHTTP:            true,
 		WebPublicURL:       "http://127.0.0.1", // patched to ts origin below
 	}
+	edit(cfg)
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		t.Fatal(err)

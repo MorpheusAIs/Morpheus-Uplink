@@ -316,6 +316,8 @@
   .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
   .note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.45; }
   .hidden { display: none !important; }
+  .tf-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+  .tf-switch input { width: 18px; height: 18px; margin: 0; }
   .otp-input {
     width: 9ch;
     font-family: var(--mono, ui-monospace, monospace);
@@ -1004,7 +1006,12 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
     <div class="panel" id="tab-security">
       <section>
         <h2>Two-factor auth</h2>
+        <label class="tf-switch" style="margin-bottom:8px">
+          <input type="checkbox" id="tfSwitch" role="switch" onchange="toggleTwoFactor(this.checked)">
+          <span data-copy="tfSwitchLabel">Require an authenticator code at login (2FA)</span>
+        </label>
         <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
+        <div class="callout compact hidden" id="twoFactorOffNote" role="status" data-copy="tfOffNote" style="margin:0 0 10px"></div>
         <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
           <div class="row">
             <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
@@ -1036,6 +1043,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <div class="row">
             <button type="button" class="ghost" id="regenBtn" onclick="regenerateRecoveryCodes()" data-copy="regenTitle" disabled>Regenerate recovery codes</button>
             <button type="button" class="danger-ghost" id="resetBtn" onclick="resetTwoFactor()" data-copy="resetTitle" disabled>Reset 2FA</button>
+            <button type="button" class="danger-ghost" id="disableBtn" onclick="disableTwoFactor()" data-copy="tfDisableTitle" disabled>Turn off 2FA</button>
           </div>
           <p class="note" id="manageMsg" role="status" style="margin:0"></p>
         </form>
@@ -1351,12 +1359,19 @@ const UI_COPY = {
   supportRouterApi: 'Router admin API',
   supportRouterApiTip: 'The router admin API isn\'t exposed through Uplink: the router port is never published and the public edge does not route to it.',
   // Two-factor auth (Security tab)
-  tfEnrolled: (n) => '2FA enrolled · ' + n + ' recovery code' + (n === 1 ? '' : 's') + ' left.',
-  tfNotEnrolled: '2FA not enrolled.',
-  tfRequired: ' Enrollment required before other admin actions.',
+  tfEnrolled: (n) => '2FA is on · ' + n + ' recovery code' + (n === 1 ? '' : 's') + ' left.',
+  tfNotEnrolled: '2FA is off: login needs only the password.',
+  tfRequired: ' 2FA is on: enroll an authenticator before other admin actions.',
+  tfSwitchLabel: 'Require an authenticator code at login (2FA)',
+  tfOffNote: '2FA is off. We recommend turning it on: flip the switch above and scan the QR code with an authenticator app.',
+  tfEnrollStart: 'Scan the QR code (or enter the secret) in your authenticator app, then confirm a code to turn 2FA on.',
+  tfDisableTitle: 'Turn off 2FA',
+  tfDisableNeedsFactor: 'To turn 2FA off, enter your password and a current authenticator code or a recovery code below, then choose Turn off 2FA.',
+  tfDisableConfirm: 'Turn off 2FA? This removes the authenticator and all recovery codes and logs out every admin session. Login will then need only the password.',
+  tfDisableDone: '2FA is off. All sessions were logged out. Log in with your password.',
   // Names only (from configWarn); each fell back to its safe value.
   tfConfigWarn: (names) => ' Warning: ' + names.join(', ') + ' is not true or false, so the safe value'
-    + ' is in use (2FA required, master key admin off). Set it to true or false.',
+    + ' is in use (master key admin off). Set it to true or false.',
   tfBreakGlass: ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.',
   tfReenroll: '2FA was reset. Enroll again below; new recovery codes are issued when you confirm.',
   enrollFirst: 'Enroll 2FA to continue: scan the new QR code and confirm a code.',
@@ -1611,11 +1626,15 @@ async function logout() {
 
 
 // The server answers 403 "2fa enrollment required" on admin routes while
-// ADMIN_2FA_REQUIRED=true and 2FA is not enrolled (for example right after
-// a reset). The GUI then shows only the Security tab and a fresh enrollment.
+// the 2FA switch is on and nothing is enrolled (right after a reset). The
+// GUI then shows only the Security tab and a fresh enrollment.
 function isEnrollRequired(text) { return /2fa enrollment required/i.test(text || ''); }
 let enrollOnly = false;
 let enrollAutoStarted = false;
+// Set when the operator turns the 2FA switch on; cleared once enrolled.
+let tfEnrollRequested = false;
+// Last /admin/2fa/status answer (server state behind the switch).
+let tfState = { on: false, enrolled: false };
 function enterEnrollmentOnly(fromRefresh) {
   const first = !enrollOnly;
   enrollOnly = true;
@@ -1639,6 +1658,12 @@ function resetSecurityView() {
   if (manage) manage.classList.add('hidden');
   const enrollBox = document.getElementById('twoFactorEnroll');
   if (enrollBox) enrollBox.style.display = 'none';
+  tfEnrollRequested = false;
+  tfState = { on: false, enrolled: false };
+  const sw = document.getElementById('tfSwitch');
+  if (sw) sw.checked = false;
+  const offNote = document.getElementById('twoFactorOffNote');
+  if (offNote) offNote.classList.add('hidden');
   const box = document.getElementById('securityAlerts');
   if (box) box.textContent = 'Loading…';
   for (const id of ['managePw', 'manageCode']) { const el = document.getElementById(id); if (el) el.value = ''; }
@@ -1661,14 +1686,22 @@ async function refreshSecurity() {
       if (!res.ok) throw new Error(await res.text() || res.statusText);
       const tf = await res.json();
       const left = Number(tf.recoveryRemaining) || 0;
-      let msg = tf.enrolled ? UI_COPY.tfEnrolled(left) : UI_COPY.tfNotEnrolled;
+      let msg = tf.enrolled ? UI_COPY.tfEnrolled(left) : (tf.on ? '' : UI_COPY.tfNotEnrolled);
       if (tf.enrolled && left === 0) msg += ' ' + UI_COPY.recoveryNoneLeft;
-      if (tf.required && !tf.enrolled) msg += UI_COPY.tfRequired;
+      if (tf.on && !tf.enrolled) msg += UI_COPY.tfRequired;
       if (tf.breakGlassWarn) msg += UI_COPY.tfBreakGlass;
       if (Array.isArray(tf.configWarn) && tf.configWarn.length) msg += UI_COPY.tfConfigWarn(tf.configWarn);
       if (!tf.enrolled && reenrollPending()) msg = UI_COPY.tfReenroll + ' ' + msg;
-      stEl.textContent = msg;
-      if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
+      stEl.textContent = msg.trim();
+      // The switch shows the server state; turning it on shows enrollment
+      // until a code is confirmed.
+      tfState = { on: !!tf.on, enrolled: !!tf.enrolled };
+      const sw = document.getElementById('tfSwitch');
+      if (sw) sw.checked = !!tf.on || (tfEnrollRequested && !tf.enrolled);
+      const offNote = document.getElementById('twoFactorOffNote');
+      if (offNote) offNote.classList.toggle('hidden', !!tf.on);
+      if (tf.enrolled) tfEnrollRequested = false;
+      if (enrollBox) enrollBox.style.display = (!tf.enrolled && (tf.on || tfEnrollRequested)) ? 'flex' : 'none';
       const manage = document.getElementById('twoFactorManage');
       if (manage) manage.classList.toggle('hidden', !tf.enrolled);
       if (tf.enrolled) setRecoveryHint(left);
@@ -1815,11 +1848,11 @@ function downloadRecoveryCodes() {
   URL.revokeObjectURL(a.href);
 }
 
-// Regenerate and Reset stay disabled until both fields have a value.
+// Regenerate, Reset and Turn off stay disabled until both fields have a value.
 function updateManageButtons() {
   const f = manageFields();
   const ready = !!(f.password && f.code);
-  for (const id of ['regenBtn', 'resetBtn']) {
+  for (const id of ['regenBtn', 'resetBtn', 'disableBtn']) {
     const b = document.getElementById(id);
     if (b) b.disabled = !ready;
   }
@@ -1883,6 +1916,59 @@ async function resetTwoFactor() {
     markReenrollPending();
     showLogin();
     document.getElementById('loginMsg').textContent = UI_COPY.resetDone;
+  } catch (e) { setManageMsg(e.message, 'err'); }
+}
+
+// The 2FA switch. On: run the enrollment (2FA turns on when a code is
+// confirmed). Off: needs the password plus a current code or recovery code.
+function toggleTwoFactor(on) {
+  const sw = document.getElementById('tfSwitch');
+  if (on) {
+    tfEnrollRequested = true;
+    const enrollBox = document.getElementById('twoFactorEnroll');
+    if (enrollBox) enrollBox.style.display = 'flex';
+    setEnrollMsg(UI_COPY.tfEnrollStart, '');
+    startTotpEnroll();
+    return;
+  }
+  if (!tfState.enrolled && tfState.on) {
+    // After a reset: 2FA stays on until a new enrollment is confirmed.
+    if (sw) sw.checked = true;
+    setEnrollMsg(UI_COPY.enrollFirst, '');
+    return;
+  }
+  if (!tfState.enrolled) {
+    // Enrollment not confirmed yet: nothing was turned on, just cancel.
+    tfEnrollRequested = false;
+    hideEnrollSecret();
+    setEnrollMsg('', '');
+    const enrollBox = document.getElementById('twoFactorEnroll');
+    if (enrollBox) enrollBox.style.display = 'none';
+    refreshSecurity();
+    return;
+  }
+  if (sw) sw.checked = true; // stays on until the server turns it off
+  const f = manageFields();
+  if (!f.password || !f.code) {
+    setManageMsg(UI_COPY.tfDisableNeedsFactor, 'err');
+    if (f.pwEl) f.pwEl.focus();
+    return;
+  }
+  disableTwoFactor();
+}
+async function disableTwoFactor() {
+  const f = manageFields();
+  if (!f.password || !f.code) { setManageMsg(UI_COPY.tfDisableNeedsFactor, 'err'); return; }
+  if (!confirm(UI_COPY.tfDisableConfirm)) return;
+  try {
+    const res = await postFactor('/admin/2fa/remove', f);
+    if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
+    hideRecoveryCodes();
+    setTwoFactorHint(false);
+    setRecoveryHint(0);
+    clearReenrollPending();
+    showLogin();
+    document.getElementById('loginMsg').textContent = UI_COPY.tfDisableDone;
   } catch (e) { setManageMsg(e.message, 'err'); }
 }
 
@@ -2076,7 +2162,7 @@ async function tryRestoreSession() {
       refresh();
       return;
     }
-    // 403 with ADMIN_2FA_REQUIRED: session may be valid but enroll pending.
+    // 403 with 2FA on and nothing enrolled: session valid, enroll pending.
     if (res.status === 403) {
       const st = await fetch('/admin/2fa/status', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
       if (st.ok) {

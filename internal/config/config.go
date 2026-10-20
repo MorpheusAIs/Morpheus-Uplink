@@ -53,14 +53,9 @@ type Config struct {
 	WebPublicURL string
 	// MASTER_KEY_ADMIN: when true, Bearer master key may access /admin (audited). Default false.
 	MasterKeyAdmin bool
-	// ADMIN_2FA_REQUIRED: when true and nothing enrolled, only login+enroll work.
-	// Unset or empty: false (the code default). Set but not a boolean (for
-	// example a literal "${ADMIN_2FA_REQUIRED:-true}" from a host that does not
-	// interpolate): true, fail closed, and listed in MalformedBoolVars.
-	Admin2FARequired bool
 	// MalformedBoolVars names security switches that were set to something
 	// that is not a boolean (names only, never values). Each fell back to its
-	// safe value: ADMIN_2FA_REQUIRED true, MASTER_KEY_ADMIN false.
+	// safe value (MASTER_KEY_ADMIN: false).
 	MalformedBoolVars []string
 	// UPLINK_DEV_HTTP: allow non-Secure cookie for localhost only.
 	DevHTTP bool
@@ -97,7 +92,6 @@ func FromEnv() (*Config, error) {
 	}
 
 	// Security switches fall back to their safe value when malformed.
-	c.Admin2FARequired = c.securityBool("ADMIN_2FA_REQUIRED", true)
 	c.MasterKeyAdmin = c.securityBool("MASTER_KEY_ADMIN", false)
 
 	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.

@@ -4,19 +4,15 @@
 #   - uplink -> local image
 #   - proxy-router -> stateful python mock (same service name, port 8082)
 #   - traefik -> disabled (needs SecretVM certs)
-#   - short reconcile gate/retry; 2FA not required (curl-driven checks),
-#     except the 2FA reset section (E2E_ADMIN_2FA_REQUIRED=true)
+#   - short reconcile gate/retry
 #   - bake.env: the SecretVM content with the model catalog served by the
 #     mock (two configured models) instead of the public catalog, and
-#     without ADMIN_2FA_REQUIRED / MASTER_KEY_ADMIN, so the environment:
-#     knob below applies (bake.env wins over environment:; code default for
-#     MASTER_KEY_ADMIN is false)
+#     without MASTER_KEY_ADMIN (code default false)
 services:
   uplink:
     image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
     pull_policy: never
     environment:
-      - ADMIN_2FA_REQUIRED=${E2E_ADMIN_2FA_REQUIRED:-false}
       - UPLINK_RECONCILE_GATE_SECONDS=6
       - UPLINK_RECONCILE_RETRY_SECONDS=3
     healthcheck:

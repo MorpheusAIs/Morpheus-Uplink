@@ -71,7 +71,6 @@ services:
       start_period: 90s
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}
       - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}
       # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
       - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}

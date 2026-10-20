@@ -6,38 +6,62 @@ import (
 	"testing"
 )
 
-// With ADMIN_2FA_REQUIRED=true, remove is refused before any code is
-// consumed and points to Reset; 2FA and the session stay as they were.
-func TestTOTPRemoveRefusedWhen2FARequired(t *testing.T) {
+// Turning 2FA off (POST /admin/2fa/remove) without the password plus a
+// valid second factor is rejected and changes nothing: 2FA stays on and the
+// session keeps working.
+func TestTOTPRemoveNeedsPasswordAndFactor(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
-	cfg.Admin2FARequired = true
 	ac := adminClient(t, ts, cfg)
 	_, codes := enroll2FA(t, ac, ts, cfg)
-
-	code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/remove", `{"password":"`+cfg.AdminPassword+`","code":"`+codes[0]+`"}`)
-	if code != http.StatusConflict {
-		t.Fatalf("remove with 2FA required: %d %s, want 409", code, b)
+	pw := cfg.AdminPassword
+	// Five free failures, each 401 (and audited), then the shared lockout.
+	for _, tc := range []struct{ name, body string }{
+		{"no_code", `{"password":"` + pw + `"}`},
+		{"bad_totp", `{"password":"` + pw + `","code":"000000"}`},
+		{"bad_recovery", `{"password":"` + pw + `","code":"aaaa-aaaa-aaaa"}`},
+		{"no_password", `{"code":"` + codes[0] + `"}`},
+		{"bad_password", `{"password":"nope-nope-nope","code":"` + codes[0] + `"}`},
+	} {
+		if code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/remove", tc.body); code != http.StatusUnauthorized {
+			t.Fatalf("%s: %d %s, want 401", tc.name, code, b)
+		}
 	}
-	if !strings.Contains(string(b), "Reset 2FA") {
-		t.Fatalf("refusal must point to Reset 2FA: %q", b)
+	if code, _ := postJSON(t, ac, ts, cfg, "/admin/2fa/remove", `{"password":"`+pw+`","code":""}`); code != http.StatusTooManyRequests {
+		t.Fatalf("sixth failure: %d want 429 (lockout)", code)
+	}
+	// No CSRF headers: forbidden before anything is checked.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/2fa/remove",
+		strings.NewReader(`{"password":"`+pw+`","code":"`+codes[0]+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("remove without CSRF: %d want 403", resp.StatusCode)
+	}
+	// No session: unauthorized.
+	anon := &http.Client{}
+	if code, _ := postJSON(t, anon, ts, cfg, "/admin/2fa/remove", `{"password":"`+pw+`","code":"`+codes[0]+`"}`); code != http.StatusUnauthorized {
+		t.Fatalf("remove without a session: %d want 401", code)
 	}
 	st := twoFAStatus(t, ac, ts)
-	if st["enrolled"] != true || st["recoveryRemaining"] != float64(10) {
-		t.Fatalf("refused remove changed 2FA state: %#v", st)
+	if st["enrolled"] != true || st["on"] != true || st["recoveryRemaining"] != float64(10) {
+		t.Fatalf("rejected remove changed 2FA state: %#v", st)
 	}
 	if got := httpCode(t, ac, ts, "/admin/status"); got != http.StatusOK {
-		t.Fatalf("session after refused remove: %d want 200", got)
+		t.Fatalf("session after rejected remove: %d want 200", got)
 	}
-	if !hasAudit(auditEvents(t, ac, ts), "2fa_remove", "blocked", "2fa_required") {
-		t.Fatal("missing 2fa_remove blocked audit")
+	if !hasAudit(auditEvents(t, ac, ts), "2fa_remove", "fail", "bad_password") {
+		t.Fatal("missing 2fa_remove fail audit")
 	}
 }
 
-// When allowed, remove wipes 2FA and, like reset, ends every admin
-// session (this one too) and clears the cookie.
+// Remove turns 2FA off: it wipes 2FA, ends every admin session (this one
+// too) and clears the cookie.
 func TestTOTPRemoveRevokesAllSessions(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
-	cfg.Admin2FARequired = false
 	ac := adminClient(t, ts, cfg)
 	secret, codes := enroll2FA(t, ac, ts, cfg)
 	code, other, _ := login(t, ts, cfg.AdminPassword, nextStepCode(t, secret))
@@ -75,7 +99,7 @@ func TestTOTPRemoveRevokesAllSessions(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("password login after remove: %d", code)
 	}
-	if st := twoFAStatus(t, fresh, ts); st["enrolled"] != false || st["recoveryRemaining"] != float64(0) {
+	if st := twoFAStatus(t, fresh, ts); st["enrolled"] != false || st["on"] != false || st["recoveryRemaining"] != float64(0) {
 		t.Fatalf("2fa status after remove: %#v", st)
 	}
 	if !hasAudit(auditEvents(t, fresh, ts), "2fa_remove", "ok", "sessions_revoked=2") {

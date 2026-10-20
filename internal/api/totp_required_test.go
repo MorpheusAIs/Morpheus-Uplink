@@ -17,9 +17,15 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
-func TestAdmin2FARequiredAllowsEnrollPath(t *testing.T) {
+// With the 2FA switch on and nothing enrolled (after a reset), only the
+// enroll path works.
+func TestTwoFactorOnNotEnrolledAllowsEnrollPath(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
-	cfg.Admin2FARequired = true
+	enrolled := adminClient(t, ts, cfg)
+	_, codes := enroll2FA(t, enrolled, ts, cfg)
+	if code, b := postJSON(t, enrolled, ts, cfg, "/admin/2fa/reset", `{"password":"`+cfg.AdminPassword+`","code":"`+codes[0]+`"}`); code != http.StatusOK {
+		t.Fatalf("reset: %d %s", code, b)
+	}
 	ac := adminClient(t, ts, cfg)
 
 	// Status (requireAdmin) must 403 until enrolled.
@@ -47,7 +53,7 @@ func TestAdmin2FARequiredAllowsEnrollPath(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
-	if st["need2fa"] != true || st["enrolled"] != false {
+	if st["need2fa"] != true || st["enrolled"] != false || st["on"] != true {
 		t.Fatalf("2fa status: %#v", st)
 	}
 

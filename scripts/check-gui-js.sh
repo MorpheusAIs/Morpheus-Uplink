@@ -64,7 +64,7 @@ global.fetch = async (url, opts = {}) => {
   if (String(url).includes('/admin/2fa/status')) {
     return {
       status: 200, ok: true,
-      json: async () => ({ enrolled: false, required: true, need2fa: true, breakGlassWarn: false }),
+      json: async () => ({ enrolled: false, on: true, need2fa: true, breakGlassWarn: false }),
       text: async () => '',
     };
   }
@@ -76,6 +76,8 @@ global.fetch = async (url, opts = {}) => {
 global.showLogin = () => {};
 global.UI_COPY = new Proxy({}, { get: (_, k) => (typeof k === 'string' && /^tf|recovery/.test(k) ? (() => String(k)) : String(k)) });
 global.reenrollPending = () => false;
+global.tfEnrollRequested = false;
+global.tfState = { on: false, enrolled: false };
 global.setRecoveryHint = () => {};
 
 eval(showTabSrc + '\n' + refreshSrc + '\n');
@@ -246,8 +248,10 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (/LOW_WALLET|isWalletLow|lowWalletThreshold|fundSummaryLow|renderFund|fold\.low/.test(html)) fail('low-wallet warning code still present');
   if (!/<details id="fundDetails" class="fold">/.test(html)) fail('Add MOR must be a collapsed <details> without open');
 
-  // 2FA can only be reset from the GUI; remove (refused when required) is API-only.
-  if (html.includes('/admin/2fa/remove')) fail('GUI must not call /admin/2fa/remove; use Reset 2FA');
+  // 2FA on/off switch: a real switch on Security, and turning off goes
+  // through the password + code form (postFactor), never a bare request.
+  if (!/<input type="checkbox" id="tfSwitch" role="switch" onchange="toggleTwoFactor\(this\.checked\)">/.test(html)) fail('Security must have the 2FA switch');
+  if (!/postFactor\('\/admin\/2fa\/remove', f\)/.test(src) || (src.match(/\/admin\/2fa\/remove/g) || []).length !== 1) fail('Turn off 2FA must call /admin/2fa/remove only via postFactor');
 
   // MASTER_KEY_ADMIN banner follows status.twoFactor.masterKeyAdmin.
   if (!/id="masterKeyAdminBanner"[^>]*class="[^"]*hidden|class="[^"]*hidden[^"]*" id="masterKeyAdminBanner"/.test(html)) fail('master key banner must start hidden');
@@ -321,14 +325,17 @@ function extract(name) {
   return src.slice(m.index, i);
 }
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
-const mkEl = (id) => ({ id, value: '', textContent: '', disabled: false, style: {},
+const mkEl = (id) => ({ id, value: '', textContent: '', disabled: false, style: {}, focus() {},
   classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } } });
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || mkEl(id)), body: mkEl('body') };
 const calls = { showTab: [], refreshSecurity: 0, startTotpEnroll: 0, setEnrollMsg: [] };
 global.T = {};
 eval([
-  "const UI_COPY = { enrollFirst: 'ENROLL_FIRST' };",
+  "const UI_COPY = { enrollFirst: 'ENROLL_FIRST', tfEnrollStart: 'ENROLL_START', tfDisableNeedsFactor: 'NEEDS_FACTOR', tfDisableConfirm: 'CONFIRM_OFF' };",
+  'let tfEnrollRequested = false; let tfState = { on: false, enrolled: false };',
+  'const posted = []; async function postFactor(path, f) { posted.push(path); return { ok: false, status: 401, text: async () => "", headers: { get: () => null } }; }',
+  'function confirm() { return true; }',
   "let activeTab = 'security';",
   'function showTab(id) { calls.showTab.push(id); activeTab = id; }',
   'function refreshSecurity() { calls.refreshSecurity++; }',
@@ -338,13 +345,13 @@ eval([
   'function hideRecoveryCodes() { document.getElementById("recoveryCodes").textContent = ""; }',
   'function hideEnrollSecret() { document.getElementById("enrollSecret").textContent = ""; }',
   'let enrollOnly = false; let enrollAutoStarted = false;',
-  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError'].map(extract),
-  'Object.assign(T, { updateManageButtons, resetSecurityView, enterEnrollmentOnly, factorError, state: () => ({ enrollOnly, enrollAutoStarted, activeTab }), setTab: (t) => { activeTab = t; } });',
+  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError', 'toggleTwoFactor', 'disableTwoFactor'].map(extract),
+  'Object.assign(T, { updateManageButtons, resetSecurityView, enterEnrollmentOnly, factorError, toggleTwoFactor, posted, setTF: (v) => { tfState = v; }, requested: () => tfEnrollRequested, state: () => ({ enrollOnly, enrollAutoStarted, activeTab }), setTab: (t) => { activeTab = t; } });',
 ].join('\n'));
 const $ = (id) => document.getElementById(id);
 (async () => {
   // Markup: buttons start disabled; both fields re-check on every input.
-  for (const id of ['regenBtn', 'resetBtn']) {
+  for (const id of ['regenBtn', 'resetBtn', 'disableBtn']) {
     if (!new RegExp('id="' + id + '"[^>]*\\bdisabled\\b').test(html)) fail(id + ' must start disabled');
   }
   for (const id of ['managePw', 'manageCode']) {
@@ -355,7 +362,7 @@ const $ = (id) => document.getElementById(id);
   for (const [pw, code] of states) {
     $('managePw').value = pw; $('manageCode').value = code; T.updateManageButtons();
     const want = !!(pw && code.trim());
-    if ($('regenBtn').disabled === want || $('resetBtn').disabled === want) fail('buttons for pw=' + JSON.stringify(pw) + ' code=' + JSON.stringify(code));
+    if ($('regenBtn').disabled === want || $('resetBtn').disabled === want || $('disableBtn').disabled === want) fail('buttons for pw=' + JSON.stringify(pw) + ' code=' + JSON.stringify(code));
   }
   // Logout / reset: nothing from the previous session survives.
   $('twoFactorStatus').textContent = '2FA enrolled · 10 recovery codes left.';
@@ -370,7 +377,7 @@ const $ = (id) => document.getElementById(id);
   if (!extract('showLogin').includes('resetSecurityView();')) fail('showLogin must call resetSecurityView');
   // Malformed security switch (configWarn, names only) is shown on Security.
   if (!/if \(Array\.isArray\(tf\.configWarn\) && tf\.configWarn\.length\) msg \+= UI_COPY\.tfConfigWarn\(tf\.configWarn\)/.test(src)) fail('Security must show configWarn');
-  // Re-login while 2FA is required and not enrolled: Security only, reloaded, new enrollment started once.
+  // Re-login while 2FA is on and not enrolled (after a reset): Security only, reloaded, new enrollment started once.
   if (!/if \(data\.need2fa\) \{\s*enterEnrollmentOnly\(\)/.test(src)) fail('finishLogin must enter enrollment-only mode on need2fa');
   T.setTab('security');
   T.enterEnrollmentOnly();
@@ -392,6 +399,24 @@ const $ = (id) => document.getElementById(id);
   if (await T.factorError({ status: 401, text: async () => '', headers: { get: () => null } }) !== 'Password or code not accepted.') fail('401 message');
   // A wrong enrollment code is not a lost session.
   if (!/codeCheck: true,\s*method: 'POST',/.test(extract('confirmTotpEnroll'))) fail('enroll confirm must not log out on a wrong code');
-  console.log('OK: 2FA buttons need password and code; reset clears the view; re-login goes straight to a fresh enrollment');
+  // 2FA switch: on starts the enrollment; off with 2FA on needs password
+  // and code first and leaves the switch on; with both it posts remove.
+  T.resetSecurityView(); calls.startTotpEnroll = 0;
+  T.toggleTwoFactor(true);
+  if (calls.startTotpEnroll !== 1 || !T.requested()) fail('switch on must start an enrollment');
+  T.toggleTwoFactor(false);
+  if (T.requested() || T.posted.length) fail('switch off before confirming must only cancel the enrollment');
+  T.setTF({ on: true, enrolled: true });
+  $('managePw').value = ''; $('manageCode').value = ''; $('tfSwitch').checked = false;
+  T.toggleTwoFactor(false);
+  if (T.posted.length || $('tfSwitch').checked !== true || $('manageMsg').textContent !== 'NEEDS_FACTOR') fail('switch off without password and code must not post and must stay on');
+  $('managePw').value = 'pw'; $('manageCode').value = '123456';
+  T.toggleTwoFactor(false);
+  await new Promise((r) => setTimeout(r, 0));
+  if (T.posted.join() !== '/admin/2fa/remove' || $('tfSwitch').checked !== true) fail('switch off with password and code must post remove once: ' + T.posted);
+  T.setTF({ on: true, enrolled: false });
+  T.toggleTwoFactor(false);
+  if (T.posted.length !== 1 || $('tfSwitch').checked !== true) fail('2FA on without enrollment (after reset) cannot be switched off');
+  console.log('OK: 2FA buttons need password and code; reset clears the view; re-login goes straight to a fresh enrollment; 2FA switch');
 })().catch((e) => fail(e.stack || e));
 NODE

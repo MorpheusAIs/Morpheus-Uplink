@@ -11,7 +11,7 @@ import (
 // on /admin/2fa/status and /admin/status, so the GUI can warn.
 func TestConfigWarnReported(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
-	cfg.MalformedBoolVars = []string{"ADMIN_2FA_REQUIRED"}
+	cfg.MalformedBoolVars = []string{"MASTER_KEY_ADMIN"}
 	ac := adminClient(t, ts, cfg)
 	get := func(path string) map[string]any {
 		t.Helper()
@@ -29,7 +29,7 @@ func TestConfigWarnReported(t *testing.T) {
 		}
 		return m
 	}
-	want := []any{"ADMIN_2FA_REQUIRED"}
+	want := []any{"MASTER_KEY_ADMIN"}
 	if got := get("/admin/2fa/status")["configWarn"]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("/admin/2fa/status configWarn=%v, want %v", got, want)
 	}

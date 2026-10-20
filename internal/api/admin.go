@@ -213,7 +213,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	auth := s.store.GetAuthState()
 	status["twoFactor"] = map[string]any{
 		"enrolled":       auth.Enrolled,
-		"required":       s.cfg.Admin2FARequired,
+		"on":             auth.On(),
 		"breakGlassWarn": s.breakGlassWarn(),
 		// MASTER_KEY_ADMIN=true: the master key works as an admin Bearer
 		// token without 2FA. The GUI shows a banner while this is on.

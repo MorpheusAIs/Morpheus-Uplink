@@ -2,8 +2,8 @@
 # deploy/secretvm/docker-compose.yml: proxy-router stays the pinned
 # morpheus-lumerin-node image from the template. Only swaps / test knobs:
 #   - uplink -> local image, fast healthcheck
-#   - bake.env: the SecretVM content with ADMIN_2FA_REQUIRED=false
-#     (curl-driven; bake.env wins over environment:)
+#   - bake.env: the SecretVM content (2FA stays off by default, so the
+#     curl-driven checks log in with the password)
 #   - proxy-router: LOG_LEVEL_APP=info so its request log can be checked
 #   - traefik -> disabled (needs SecretVM certs)
 services:
@@ -35,5 +35,4 @@ configs:
       ROUTER_URL=http://proxy-router:8082
       DATA_DIR=/data
       TRUSTED_PROXY_CIDR=172.28.0.0/16
-      ADMIN_2FA_REQUIRED=false
       MASTER_KEY_ADMIN=false

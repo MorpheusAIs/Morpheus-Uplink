@@ -23,13 +23,23 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
 
 ### Admin 2FA and recovery codes
 
-- **`ADMIN_2FA_REQUIRED` parsing** (`internal/config`): unset, empty or blank
-  means false (the code default, used by local dev and the bare binary); a
-  boolean (`true`/`false`/`1`/`0`, surrounding space ignored) is that value;
-  anything else, such as a literal `${ADMIN_2FA_REQUIRED:-true}` left by a
-  host that does not interpolate, **fails closed** to true. A malformed
-  `MASTER_KEY_ADMIN` stays false. Either case logs one warning naming the
-  variable (never its value) and shows it on the Security tab
+- **2FA switch** (operator choice in the GUI; no environment variable turns
+  2FA on, on any deploy target). Stored as `auth.twoFactorOn` in
+  `uplink-state.json` in `DATA_DIR` (mode 0640, atomic write like the rest
+  of the state), so it survives restarts and redeploys. Default off: the
+  first login is password only, and the Security tab shows a non-blocking
+  note recommending turning it on. The switch and the confirmed TOTP secret
+  change together, in one store update: enroll confirm stores the secret
+  and sets the switch on; Remove wipes the secret and recovery codes and
+  sets it off. Starting an enrollment does not turn it on. While on, every
+  admin route and `/node/*` enforce the second factor exactly as before.
+  Fail closed: login asks for a TOTP or recovery code whenever a secret is
+  stored, whatever the switch says, and a state file that cannot be parsed
+  stops Uplink at boot instead of starting with 2FA off.
+- **`MASTER_KEY_ADMIN` parsing** (`internal/config`): unset, empty or blank
+  means false; a boolean (`true`/`false`/`1`/`0`, surrounding space
+  ignored) is that value; anything else stays false, logs one warning
+  naming the variable (never its value) and shows it on the Security tab
   (`configWarn` in `/admin/2fa/status` and `/admin/status`).
 - **TOTP** (RFC 6238, 30 s, one step of clock skew). The last accepted step
   is stored, so a code works once; replays get 401 (`bad_totp` or
@@ -45,48 +55,53 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   works once even under concurrent logins. Recovery logins share the login
   lockout and rate limit.
 - **Endpoints** (CSRF and session rules as for other admin POSTs):
-  `GET /admin/2fa/status` (`enrolled`, `required`, `recoveryRemaining`),
+  `GET /admin/2fa/status` (`on`, `enrolled`, `need2fa`, `recoveryRemaining`),
   `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
   (returns the codes), `POST /admin/2fa/recovery/regen`,
   `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
   remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
   code.
-- **Lifecycle.** Enroll: Security tab, scan the QR code, confirm a code;
-  the 10 recovery codes are shown once. Regenerate: replaces all codes
-  (password plus a code), shown once. Reset: below. Remove: below. In the
-  GUI, Regenerate and Reset stay disabled until both the password and the
-  code field are filled.
+- **Lifecycle.** Turn on (enroll): Security tab switch, scan the QR code,
+  confirm a code; the 10 recovery codes are shown once. Regenerate:
+  replaces all codes (password plus a code), shown once. Reset: below.
+  Turn off (Remove): below. In the GUI, Regenerate, Reset and Turn off stay
+  disabled until both the password and the code field are filled.
 - **Reset** wipes the TOTP secret, all recovery codes and any pending
   enrollment, and persists that in one store update. It revokes every admin
   session (this one too), clears the cookie, and audits `2fa_reset` with
   `sessions_revoked`. The GUI drops to the login screen with the Security
   view cleared. The next password login goes straight to a new enrollment
   with a fresh secret; the old secret and old recovery codes never work
-  again. With `ADMIN_2FA_REQUIRED=true`, every other admin route answers 403
+  again. The 2FA switch stays on, so every other admin route answers 403
   `2fa enrollment required` until that enrollment is confirmed, and the GUI
-  shows only the Security tab.
-- **Remove** is refused with 409 when `ADMIN_2FA_REQUIRED=true` (use Reset
-  instead); nothing is consumed. Otherwise it wipes 2FA and, like Reset,
-  revokes every admin session and clears the cookie. The GUI offers Reset
-  only.
+  shows only the Security tab. This enroll-only state is the one case where
+  the switch is on without a secret; it grants nothing but enrollment.
+- **Remove** (`POST /admin/2fa/remove`, the switch's off side) needs a
+  valid session, CSRF, the password and a TOTP or recovery code (consumed;
+  a TOTP step works once), under the login lockout and rate limit. In one
+  store update it wipes the secret and recovery codes and sets the switch
+  off; then it revokes every admin session (this one too), clears the
+  cookie and audits `2fa_remove` with `sessions_revoked`. The next login is
+  password only.
 - **Audit**: `2fa_enroll`, `recovery_codes_issued` (count),
   `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
-  `2fa_reset` (sessions revoked), `2fa_remove` (sessions revoked, or
-  `blocked` when 2FA is required). Codes and secrets are never
+  `2fa_reset` (sessions revoked), `2fa_remove` (sessions revoked; `fail`
+  with the reason on a rejected attempt). Codes and secrets are never
   logged.
 - **`API_KEY_SEED` rotation** invalidates the TOTP secret (its encryption
   key is derived from the seed) and every recovery code (their pepper is
   too). With 2FA enrolled, admin login then fails until 2FA is cleared with
   `UPLINK_RESET_2FA`.
-- **`UPLINK_RESET_2FA=true`** (break-glass, default off): on the next start
-  Uplink wipes the TOTP secret, all recovery codes and any pending
-  enrollment, ends all admin sessions, clears lockouts, and audits
+- **`UPLINK_RESET_2FA=true`** (emergency recovery, env only, default off):
+  on the next start Uplink wipes the TOTP secret, all recovery codes, any
+  pending enrollment and the 2FA switch (2FA comes back off), ends all
+  admin sessions, clears lockouts, and audits
   `2fa_reset_breakglass` (`ok`, `wiped`). It then sets a marker, so later
   restarts with the variable still set do not wipe again; they audit
   `2fa_reset_breakglass` `blocked` and the Security tab asks you to remove
   it. Restart once with it set, then unset it and restart; that clears the
-  marker for any future use. Log in with the password and enroll again
-  (required first when `ADMIN_2FA_REQUIRED=true`). On SecretVM add
+  marker for any future use. Log in with the password and turn 2FA on
+  again with the switch. On SecretVM add
   `UPLINK_RESET_2FA=true` to the `uplink_bake_env` block (see
   [02-bootstrap.md](02-bootstrap.md)); on generic, Railway and local set it
   in the environment (`${UPLINK_RESET_2FA:-false}` in the compose).
@@ -185,11 +200,12 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
-- Generic and Railway only: `ADMIN_2FA_REQUIRED` (compose default `true`;
-  Railway does not apply it, so set it as a service variable there, since
-  unset means off, and keep `DATA_DIR` on a persistent volume) and
-  `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
-  admin access on weakens admin security.
+- Generic and Railway only: `MASTER_KEY_ADMIN` (default `false`). Turning
+  the master key admin access on weakens admin security.
+
+2FA has no environment variable: it is the switch on the Security tab
+(default off, recommended on; see [Admin 2FA](#admin-2fa-and-recovery-codes)),
+stored in `DATA_DIR`. Keep `DATA_DIR` on a persistent volume.
 
 The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
 takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
@@ -197,14 +213,14 @@ does not run compose, so `${VAR:-default}` is not evaluated there; set
 plain values in the service variables (Railway's own reference syntax is
 `${{SERVICE.VAR}}`). An unset variable takes the process's own default, not
 the compose one; the Railway env example sets the vars where that is less
-safe (`ADMIN_2FA_REQUIRED`, `PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP`,
-`ETH_NODE_CHAIN_ID`) actively, and `scripts/deploy-assets.sh` checks it.
+safe (`PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP`, `ETH_NODE_CHAIN_ID`)
+actively, and `scripts/deploy-assets.sh` checks it.
 See [deploy/railway/README.md](../deploy/railway/README.md#unset-on-railway).
 
 SecretVM has no `${VAR:-default}` overrides: it turns every `${...}` into a
 form field, so its compose uses exactly the six secrets and keeps tunables
 in the `configs:` block (`uplink_bake_env`, `router_network_env`).
-`ADMIN_2FA_REQUIRED=true` and `MASTER_KEY_ADMIN=false` are fixed there.
+`MASTER_KEY_ADMIN=false` is fixed there.
 
 Each env example (`env.template`, `env.example`, `.env.example`) lists only
 keys its compose reads; `scripts/deploy-assets.sh` enforces that (see

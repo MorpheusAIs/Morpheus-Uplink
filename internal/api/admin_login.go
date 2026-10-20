@@ -73,7 +73,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                true,
 		"enrolled":          auth.Enrolled,
-		"need2fa":           s.cfg.Admin2FARequired && !auth.Enrolled,
+		"on":                auth.On(),
+		"need2fa":           auth.On() && !auth.Enrolled,
 		"recoveryRemaining": auth.RecoveryRemaining(),
 	})
 }
@@ -188,8 +189,9 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		auth := s.store.GetAuthState()
-		if s.cfg.Admin2FARequired && !auth.Enrolled {
-			// Only login + enroll endpoints allowed (handled separately without this gate).
+		if auth.On() && !auth.Enrolled {
+			// 2FA is on but not enrolled (after a reset): only login + enroll
+			// endpoints are allowed (handled separately without this gate).
 			http.Error(w, "2fa enrollment required", http.StatusForbidden)
 			return
 		}
@@ -232,6 +234,8 @@ func (s *Server) applyBreakGlass() {
 		s.auditEvent("2fa_reset_breakglass", "", "blocked", "already wiped; remove UPLINK_RESET_2FA")
 		return
 	}
+	// Everything is wiped, the 2FA switch included: the install comes back
+	// with 2FA off (password-only login), as on a fresh deploy.
 	auth = store.AuthState{BreakGlassDone: true, PasswordFingerprint: adminauth.PasswordFingerprint(s.cfg.APIKeySeed, s.cfg.AdminPassword)}
 	_ = s.store.SetAuthState(auth)
 	s.sessions.RevokeAll()

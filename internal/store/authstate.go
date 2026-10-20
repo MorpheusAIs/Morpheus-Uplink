@@ -21,6 +21,18 @@ type AuthState struct {
 	BreakGlassDone      bool                     `json:"breakGlassDone,omitempty"`   // marker: wipe already ran
 	PendingSecretEnc    string                   `json:"pendingSecretEnc,omitempty"` // encrypted pending enroll
 	PendingExpires      time.Time                `json:"pendingExpires,omitempty"`
+
+	// TwoFactorOn is the 2FA switch (Security tab), default off. Set in the
+	// same write that stores a confirmed secret (enroll confirm) and cleared
+	// in the same write that wipes it (/admin/2fa/remove). Reset wipes the
+	// secret but keeps it set, so admin routes allow only re-enrollment.
+	TwoFactorOn bool `json:"twoFactorOn"`
+}
+
+// On reports whether 2FA is on. A stored secret counts as on even if the
+// flag is missing or false (fail closed for a hand-edited or partial file).
+func (a AuthState) On() bool {
+	return a.TwoFactorOn || a.Enrolled
 }
 
 // RecoveryRemaining is the number of unused recovery codes.

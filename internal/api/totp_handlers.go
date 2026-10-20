@@ -13,7 +13,7 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
-// requireSession is cookie+CSRF without the Admin2FARequired gate (for enroll).
+// requireSession is cookie+CSRF without the enrollment gate (for enroll).
 func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := r.BasicAuth(); ok {
@@ -97,7 +97,8 @@ var (
 )
 
 // handleTOTPEnrollConfirm checks the first code against the pending secret
-// and, in the same store update, activates 2FA and issues recovery codes.
+// and, in the same store update, stores the secret, turns the 2FA switch on
+// and issues recovery codes.
 func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request) {
 	ip := s.lockout.ClientIP(r)
 	if s.lockedOut(w, ip) {
@@ -149,6 +150,7 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 		a.TOTPBlob = store.EncodeB64(enc)
 		a.RecoveryCodes = hashes
 		a.Enrolled = true
+		a.TwoFactorOn = true
 		a.LastTOTPStep = step
 		a.PendingSecretEnc = ""
 		a.PendingExpires = time.Time{}
@@ -226,21 +228,20 @@ func wipe2FA(a *store.AuthState) {
 	a.PendingExpires = time.Time{}
 }
 
-// removeRefusedMsg is returned when ADMIN_2FA_REQUIRED=true: removing 2FA
-// would leave a deploy that requires it without it. Reset re-enrolls.
-const removeRefusedMsg = "2FA is required on this deploy (ADMIN_2FA_REQUIRED=true), so it cannot be removed; use Reset 2FA to re-enroll"
+// turnOff2FA wipes the secret and recovery codes and turns the switch off,
+// all in one store update.
+func turnOff2FA(a *store.AuthState) {
+	wipe2FA(a)
+	a.TwoFactorOn = false
+}
 
-// handleTOTPRemove (POST /admin/2fa/remove) needs the password plus a TOTP
-// or recovery code. Refused with 409 when ADMIN_2FA_REQUIRED=true (checked
-// before any code is consumed). Otherwise it wipes 2FA and, like reset,
-// revokes every admin session including this one.
+// handleTOTPRemove (POST /admin/2fa/remove) turns 2FA off. It needs a valid
+// session and CSRF (requireAdmin), the password plus a TOTP or recovery
+// code (consumed; lockout applies), then wipes 2FA, turns the switch off
+// and revokes every admin session including this one. The next login is
+// password-only.
 func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Admin2FARequired {
-		s.auditEvent("2fa_remove", s.lockout.ClientIP(r), "blocked", "2fa_required")
-		http.Error(w, removeRefusedMsg, http.StatusConflict)
-		return
-	}
-	if _, ok := s.passwordAndFactor(w, r, "2fa_remove", wipe2FA); !ok {
+	if _, ok := s.passwordAndFactor(w, r, "2fa_remove", turnOff2FA); !ok {
 		return
 	}
 	n := s.sessions.RevokeAll()
@@ -252,9 +253,8 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 // handleTOTPReset (POST /admin/2fa/reset) needs the password plus a TOTP or
 // recovery code. In one store update it wipes the TOTP secret and all
 // recovery codes; then it revokes every admin session, including this one.
-// The next login is password-only; with ADMIN_2FA_REQUIRED=true that
-// session can only enroll again (requireAdmin), and enrolling issues new
-// recovery codes.
+// The 2FA switch stays on, so the next (password-only) session can only
+// enroll again (requireAdmin), and enrolling issues new recovery codes.
 func (s *Server) handleTOTPReset(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.passwordAndFactor(w, r, "2fa_reset", wipe2FA); !ok {
 		return
@@ -265,7 +265,6 @@ func (s *Server) handleTOTPReset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"reenroll": true,
-		"required": s.cfg.Admin2FARequired,
 	})
 }
 
@@ -296,15 +295,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": s.audit.Recent(500)})
 }
 
-// handleTOTPStatus is session-gated (not Admin2FARequired) so a password holder
-// can learn enrollment state and open the enroll UI before other admin routes work.
+// handleTOTPStatus is session-gated (not the enrollment gate) so a password
+// holder can learn the 2FA state and open the enroll UI before other admin
+// routes work.
 func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 	auth := s.store.GetAuthState()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enrolled":       auth.Enrolled,
-		"required":       s.cfg.Admin2FARequired,
+		"on":             auth.On(),
 		"breakGlassWarn": s.breakGlassWarn(),
-		"need2fa":        s.cfg.Admin2FARequired && !auth.Enrolled,
+		"need2fa":        auth.On() && !auth.Enrolled,
 		// Security switches set to a non-boolean (names only); each fell back
 		// to its safe value.
 		"configWarn": s.cfg.MalformedBoolVars,

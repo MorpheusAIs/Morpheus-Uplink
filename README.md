@@ -102,9 +102,9 @@ Same image pair. The [latest release](https://github.com/MorpheusAIs/Morpheus-Up
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Use the digests from `docker-compose.railway.deployed.yml` for `ghcr.io/morpheusais/uplink` and Lumerin — not bare `:latest`. |
-| **3. Secrets + vars** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets**. Railway applies no compose defaults, so also set the active lines of `env.railway.example` as plain service variables: `ADMIN_2FA_REQUIRED=true` on uplink (unset means 2FA is off); `PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses on proxy-router. |
+| **3. Secrets + vars** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets**. Railway applies no compose defaults, so also set the active lines of `env.railway.example` as plain service variables: `PROXY_STORE_CHAT_CONTEXT=false` (unset stores chat context), `LOG_LEVEL_APP=warn`, `ETH_NODE_CHAIN_ID=8453` and the chain addresses on proxy-router. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
-| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → enroll 2FA (required once `ADMIN_2FA_REQUIRED=true` is set) → fund → Probe → `/v1`. |
+| **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → turn 2FA on (Security tab, recommended) → fund → Probe → `/v1`. |
 
 **Done when:** same as SecretVM — GUI, funded wallet, Probe OK, client on `https://<host>/v1`.
 
@@ -147,16 +147,17 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
   `active_models.json` / ALL.
-- **Admin 2FA** (TOTP) issues 10 single-use recovery codes, shown once.
-  The Security tab shows how many are left and can regenerate them or reset
-  2FA (password plus a code). Reset wipes the secret and codes and signs out
-  every session; the next password login goes straight to a new enrollment
-  with a fresh secret. Removing 2FA is refused while it is required
-  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM and generic
-  templates, off in local dev and the bare binary. Railway does not run
-  compose: set `ADMIN_2FA_REQUIRED=true` as a Railway service variable, since
-  unset means off.
-  Locked out: one restart with `UPLINK_RESET_2FA=true`.
+- **Admin 2FA** (TOTP) is an on/off switch on the Security tab, off by
+  default on every deploy (first login is password only). We recommend
+  turning it on: the switch runs the enrollment (QR code, confirm a code)
+  and issues 10 single-use recovery codes, shown once; from then on login
+  needs a TOTP or recovery code. The switch is kept in `DATA_DIR`, so it
+  survives restarts and redeploys. The Security tab shows how many codes
+  are left and can regenerate them, reset 2FA (wipe and re-enroll; 2FA
+  stays on) or turn it off (password plus a code; signs out every session).
+  No environment variable turns 2FA on.
+  Emergency recovery when locked out: one restart with
+  `UPLINK_RESET_2FA=true` (2FA comes back off).
   [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 - **`/node/*` router passthrough** takes GET, HEAD, POST and DELETE only,

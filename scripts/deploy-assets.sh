@@ -32,8 +32,8 @@
 #      pinned variable has exactly the pinned value wherever the compose or
 #      its env example gives one (${VAR:-x} default or literal, quoted or
 #      with "export"), and is assigned at most once per file; Railway's env
-#      example sets ADMIN_2FA_REQUIRED, PROXY_STORE_CHAT_CONTEXT,
-#      LOG_LEVEL_APP and ETH_NODE_CHAIN_ID actively (ENV_MUST_SET).
+#      example sets PROXY_STORE_CHAT_CONTEXT, LOG_LEVEL_APP and
+#      ETH_NODE_CHAIN_ID actively (ENV_MUST_SET).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/scripts/deploy-assets.sh"
@@ -47,7 +47,7 @@ SIX = ["WALLET_PRIVATE_KEY", "ETH_NODE_ADDRESS", "COOKIE_CONTENT",
 # Documented env-overridable defaults (docs/06-developers.md, deploy/*/README.md).
 OVERRIDES = {
     "SESSION_DURATION_SECONDS", "SESSION_FAILOVER", "ACTIVE_MODELS_URL",
-    "GATEWAY_BIDS_URL", "HOUSEKEEPING", "ADMIN_2FA_REQUIRED", "MASTER_KEY_ADMIN",
+    "GATEWAY_BIDS_URL", "HOUSEKEEPING", "MASTER_KEY_ADMIN",
     "UPLINK_RESET_2FA", "ETH_NODE_CHAIN_ID", "ETH_NODE_USE_SUBSCRIPTIONS",
     "BLOCKSCOUT_API_URL", "DIAMOND_CONTRACT_ADDRESS", "MOR_TOKEN_ADDRESS",
     "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT", "LOG_LEVEL_APP",
@@ -68,18 +68,18 @@ SETS = {
 # one the compose ships: the ${VAR:-x} default or a literal (SecretVM
 # configs: content). Every value of the variable in the compose and in its
 # env example must equal it, and the variable must be present. ABSENT: the
-# compose must not set it (the code default applies: false for both).
+# compose must not set it (the code default applies: false).
 ABSENT = None
 SECURITY_DEFAULTS = {
-    "secretvm": {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
-    "generic":  {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
-    "railway":  {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
-    "local":    {"ADMIN_2FA_REQUIRED": ABSENT, "MASTER_KEY_ADMIN": ABSENT},
+    "secretvm": {"MASTER_KEY_ADMIN": "false"},
+    "generic":  {"MASTER_KEY_ADMIN": "false"},
+    "railway":  {"MASTER_KEY_ADMIN": "false"},
+    "local":    {"MASTER_KEY_ADMIN": ABSENT},
 }
 # Must be set (not commented) in the env example: hosts that do not run
 # compose (Railway) never see the ${VAR:-default}, and unset is the less
-# safe value (2FA off, chat context stored, debug app logs, no chain check).
-ENV_MUST_SET = {"railway": ("ADMIN_2FA_REQUIRED", "PROXY_STORE_CHAT_CONTEXT", "LOG_LEVEL_APP", "ETH_NODE_CHAIN_ID")}
+# safe value (chat context stored, debug app logs, no chain check).
+ENV_MUST_SET = {"railway": ("PROXY_STORE_CHAT_CONTEXT", "LOG_LEVEL_APP", "ETH_NODE_CHAIN_ID")}
 # False wherever they appear, in every template and env example.
 FALSE_WHEREVER = ("UPLINK_RESET_2FA", "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT")
 
@@ -295,33 +295,29 @@ PY
   copy_root; edit "$tmp/out/docker-compose.secretvm.deployed.yml" 'image: ghcr.io/morpheusais/uplink@sha256:0+' 'image: ghcr.io/morpheusais/uplink:latest'; expect_fail uplink-latest 'P\(secretvm\).*:latest'
   copy_root; edit "$tmp/out/docker-compose.secretvm.deployed.yml" '(image: traefik:[^@\s]+)@sha256:[0-9a-f]+' '\1'; expect_fail unpinned 'P\(secretvm\).*not digest-pinned'
   copy_root; edit "$tmp/out/docker-compose.generic.deployed.yml" 'uplink@sha256:0+' 'uplink@sha256:'"$(printf '1%.0s' {1..64})"; expect_fail digest-mismatch 'P\(generic\): Uplink image'
-  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - ADMIN_2FA_REQUIRED=${ADMIN_2FA_REQUIRED:-true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-extra-var 'V\(secretvm\)'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - MASTER_KEY_ADMIN=${MASTER_KEY_ADMIN:-false}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-extra-var 'V\(secretvm\)'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '\$\{WEB_PUBLIC_URL\}' 'https://x.example'; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '\$\{WEB_PUBLIC_URL\}' 'https://x.example'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-missing-secret 'V\(secretvm\): variables'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(- DATA_DIR=/data)' '\1\n      - SURPRISE=${SURPRISE_KNOB:-1}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail undocumented-override 'V\(generic\).*SURPRISE_KNOB'
   copy_root; printf '# NOT_IN_TEMPLATE=1\n' >> "$tmp/root/deploy/railway/env.example"; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail env-extra-key 'E\(railway\).*NOT_IN_TEMPLATE'
   copy_root; edit "$tmp/root/deploy/generic/env.example" '^PUBLIC_HOST=.*$' '# (removed)'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail env-missing-required 'E\(generic\): required PUBLIC_HOST'
-  copy_root; printf 'ADMIN_2FA_REQUIRED=true\n' >> "$tmp/root/deploy/secretvm/env.template"; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-env-seven 'E\(secretvm\)'
+  copy_root; printf 'MASTER_KEY_ADMIN=false\n' >> "$tmp/root/deploy/secretvm/env.template"; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-env-seven 'E\(secretvm\)'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-literal-env 'V\(secretvm\): environment key MASTER_KEY_ADMIN'
   copy_root; printf 'SESSION_FAILOVER=false\n' >> "$tmp/out/env.generic.example"; expect_fail env-asset-drift 'E\(generic\): env.generic.example differs'
   copy_root; printf '# HOUSEKEEPING=true\n' >> "$tmp/root/.env.example"; expect_fail env-duplicate 'E\(local\): HOUSEKEEPING listed twice'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{MASTER_KEY_ADMIN:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-master-key-true 'D\(generic\): MASTER_KEY_ADMIN defaults to true'
-  copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{ADMIN_2FA_REQUIRED:-)true\}' '\1false}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-2fa-false 'D\(generic\): ADMIN_2FA_REQUIRED defaults to false'
-  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+ADMIN_2FA_REQUIRED=)true$' '\1false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-false 'D\(secretvm\): ADMIN_2FA_REQUIRED defaults to false'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-master-key-true 'D\(secretvm\): MASTER_KEY_ADMIN defaults to true'
-  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^\s+ADMIN_2FA_REQUIRED=true\n' ''; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-missing 'D\(secretvm\): ADMIN_2FA_REQUIRED is missing'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^\s+MASTER_KEY_ADMIN=false\n' ''; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-master-key-missing 'D\(secretvm\): MASTER_KEY_ADMIN is missing'
   copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{MASTER_KEY_ADMIN:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-master-key-true 'D\(railway\): MASTER_KEY_ADMIN defaults to true'
   copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{UPLINK_RESET_2FA:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-reset-2fa-true 'D\(railway\): UPLINK_RESET_2FA defaults to true'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{PROXY_STORE_CHAT_CONTEXT:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-store-chat-true 'D\(generic\): PROXY_STORE_CHAT_CONTEXT defaults to true'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+PROXY_FORWARD_CHAT_CONTEXT=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-forward-chat-true 'D\(secretvm\): PROXY_FORWARD_CHAT_CONTEXT defaults to true'
   copy_root; edit "$tmp/root/deploy/generic/env.example" '^(MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-env-master-key-true 'D\(generic\): MASTER_KEY_ADMIN=true in deploy/generic/env.example'
   copy_root; edit "$tmp/root/docker-compose.local.yml" '^(\s+- UPLINK_RESET_2FA=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail local-master-key-set 'D\(local\): MASTER_KEY_ADMIN must not be set'
-  copy_root; edit "$tmp/root/deploy/railway/docker-compose.yml" '(\$\{ADMIN_2FA_REQUIRED:-)true\}' '\1false}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-2fa-false 'D\(railway\): ADMIN_2FA_REQUIRED defaults to false'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '^(\s+)- MASTER_KEY_ADMIN=\$\{MASTER_KEY_ADMIN:-false\}$' '\1- "MASTER_KEY_ADMIN=true"'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-quoted-master-key-true 'D\(generic\): MASTER_KEY_ADMIN defaults to true'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)MASTER_KEY_ADMIN=false$' '\1export MASTER_KEY_ADMIN=true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-export-master-key-true 'D\(secretvm\): MASTER_KEY_ADMIN defaults to true'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '^(\s+- MASTER_KEY_ADMIN=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-master-key-twice 'D\(generic\): MASTER_KEY_ADMIN is assigned 2 times in deploy/generic/docker-compose.yml'
-  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)(ADMIN_2FA_REQUIRED=true)$' '\1\2\n\1\2'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-twice 'D\(secretvm\): ADMIN_2FA_REQUIRED is assigned 2 times in deploy/secretvm/docker-compose.yml'
+  copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)(MASTER_KEY_ADMIN=false)$' '\1\2\n\1\2'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-master-key-twice 'D\(secretvm\): MASTER_KEY_ADMIN is assigned 2 times in deploy/secretvm/docker-compose.yml'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(# MASTER_KEY_ADMIN=false)$' '\1\nexport MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-master-key-twice 'D\(railway\): MASTER_KEY_ADMIN is assigned 2 times in deploy/railway/env.example'
-  copy_root; edit "$tmp/root/deploy/railway/env.example" '^(ADMIN_2FA_REQUIRED=true)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-2fa-commented 'D\(railway\): ADMIN_2FA_REQUIRED must be set \(not commented\)'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(PROXY_STORE_CHAT_CONTEXT=false)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-store-chat-commented 'D\(railway\): PROXY_STORE_CHAT_CONTEXT must be set \(not commented\)'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(LOG_LEVEL_APP=warn)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-log-level-app-commented 'D\(railway\): LOG_LEVEL_APP must be set \(not commented\)'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(ETH_NODE_CHAIN_ID=8453)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-chain-id-commented 'D\(railway\): ETH_NODE_CHAIN_ID must be set \(not commented\)'

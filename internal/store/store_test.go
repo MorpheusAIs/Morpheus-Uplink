@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -186,5 +187,39 @@ func TestAddKeyRejectsTombstoneCollision(t *testing.T) {
 	dupHash.RevokedAt = nil
 	if err := s.AddKey(dupHash); err == nil {
 		t.Fatal("expected hash collision with tombstone")
+	}
+}
+
+// A state file that cannot be parsed stops Open (the service refuses to
+// boot) instead of starting with empty auth state, which would mean 2FA off.
+func TestOpenRefusesMalformedStateFile(t *testing.T) {
+	for name, body := range map[string]string{
+		"not_json":        `{"auth":{"enrolled":true,`,
+		"wrong_type":      `{"auth":{"twoFactorOn":"yes"}}`,
+		"auth_not_object": `{"auth":[]}`,
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "uplink-state.json"), []byte(body), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(dir); err == nil {
+			t.Fatalf("%s: Open accepted a malformed state file", name)
+		}
+	}
+}
+
+func TestAuthStateOn(t *testing.T) {
+	for _, tc := range []struct {
+		a    AuthState
+		want bool
+	}{
+		{AuthState{}, false},
+		{AuthState{TwoFactorOn: true}, true},
+		{AuthState{TwoFactorOn: true, Enrolled: true}, true},
+		{AuthState{Enrolled: true}, true}, // secret without the flag: fail closed
+	} {
+		if got := tc.a.On(); got != tc.want {
+			t.Fatalf("%+v: On()=%v want %v", tc.a, got, tc.want)
+		}
 	}
 }

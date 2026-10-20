@@ -344,7 +344,6 @@ func TestLogoutForcesFreshTOTP(t *testing.T) {
 
 func TestTOTPResetRevokesSessionsAndForcesReenroll(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
-	cfg.Admin2FARequired = true
 	ac := adminClient(t, ts, cfg)
 	secret, codes := enroll2FA(t, ac, ts, cfg)
 
@@ -383,13 +382,13 @@ func TestTOTPResetRevokesSessionsAndForcesReenroll(t *testing.T) {
 		// Not enrolled any more: the password alone logs in (code ignored)...
 		t.Fatalf("login after reset: %d", code)
 	}
-	// ...but with ADMIN_2FA_REQUIRED the session can only enroll.
+	// ...but the 2FA switch stays on, so the session can only enroll.
 	_, fresh, _ := login(t, ts, cfg.AdminPassword, "")
 	if got := httpCode(t, fresh, ts, "/admin/status"); got != http.StatusForbidden {
 		t.Fatalf("admin access before re-enroll: %d want 403", got)
 	}
 	st := twoFAStatus(t, fresh, ts)
-	if st["enrolled"] != false || st["need2fa"] != true || st["recoveryRemaining"] != float64(0) {
+	if st["enrolled"] != false || st["on"] != true || st["need2fa"] != true || st["recoveryRemaining"] != float64(0) {
 		t.Fatalf("2fa status after reset: %#v", st)
 	}
 	_, newCodes := enroll2FA(t, fresh, ts, cfg)
