@@ -205,7 +205,7 @@ an API key.
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
   routes that send or approve funds, open sessions, create providers, models
   or bids, change the wallet, router users, permissions or config, or access
-  router files. Protect admin access
+  router files, or make the router contact a caller-chosen address. Protect admin access
   like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
@@ -402,7 +402,8 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
 - **`/node/*` router passthrough** is admin-gated and refuses routes that
   send or approve funds, open sessions, create providers, models or bids,
   change the wallet, router users, permissions or config, or access router
-  files (403, audited). Wallet, user and config reads pass through. [Details](docs/06-developers.md#router-access-and-restart-safety)
+  files, or make the router contact a caller-chosen address (403, audited).
+  Wallet, user and config reads pass through. [Details](docs/06-developers.md#router-access-and-restart-safety)
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
 Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.
@@ -1153,11 +1154,13 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
   (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
   router file-access routes (`/ipfs*`,
   `/v1/audio/transcriptions`, `/docker/build*`, `/docker/container/start`),
-  and the session-open routes
+  routes that take a caller-chosen provider address (`/proxy/provider/ping`,
+  `/proxy/sessions/initiate`), and the session-open routes
   `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
   `/blockchain/models/{id}/session`. Refused for every method except GET and
   HEAD (reads pass through): `/wallet*`, `/auth*`, `/config*`,
-  `/blockchain/providers`, `/blockchain/models`, `/blockchain/bids`. The router receives exactly the
+  `/blockchain/providers`, `/blockchain/models`, `/blockchain/bids`. Only
+  GET, HEAD, POST and DELETE are forwarded; any other method gets 403. The router receives exactly the
   normalized path; method-override headers, `_method` query parameters and
   the admin cookie are stripped. Router redirects are not followed (502).
   The route list with router source refs is in `internal/api/nodeproxy.go`.

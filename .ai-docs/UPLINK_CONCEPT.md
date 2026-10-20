@@ -155,9 +155,11 @@ gateway mode"), at which point Uplink shrinks to just GUI + metering, or disappe
    segments refused), matches case-insensitively and refuses, for every method with
    an audit event: `/blockchain/send/*`, `/blockchain/approve`,
    router file-access routes (`/ipfs*`, `/v1/audio/transcriptions`,
-   `/docker/build*`, `/docker/container/start`) and the session-open routes (`/blockchain/sessions`,
+   `/docker/build*`, `/docker/container/start`), `/proxy/provider/ping`,
+   `/proxy/sessions/initiate` and the session-open routes (`/blockchain/sessions`,
    `/blockchain/{bids,models}/{id}/session`); and, for every method except GET and
-   HEAD, `/wallet*`, `/auth*`, `/config*` and `/blockchain/{providers,models,bids}`. Only the normalized path is forwarded;
+   HEAD, `/wallet*`, `/auth*`, `/config*` and `/blockchain/{providers,models,bids}`.
+   Only GET, HEAD, POST and DELETE are forwarded. Only the normalized path is forwarded;
    router redirects are not followed. Only 443 is public. A consumer node needs
    **no inbound :3333**.
 4. **Tenancy:** single owner, many keys now; F&F tenancy later via per-key budgets on

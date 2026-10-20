@@ -135,6 +135,8 @@ var nodeBlockedPaths = []string{
 	"/docker/build", "/docker/build/stream", "/Docker/Container/Start/",
 	"/ipfs/add", "/ipfs/pin", "/ipfs/unpin", "/ipfs/download/stream/QmX", "/ipfs/download/QmX", "/ipfs/version",
 	"/blockchain/sessions", "/blockchain/bids/0xabc/session", "/blockchain/models/0xabc/session",
+	"/proxy/provider/ping", "/proxy/sessions/initiate", "/PROXY/Provider/Ping/", "/proxy/provider/p%69ng",
+	"/Proxy/Sessions/Initiate/", "/proxy/sessions/%69nitiate",
 	// case, trailing slash, encoded letters
 	"/BLOCKCHAIN/SEND/ETH", "/Blockchain/Send/Mor", "/blockchain/send/eth/",
 	"/blockchain/s%65nd/eth", "/blockchain/%73end/mor", "/blockchain/appr%6Fve",
@@ -287,6 +289,66 @@ func TestNodeAudioTranscriptionMultipartBlocked(t *testing.T) {
 	}
 	if up.count() != 0 {
 		t.Fatal("transcription request reached the router")
+	}
+}
+
+func TestNodeProviderPingBlocked(t *testing.T) {
+	ts, srv, cfg, up := nodeTestServer(t)
+	ac := adminClient(t, ts, cfg)
+	body := `{"providerAddr":"0x0000000000000000000000000000000000000001","providerUrl":"127.0.0.1:1"}`
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/node/proxy/provider/ping", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withCSRF(req, cfg)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("provider ping: %d, want 403", resp.StatusCode)
+	}
+	ev := blockAudits(srv)
+	if len(ev) != 1 || !strings.Contains(ev[0].Message, "POST /node/proxy/provider/ping (blocked)") {
+		t.Fatalf("audit: %+v", ev)
+	}
+	if strings.Contains(ev[0].Message, "127.0.0.1") {
+		t.Fatalf("audit carries a body field: %q", ev[0].Message)
+	}
+	if up.count() != 0 {
+		t.Fatal("provider ping reached the router")
+	}
+}
+
+func TestNodeMethodAllowlist(t *testing.T) {
+	ts, srv, cfg, up := nodeTestServer(t)
+	ac := adminClient(t, ts, cfg)
+	n := 0
+	for _, p := range []string{"/healthcheck", "/blockchain/providers", "/wallet"} {
+		for _, m := range []string{"PUT", "PATCH", "OPTIONS", "TRACE", "PROPFIND", "FOO"} {
+			if code := rawDo(t, ts, ac, cfg, m, "/node"+p, nil); code != http.StatusForbidden {
+				t.Errorf("%s /node%s: %d, want 403", m, p, code)
+			}
+			n++
+			ev := blockAudits(srv)
+			if len(ev) != n {
+				t.Fatalf("%s /node%s: %d block audits, want %d", m, p, len(ev), n)
+			}
+		}
+	}
+	if up.count() != 0 {
+		t.Fatalf("a refused method reached the router (%d calls)", up.count())
+	}
+	if ev := blockAudits(srv); !strings.Contains(ev[len(ev)-1].Message, "PUT /node/healthcheck (method)") {
+		t.Fatalf("audit: %q", ev[len(ev)-1].Message)
+	}
+	for _, m := range []string{"GET", "HEAD", "POST", "DELETE"} {
+		before := up.count()
+		if code := rawDo(t, ts, ac, cfg, m, "/node/healthcheck", nil); code != http.StatusOK {
+			t.Errorf("%s /node/healthcheck: %d, want 200", m, code)
+		}
+		if up.count() != before+1 || up.last().Method != m {
+			t.Fatalf("%s /node/healthcheck was not forwarded", m)
+		}
 	}
 }
 

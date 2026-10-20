@@ -10,7 +10,8 @@
 #    /admin/status (routerAuth ok, wallet from the router)
 #  - /node/* passthrough: /node/healthcheck and the Swagger spec pass
 #    (basePath rewritten); /node/blockchain/send/eth and spelling variants
-#    (plus audio/transcriptions) get 403 for every method; writes to bids,
+#    (plus audio/transcriptions, provider/ping, sessions/initiate) get 403 for
+#    every method; PUT/PATCH/PROPFIND get 403 anywhere; writes to bids, providers, models,
 #    config/ethNode, config/models/reload, wallet and auth get 403; GET
 #    /node/wallet passes through, are audited, and never reach the router
 #    (checked in the router's own request log)
@@ -120,22 +121,30 @@ n=0
 for p in /node/blockchain/send/eth /node/BLOCKCHAIN/Send/ETH/ /node/blockchain/s%65nd/eth \
          /node/blockchain/%2e%2e/blockchain/send/eth /node/healthcheck/../blockchain/send/eth \
          /node/blockchain%2fsend/eth /node/blockchain//send/eth /node/blockchain/send/mor \
-         /node/v1/audio/transcriptions /node/V1/Audio/Transcriptions/; do
+         /node/v1/audio/transcriptions /node/V1/Audio/Transcriptions/ \
+         /node/proxy/provider/ping /node/PROXY/Provider/Ping/ /node/proxy/sessions/initiate \
+         /node/proxy/sessions/%69nitiate; do
   for m in GET POST PUT PATCH DELETE; do
     c=$(node_req "$m" "$p"); n=$((n + 1))
     [ "$c" = 403 ] || fail "$m $p: $c, want 403"
   done
 done
 # Write-blocked routes: every non-read method is refused.
-for p in /node/blockchain/bids /node/Blockchain/BIDS/ /node/config/ethNode /node/Config/EthNode/ \
+for p in /node/blockchain/bids /node/Blockchain/BIDS/ /node/blockchain/providers /node/blockchain/models \
+         /node/config/ethNode /node/Config/EthNode/ \
          /node/config/models/reload /node/wallet/privateKey /node/wallet /node/auth/users; do
   for m in POST PUT PATCH DELETE; do
     c=$(node_req "$m" "$p"); n=$((n + 1))
     [ "$c" = 403 ] || fail "$m $p: $c, want 403"
   done
 done
+# Only GET, HEAD, POST and DELETE are forwarded.
+for m in PUT PATCH PROPFIND; do
+  c=$(node_req "$m" /node/healthcheck); n=$((n + 1))
+  [ "$c" = 403 ] || fail "$m /node/healthcheck: $c, want 403"
+done
 sleep 1
-if rlog | grep -iE 'HTTP-REQ\] ([A-Z]+ [^ ]*(send|wallet/privatekey|audio|config/ethnode|config/models)|(POST|PUT|PATCH|DELETE) /(blockchain/bids|wallet|auth)\b)'; then
+if rlog | grep -iE 'HTTP-REQ\] ([A-Z]+ [^ ]*(send|wallet/privatekey|audio|config/ethnode|config/models|provider/ping|sessions/initiate)|(POST|PUT|PATCH|DELETE) /(blockchain/(bids|providers|models)|wallet|auth)\b|(PUT|PATCH|PROPFIND) ))'; then
   fail "a blocked request reached the router"
 fi
 blocks=$(dc logs --no-color uplink | grep -c '"event":"node_passthrough_block"' || true)

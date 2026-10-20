@@ -32,7 +32,7 @@ an API key.
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
   routes that send or approve funds, open sessions, create providers, models
   or bids, change the wallet, router users, permissions or config, or access
-  router files. Protect admin access
+  router files, or make the router contact a caller-chosen address. Protect admin access
   like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.

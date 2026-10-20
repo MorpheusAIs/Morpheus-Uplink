@@ -36,6 +36,12 @@ import (
 //	                     file-access routes are denied.
 //	/v1/audio/transcriptions  internal/proxyapi/controller_http.go:100 (audio_transcription);
 //	                     router file-access route, denied.
+//	/proxy/provider/ping       internal/proxyapi/controller_http.go:88 (no auth) and
+//	/proxy/sessions/initiate   :89 (initiate_session): the body carries a caller-chosen
+//	                     providerUrl (requests.go:13-16, 24-30); the router dials it,
+//	                     sends a signed message and returns the reply or error
+//	                     (proxy_sender.go:139-146, 261-275, 580-633). Uplink does not
+//	                     use either route; denied.
 //	/docker/build, /docker/build/*  internal/proxyapi/controller_http.go:114-115 (docker_build);
 //	                     router file-access route, denied.
 //	/docker/container/start  internal/proxyapi/controller_http.go:116 (docker_manage);
@@ -81,9 +87,19 @@ import (
 // body-selected fund movement is directPayment on the open-session routes
 // (blocked). GET /blockchain/models/{id}/session/estimate (controller.go:99)
 // takes a directPayment query flag but only estimates. POST /v1/agents/tools
-// (controller_http.go:95, 415-431) forwards a tool call to an agent, and
-// /proxy/sessions/initiate (controller_http.go:89, 164-172) is the provider
-// handshake; neither signs a transfer.
+// (controller_http.go:95, 415-431) forwards a tool call to the provider of an
+// existing session; it signs no transfer.
+//
+// Outbound addresses: the only request fields that name an address for the
+// router to dial are providerUrl (ping, initiate), urls on POST /config/ethNode
+// (system/structs.go:9), endpoint on POST /blockchain/providers
+// (structs/req.go:117) and the docker build/start bodies; all are denied
+// above. Chat, agent and health routes dial the provider recorded for the
+// session or model, not an address from the request.
+//
+// Methods: the router registers only GET, POST and DELETE, so only GET,
+// HEAD, POST and DELETE are forwarded; any other method is refused (403 +
+// audit).
 var nodeDenyRules = []struct {
 	pattern []string // lowercase segments; "*" matches one segment
 	exact   bool     // true: whole path; false: prefix on segment boundary
@@ -95,6 +111,8 @@ var nodeDenyRules = []struct {
 	{[]string{"auth"}, false, true},
 	{[]string{"config"}, false, true},
 	{[]string{"ipfs"}, false, false},
+	{[]string{"proxy", "provider", "ping"}, false, false},
+	{[]string{"proxy", "sessions", "initiate"}, false, false},
 	{[]string{"v1", "audio", "transcriptions"}, false, false},
 	{[]string{"docker", "build"}, false, false},
 	{[]string{"docker", "container", "start"}, false, false},
@@ -264,17 +282,33 @@ func (s *Server) nodeProxy() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := strings.TrimPrefix(rawRequestPath(r), "/node")
 		np, err := normalizeNodePath(raw)
-		if err != nil || nodePathBlocked(np, r.Method) {
+		badMethod := !nodeMethodForwarded(r.Method)
+		if err != nil || badMethod || nodePathBlocked(np, r.Method) {
 			shown, reason := np, "blocked"
 			if err != nil {
 				shown, reason = auditSafePath(raw), "ambiguous"
+			} else if badMethod {
+				reason = "method"
 			}
-			s.auditEvent("node_passthrough_block", s.lockout.ClientIP(r), "denied", r.Method+" /node"+shown+" ("+reason+")")
+			m := r.Method
+			if len(m) > 16 {
+				m = m[:16]
+			}
+			s.auditEvent("node_passthrough_block", s.lockout.ClientIP(r), "denied", m+" /node"+shown+" ("+reason+")")
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "this router route is not available through Uplink"})
 			return
 		}
 		proxy.ServeHTTP(w, r.WithContext(contextWithNodePath(r.Context(), np)))
 	})
+}
+
+// nodeMethodForwarded reports whether a method may reach the router.
+func nodeMethodForwarded(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodDelete:
+		return true
+	}
+	return false
 }
 
 // auditSafePath bounds a refused raw path for the audit line (printable
