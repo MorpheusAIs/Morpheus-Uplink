@@ -80,7 +80,7 @@ The router can do gateway-managed session cleanup. Uplink does not use it:
 - Keep the native expiry loop. Do not assume a heartbeat/lease.
 - Misconfiguration blast radius: sessions may not expire/cleanup as
   operators expect; collateral can remain locked until native expiry or
-  manual close via admin (admin-gated).
+  manual close via admin/`/node` (admin-gated).
 - Treat cleanup as **native router expiry + Uplink housekeeping** only.
 
 ## L1 - privacy env honesty
@@ -96,7 +96,7 @@ privacy on the pinned v7.15.0 digest until verified.
 
 ## M1 / keep list
 
-- `/node/*` passthrough removed; wallet address is on `/admin/status` (read-only)
+- `/node/*` remains **admin-gated** (Basic admin or Master Bearer)
 - Keep: Basic admin, `sk-` keys, soft-revoke, `GET /v1/usage`,
   `gateway_models.json`, GHCR release-asset deploy
 

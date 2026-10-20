@@ -10,7 +10,7 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 
 ## Key model (detail)
 
-| Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`) |
+| Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`, `/node/*`) |
 |---|---|---|---|
 | **Master** `sk-uplink.…` | HMAC(seed, master) | yes | yes (same power as admin password) |
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
@@ -303,7 +303,7 @@ internal/store/      JSON state (keys, usage), atomic writes
 internal/catalog/    active.mor.org model name → blockchain id
 internal/router/     proxy-router client (sessions, balance, forward)
 internal/pool/       one-session-per-model pool + invalidation
-internal/api/        HTTP: /v1/*, /admin/*, health
+internal/api/        HTTP: /v1/*, /admin/*, /node/*, health
 internal/gui/        embedded single-page admin UI
 deploy/              SecretVM + generic + Railway overlays (CI pins digests)
 ```

@@ -57,6 +57,10 @@ func mockRouter(t *testing.T, sessionsOpened *atomic.Int32) *httptest.Server {
 	mux.HandleFunc("GET /blockchain/sessions/user", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"sessions":[]}`))
 	})
+	mux.HandleFunc("GET /swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"swagger":"2.0","basePath": "/","paths":{}}`))
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -362,18 +366,48 @@ func TestMasterKeyCreatesSubkeys(t *testing.T) {
 	}
 }
 
-func TestNodePassthroughRemoved(t *testing.T) {
-	ts, _, _ := newTestServer(t)
+func TestNodePassthroughRequiresAdmin(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/node/healthcheck", nil)
-	req.SetBasicAuth("admin", "adminpass")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.Get(ts.URL + "/node/healthcheck")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("/node passthrough: status %d, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /node: status %d, want 401", resp.StatusCode)
+	}
+
+	ac := adminClient(t, ts, cfg)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/node/healthcheck", nil)
+	resp2, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin /node: status %d, want 200", resp2.StatusCode)
+	}
+}
+
+func TestNodeSwaggerBasePathRewrite(t *testing.T) {
+	ts, cfg, _ := newTestServer(t)
+	ac := adminClient(t, ts, cfg)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/node/swagger/doc.json", nil)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var spec struct {
+		BasePath string `json:"basePath"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.BasePath != "/node" {
+		t.Fatalf("basePath = %q, want /node", spec.BasePath)
 	}
 }
 
