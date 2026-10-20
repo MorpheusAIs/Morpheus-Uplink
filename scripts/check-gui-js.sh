@@ -305,3 +305,91 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   console.log('OK: status tiles, reclaim placement, unlock time, Add MOR collapsed, health line, model labels, copy keys, login recovery toggle');
 })().catch((e) => fail(e.stack || e));
 NODE
+
+# 2FA manage form and the reset -> re-login -> fresh enrollment flow.
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function extract(name) {
+  const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+  const m = re.exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = src.indexOf('{', m.index + m[0].length - 1);
+  let d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}' && --d === 0) { i++; break; } }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const mkEl = (id) => ({ id, value: '', textContent: '', disabled: false, style: {},
+  classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } } });
+const els = {};
+global.document = { getElementById: (id) => (els[id] = els[id] || mkEl(id)), body: mkEl('body') };
+const calls = { showTab: [], refreshSecurity: 0, startTotpEnroll: 0, setEnrollMsg: [] };
+global.T = {};
+eval([
+  "const UI_COPY = { enrollFirst: 'ENROLL_FIRST' };",
+  "let activeTab = 'security';",
+  'function showTab(id) { calls.showTab.push(id); activeTab = id; }',
+  'function refreshSecurity() { calls.refreshSecurity++; }',
+  'function startTotpEnroll() { calls.startTotpEnroll++; }',
+  'function setManageMsg(t) { document.getElementById("manageMsg").textContent = t || ""; }',
+  'function setEnrollMsg(t) { calls.setEnrollMsg.push(t); document.getElementById("enrollMsg").textContent = t || ""; }',
+  'function hideRecoveryCodes() { document.getElementById("recoveryCodes").textContent = ""; }',
+  'function hideEnrollSecret() { document.getElementById("enrollSecret").textContent = ""; }',
+  'let enrollOnly = false; let enrollAutoStarted = false;',
+  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError'].map(extract),
+  'Object.assign(T, { updateManageButtons, resetSecurityView, enterEnrollmentOnly, factorError, state: () => ({ enrollOnly, enrollAutoStarted, activeTab }), setTab: (t) => { activeTab = t; } });',
+].join('\n'));
+const $ = (id) => document.getElementById(id);
+(async () => {
+  // Markup: buttons start disabled; both fields re-check on every input.
+  for (const id of ['regenBtn', 'resetBtn']) {
+    if (!new RegExp('id="' + id + '"[^>]*\\bdisabled\\b').test(html)) fail(id + ' must start disabled');
+  }
+  for (const id of ['managePw', 'manageCode']) {
+    if (!new RegExp('id="' + id + '"[^>]*oninput="updateManageButtons\\(\\)"').test(html)) fail(id + ' must call updateManageButtons on input');
+  }
+  // Buttons enable only with BOTH fields non-empty.
+  const states = [['', ''], ['pw', ''], ['', '123456'], ['pw', '   '], ['pw', '123456']];
+  for (const [pw, code] of states) {
+    $('managePw').value = pw; $('manageCode').value = code; T.updateManageButtons();
+    const want = !!(pw && code.trim());
+    if ($('regenBtn').disabled === want || $('resetBtn').disabled === want) fail('buttons for pw=' + JSON.stringify(pw) + ' code=' + JSON.stringify(code));
+  }
+  // Logout / reset: nothing from the previous session survives.
+  $('twoFactorStatus').textContent = '2FA enrolled · 10 recovery codes left.';
+  $('twoFactorManage').classList.toggle('hidden', false);
+  $('securityAlerts').textContent = 'login ok';
+  $('manageMsg').textContent = 'old';
+  T.resetSecurityView();
+  if ($('twoFactorStatus').textContent !== 'Loading…') fail('stale 2FA status after showLogin');
+  if (!$('twoFactorManage').classList.contains('hidden')) fail('manage form visible after showLogin');
+  if ($('securityAlerts').textContent !== 'Loading…' || $('manageMsg').textContent) fail('stale alerts or message after showLogin');
+  if ($('managePw').value || $('manageCode').value || !$('resetBtn').disabled) fail('manage fields not cleared');
+  if (!extract('showLogin').includes('resetSecurityView();')) fail('showLogin must call resetSecurityView');
+  // Re-login while 2FA is required and not enrolled: Security only, reloaded, new enrollment started once.
+  if (!/if \(data\.need2fa\) \{\s*enterEnrollmentOnly\(\)/.test(src)) fail('finishLogin must enter enrollment-only mode on need2fa');
+  T.setTab('security');
+  T.enterEnrollmentOnly();
+  if (!document.body.classList.contains('enroll-only')) fail('enroll-only class not set');
+  if (calls.refreshSecurity !== 1) fail('Security must reload when already on that tab (stale view bug): ' + calls.refreshSecurity);
+  if (calls.startTotpEnroll !== 1) fail('new enrollment must start');
+  T.enterEnrollmentOnly(true);
+  if (calls.startTotpEnroll !== 1 || calls.refreshSecurity !== 1) fail('enrollment must not restart on refresh');
+  if (!/body\.enroll-only \.tab:not\(\[data-tab="security"\]\) \{ display: none; \}/.test(html)) fail('other tabs must hide in enroll-only mode');
+  T.resetSecurityView();
+  if (document.body.classList.contains('enroll-only') || T.state().enrollAutoStarted) fail('enroll-only must clear on logout');
+  T.setTab('status'); calls.showTab = [];
+  T.enterEnrollmentOnly();
+  if (calls.showTab[0] !== 'security' || calls.startTotpEnroll !== 2) fail('must switch to Security and enroll from another tab');
+  // Reset/regen answered 403 "2fa enrollment required": show enrollment, not the raw error.
+  T.resetSecurityView(); T.setTab('security');
+  const msg = await T.factorError({ status: 403, text: async () => '2fa enrollment required\n', statusText: 'Forbidden' });
+  if (msg !== 'ENROLL_FIRST' || !document.body.classList.contains('enroll-only')) fail('403 enrollment required must open enrollment: ' + msg);
+  if (await T.factorError({ status: 401, text: async () => '', headers: { get: () => null } }) !== 'Password or code not accepted.') fail('401 message');
+  // A wrong enrollment code is not a lost session.
+  if (!/codeCheck: true,\s*method: 'POST',/.test(extract('confirmTotpEnroll'))) fail('enroll confirm must not log out on a wrong code');
+  console.log('OK: 2FA buttons need password and code; reset clears the view; re-login goes straight to a fresh enrollment');
+})().catch((e) => fail(e.stack || e));
+NODE

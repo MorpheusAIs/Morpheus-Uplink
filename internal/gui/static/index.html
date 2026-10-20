@@ -364,6 +364,7 @@
   #tab-status .sys-line .dot { font-size: 12px; margin-right: 6px; }
   #tab-status .sys-line .dot.ok { color: var(--ok); }
   #tab-status .sys-line .dot.bad { color: var(--bad); }
+  body.enroll-only .tab:not([data-tab="security"]) { display: none; }
   .tiles-head { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 10px; min-height: 18px; font-size: 12px; color: var(--muted); }
   .tile {
     background: var(--surface-2); border: 1px solid var(--border);
@@ -1029,12 +1030,12 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         <form id="twoFactorManage" class="stack hidden" style="gap:8px;margin-top:12px" onsubmit="event.preventDefault()">
           <p class="note" style="margin:0" data-copy="factorNeeded">Enter your password and a current authenticator code or a recovery code.</p>
           <div class="row">
-            <input id="managePw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px">
-            <input id="manageCode" type="text" autocomplete="one-time-code" placeholder="123456 or recovery code" aria-label="Authenticator code or recovery code" style="flex:1;min-width:160px">
+            <input id="managePw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px" oninput="updateManageButtons()">
+            <input id="manageCode" type="text" autocomplete="one-time-code" placeholder="123456 or recovery code" aria-label="Authenticator code or recovery code" style="flex:1;min-width:160px" oninput="updateManageButtons()">
           </div>
           <div class="row">
-            <button type="button" class="ghost" onclick="regenerateRecoveryCodes()" data-copy="regenTitle">Regenerate recovery codes</button>
-            <button type="button" class="danger-ghost" onclick="resetTwoFactor()" data-copy="resetTitle">Reset 2FA</button>
+            <button type="button" class="ghost" id="regenBtn" onclick="regenerateRecoveryCodes()" data-copy="regenTitle" disabled>Regenerate recovery codes</button>
+            <button type="button" class="danger-ghost" id="resetBtn" onclick="resetTwoFactor()" data-copy="resetTitle" disabled>Reset 2FA</button>
           </div>
           <p class="note" id="manageMsg" role="status" style="margin:0"></p>
         </form>
@@ -1355,6 +1356,7 @@ const UI_COPY = {
   tfRequired: ' Enrollment required before other admin actions.',
   tfBreakGlass: ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.',
   tfReenroll: '2FA was reset. Enroll again below; new recovery codes are issued when you confirm.',
+  enrollFirst: 'Enroll 2FA to continue: scan the new QR code and confirm a code.',
   recoveryShownOnce: 'Recovery codes (shown once). Each works one time. Store them offline.',
   recoveryEnrolled: '2FA enabled. Save the recovery codes below; they are shown once.',
   recoveryRegenerated: 'New recovery codes issued. The old ones no longer work.',
@@ -1487,10 +1489,18 @@ async function api(path, opts = {}) {
     opts.headers['X-Uplink-Poll'] = '1';
     delete opts.poll;
   }
+  // codeCheck: a 401 here can mean a wrong code, not a lost session.
+  const codeCheck = !!opts.codeCheck;
+  delete opts.codeCheck;
   const res = await fetch(path, opts);
-  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  if (res.status === 401) {
+    const t = codeCheck ? (await res.text()).trim() : '';
+    if (codeCheck && t === 'invalid code') throw new Error(t);
+    showLogin(); throw new Error('unauthorized');
+  }
   if (!res.ok) {
     const t = await res.text();
+    if (res.status === 403 && isEnrollRequired(t)) enterEnrollmentOnly();
     throw new Error(t || res.statusText);
   }
   if (res.status === 204) return null;
@@ -1584,6 +1594,7 @@ function setLoggedIn(on) {
 function showLogin() {
   authed = false;
   realKeys = {};
+  resetSecurityView();
   setLoggedIn(false);
   if (document.getElementById('loginStepPassword')) setLoginStep('password');
 }
@@ -1595,6 +1606,46 @@ async function logout() {
   showLogin();
 }
 
+
+// The server answers 403 "2fa enrollment required" on admin routes while
+// ADMIN_2FA_REQUIRED=true and 2FA is not enrolled (for example right after
+// a reset). The GUI then shows only the Security tab and a fresh enrollment.
+function isEnrollRequired(text) { return /2fa enrollment required/i.test(text || ''); }
+let enrollOnly = false;
+let enrollAutoStarted = false;
+function enterEnrollmentOnly(fromRefresh) {
+  const first = !enrollOnly;
+  enrollOnly = true;
+  document.body.classList.add('enroll-only');
+  if (activeTab !== 'security') showTab('security');
+  else if (first && !fromRefresh) refreshSecurity();
+  setEnrollMsg(UI_COPY.enrollFirst, '');
+  if (!enrollAutoStarted) { enrollAutoStarted = true; startTotpEnroll(); }
+}
+function leaveEnrollmentOnly() {
+  enrollOnly = false;
+  enrollAutoStarted = false;
+  document.body.classList.remove('enroll-only');
+}
+
+// Forget everything the Security tab showed for the previous session.
+function resetSecurityView() {
+  const st = document.getElementById('twoFactorStatus');
+  if (st) st.textContent = 'Loading…';
+  const manage = document.getElementById('twoFactorManage');
+  if (manage) manage.classList.add('hidden');
+  const enrollBox = document.getElementById('twoFactorEnroll');
+  if (enrollBox) enrollBox.style.display = 'none';
+  const box = document.getElementById('securityAlerts');
+  if (box) box.textContent = 'Loading…';
+  for (const id of ['managePw', 'manageCode']) { const el = document.getElementById(id); if (el) el.value = ''; }
+  setManageMsg('', '');
+  setEnrollMsg('', '');
+  hideRecoveryCodes();
+  hideEnrollSecret();
+  updateManageButtons();
+  leaveEnrollmentOnly();
+}
 
 async function refreshSecurity() {
   const box = document.getElementById('securityAlerts');
@@ -1617,7 +1668,9 @@ async function refreshSecurity() {
       const manage = document.getElementById('twoFactorManage');
       if (manage) manage.classList.toggle('hidden', !tf.enrolled);
       if (tf.enrolled) setRecoveryHint(left);
-      if (tf.need2fa && activeTab !== 'security') showTab('security');
+      if (tf.need2fa) enterEnrollmentOnly(true);
+      else if (enrollOnly) leaveEnrollmentOnly();
+      updateManageButtons();
     } catch (e) {
       stEl.textContent = 'Could not load 2FA status.';
     }
@@ -1700,6 +1753,7 @@ async function confirmTotpEnroll() {
   setEnrollMsg('Checking…', '');
   try {
     const data = await api('/admin/2fa/enroll/confirm', {
+      codeCheck: true,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
@@ -1757,6 +1811,15 @@ function downloadRecoveryCodes() {
   URL.revokeObjectURL(a.href);
 }
 
+// Regenerate and Reset stay disabled until both fields have a value.
+function updateManageButtons() {
+  const f = manageFields();
+  const ready = !!(f.password && f.code);
+  for (const id of ['regenBtn', 'resetBtn']) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !ready;
+  }
+}
 function manageFields() {
   const pw = document.getElementById('managePw');
   const code = document.getElementById('manageCode');
@@ -1778,9 +1841,15 @@ async function postFactor(path, f) {
   });
   if (f.pwEl) f.pwEl.value = '';
   if (f.codeEl) f.codeEl.value = '';
+  updateManageButtons();
   return res;
 }
 async function factorError(res) {
+  if (res.status === 403) {
+    const t = await res.text();
+    if (isEnrollRequired(t)) { enterEnrollmentOnly(); return UI_COPY.enrollFirst; }
+    return t || res.statusText;
+  }
   if (res.status === 429) return 'Too many attempts. Retry after ' + (res.headers.get('Retry-After') || '?') + 's.';
   if (res.status === 401) return 'Password or code not accepted.';
   return (await res.text()) || res.statusText;
@@ -1928,12 +1997,13 @@ async function finishLogin(res, msg) {
   setLoginStep('password');
   authed = true;
   setLoggedIn(true);
+  msg.textContent = '';
   if (data.need2fa) {
-    msg.textContent = 'Enroll 2FA from the Security tab before other admin actions.';
-    showTab('security');
+    enterEnrollmentOnly(); // opens Security, reloads it, starts a new enrollment
     return;
   }
   if (!data.enrolled && reenrollPending()) showTab('security');
+  if (activeTab === 'security') refreshSecurity();
   refresh();
 }
 
