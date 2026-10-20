@@ -183,7 +183,7 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 | Var | Used by | Notes |
 |-----|---------|--------|
 | `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
-| `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
+| `ETH_NODE_ADDRESS` | Router only | Base HTTPS RPC. Uplink reads chain state through the router API. |
 | `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
@@ -210,7 +210,8 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
-4. Deploy. Wait for health (`uplink … listening`, router healthy).
+4. Deploy. Wait until `uplink` is healthy (proxy-router has no container
+   healthcheck); after login, the GUI Status line should read Healthy.
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
 6. Turn 2FA on (recommended): Security tab → 2FA switch → scan the QR
    code, confirm a code, and save the 10 recovery codes (shown once).

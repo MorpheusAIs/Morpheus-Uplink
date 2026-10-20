@@ -43,22 +43,32 @@ One topic at a time. You do not need every section on day one.
 - Locked out (lost authenticator and codes): emergency recovery is one
   restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
+- **Security alerts** (below 2FA): the last 50 audit events (logins
+  and lockouts, 2FA and key changes, boot session checks, balance drops),
+  newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
+  (bold) | details. The filter box above the list hides rows that do not
+  contain the typed text (case-insensitive). The list is kept in memory and
+  starts empty after a restart; forward the container logs for history. It
+  loads once 2FA is enrolled or off; while an enrollment is required it says
+  so instead.
 
 ---
 
 ## API Keys
 
-| Kind | Survives wipe / redeploy? | Role |
+| Kind | Survives a fresh deploy / volume wipe? | Role |
 |------|---------------------------|------|
-| **Master** | Yes (`API_KEY_SEED`) | Inference + admin API |
+| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off) |
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
-| **Ephemeral** | No — export/import | Named keys for apps/agents |
+| **Ephemeral** | No — export/import (kept across restarts and redeploys on the same data volume) | Named keys for apps/agents |
 
 - Rotate built-ins by changing `API_KEY_SEED` and restarting. This also
   invalidates the 2FA secret and recovery codes; restart once with
   `UPLINK_RESET_2FA=true` to clear them, then remove it and enroll again
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
-- Ephemeral: create, red trash to delete, **Export all** / **Import list** after redeploy.
+- Ephemeral: create, red trash to delete, **Export all** / **Import list**
+  after a fresh deploy or a deleted data volume. A restart or redeploy on
+  the same volume keeps them.
 
 ---
 
@@ -110,7 +120,9 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
   dedicated wallet: the boot check and the stop act on every session of
   the wallet.
-- **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
+- **Usage** counters are stored on the Uplink data volume: they survive
+  restarts and redeploys, and reset on a fresh deploy or when the volume is
+  deleted. Funds do not depend on them.
 
 ---
 
@@ -118,7 +130,7 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 1. Open **Probe**.
 2. Pick a model (fuzzy search) and an API key.
-3. **Run test** or **Copy curl**.
+3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
 
 ---

@@ -101,7 +101,8 @@ There is no separate docs host or MCP for Uplink.
    Wrong strings fail resolve. Never invent a flashy name; never point
    agents at `active_models.json` / ALL.
 
-10. **Key roles:** Master (`sk-uplink.…`) = inference + admin; Prompt
+10. **Key roles:** Master (`sk-uplink.…`) = inference, plus admin only with
+    `MASTER_KEY_ADMIN=true` (default off); Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
     named, export/import across wipes. Built-ins derive from `API_KEY_SEED`.
 

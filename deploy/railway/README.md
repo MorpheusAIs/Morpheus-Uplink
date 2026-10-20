@@ -123,7 +123,7 @@ The router can do gateway-managed session cleanup. Uplink does not use it:
 - Keep the native expiry loop. Do not assume a heartbeat/lease.
 - Misconfiguration blast radius: sessions may not expire/cleanup as
   operators expect; collateral can remain locked until native expiry or
-  manual close via admin/`/node` (admin-gated).
+  manual close from the GUI (or admin-gated `/node`).
 - Treat cleanup as **native router expiry + Uplink housekeeping** only.
 
 ## L1 - privacy env honesty

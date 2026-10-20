@@ -51,7 +51,7 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
 | **3. Secrets** | Fill Encrypted Secrets (block below) — **operator fillables** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
-| **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
+| **4. Deploy** | Start the VM; wait until `uplink` is healthy (proxy-router has no container healthcheck), then check that the GUI Status line reads Healthy. |
 | **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
 | **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
 | **7. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |

@@ -798,6 +798,13 @@
   button.danger-ghost:hover { border-color: #ef4444; color: #fecaca; filter: none; }
   /* 2FA manage buttons: same size as the ghost Regenerate button. */
   #twoFactorManage button.danger-ghost { padding: 8px 14px; font-size: 13px; }
+  /* Security alerts: time | action | details, one aligned row per event. */
+  .alerts-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .alerts-table td { padding: 4px 10px 4px 0; vertical-align: top; text-align: left; }
+  .alerts-table td + td { border-left: 1px solid var(--line, rgba(127,127,127,.3)); padding-left: 10px; }
+  .alerts-table .alert-at { font-family: 'IBM Plex Mono', ui-monospace, monospace; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .alerts-table .alert-kind { white-space: nowrap; }
+  .alerts-table .alert-detail { word-break: break-word; }
   .enroll-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: 100%; }
   .enroll-qr #enrollSecret { margin: 0; max-width: 340px; text-align: center; word-break: break-all; white-space: pre-line; font-family: 'IBM Plex Mono', ui-monospace, monospace; }
   td.model-cell { min-width: 120px; }
@@ -1065,7 +1072,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           Forward container logs to your log stack (json-file / journald / SIEM);
           Uplink does not dump secrets at boot.
         </p>
+        <input id="alertFilter" type="search" autocomplete="off" oninput="filterAlerts()" style="max-width:320px;margin-bottom:8px"
+               placeholder="Filter alerts" aria-label="Filter alerts" data-copy-placeholder="alertsFilter">
         <div id="securityAlerts" class="note">Loading…</div>
+        <p id="alertsNoMatch" class="note hidden" style="margin:6px 0 0" data-copy="alertsNoMatch">No alerts match the filter.</p>
         <div class="row" style="margin-top:12px">
           <button type="button" class="ghost" onclick="refreshSecurity()">Refresh</button>
         </div>
@@ -1370,6 +1380,11 @@ const UI_COPY = {
   tfPending: 'Finish setup: scan the QR code and confirm a code.',
   tfPendingLocked: 'Finish setup: scan the QR code and confirm a code. Other admin actions are available after that.',
   tfSwitchLabel: 'Require an authenticator code at login (2FA)',
+  alertsNone: 'No recent alerts.',
+  alertsAfterEnroll: 'Security alerts available after 2FA enrollment.',
+  alertsLoadFailed: (m) => 'Failed to load: ' + m,
+  alertsFilter: 'Filter alerts',
+  alertsNoMatch: 'No alerts match the filter.',
   tfOffNote: 'We recommend turning 2FA on: flip the switch above and scan the QR code with an authenticator app.',
   tfDisableTitle: 'Turn off 2FA',
   tfDisableNeedsFactor: 'To turn 2FA off, enter your password and a current authenticator code or a recovery code below, then choose Turn off 2FA.',
@@ -1549,6 +1564,10 @@ function applyCopy(root) {
   r.querySelectorAll('[data-copy]').forEach(el => {
     const v = UI_COPY[el.getAttribute('data-copy')];
     if (typeof v === 'string') el.textContent = v;
+  });
+  r.querySelectorAll('[data-copy-placeholder]').forEach(el => {
+    const v = UI_COPY[el.getAttribute('data-copy-placeholder')];
+    if (typeof v === 'string') { el.placeholder = v; el.setAttribute('aria-label', v); }
   });
   r.querySelectorAll('[data-tip-key]').forEach(el => {
     const v = UI_COPY[el.getAttribute('data-tip-key')];
@@ -1730,26 +1749,77 @@ async function refreshSecurity() {
       const res = await fetch('/admin/security', { credentials: 'same-origin', headers: { 'X-Uplink-Poll': '1' } });
       if (res.status === 401) { showLogin(); return; }
       if (res.status === 403) {
-        box.textContent = 'Security alerts available after 2FA enrollment.';
+        box.textContent = UI_COPY.alertsAfterEnroll;
       } else if (!res.ok) {
-        box.textContent = 'Failed to load: ' + (await res.text() || res.statusText);
+        box.textContent = UI_COPY.alertsLoadFailed(await res.text() || res.statusText);
       } else {
         const data = await res.json();
         const alerts = data.alerts || [];
         if (!alerts.length) {
-          box.textContent = 'No recent alerts.';
+          box.textContent = UI_COPY.alertsNone;
         } else {
-          box.innerHTML = '<ul style="padding-left:18px;margin:0">' + alerts.map(a => {
-            const when = a.at ? new Date(a.at).toLocaleString() : '';
-            return '<li><strong>' + escapeHtml(a.kind || '') + '</strong> '
-              + escapeHtml(a.message || '') + ' <span class="note">' + escapeHtml(when) + '</span></li>';
-          }).join('') + '</ul>';
+          box.innerHTML = alertRowsHtml(alerts);
         }
       }
     } catch (e) {
-      box.textContent = 'Failed to load: ' + e.message;
+      box.textContent = UI_COPY.alertsLoadFailed(e.message);
     }
+    filterAlerts();
   }
+}
+
+// Security alerts: one row per event, newest first:
+// local time (YYYY-MM-DD HH:MM:SS) | event name (bold) | details.
+function alertTime(at) {
+  const d = new Date(at);
+  if (!at || isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+// alertDetail: message, result and IP, without any copy of the event time
+// (the time has its own column).
+function alertDetail(a, when) {
+  let t = [a.message, a.result, a.ip].filter(Boolean).join(' · ');
+  const stamps = [when];
+  if (a.at) {
+    const d = new Date(a.at);
+    stamps.push(String(a.at), String(a.at).replace(/\.\d+(?=Z|[+-]\d)/, ''));
+    if (!isNaN(d.getTime())) stamps.push(d.toISOString(), d.toISOString().replace(/\.\d+Z$/, 'Z'), d.toLocaleString());
+  }
+  let cut = false;
+  for (const st of stamps.filter(Boolean).sort((x, y) => y.length - x.length)) {
+    if (t.includes(st)) { cut = true; t = t.split(st).join(''); }
+  }
+  if (cut) {
+    t = t.replace(/\(\s*\)|\[\s*\]/g, '').replace(/\s*\b(at|on)\s*$/i, '').replace(/[\s·|,;:-]+$/, '');
+  }
+  return t.replace(/\s{2,}/g, ' ').trim();
+}
+function alertRowsHtml(alerts) {
+  const rows = alerts.slice().sort((x, y) => (Date.parse(y.at) || 0) - (Date.parse(x.at) || 0));
+  return '<table class="alerts-table"><tbody>' + rows.map(a => {
+    const when = alertTime(a.at);
+    return '<tr class="alert-row"><td class="alert-at">' + escapeHtml(when) + '</td>'
+      + '<td class="alert-kind"><strong>' + escapeHtml(a.kind || '') + '</strong></td>'
+      + '<td class="alert-detail">' + escapeHtml(alertDetail(a, when)) + '</td></tr>';
+  }).join('') + '</tbody></table>';
+}
+// filterAlerts: client-side, case-insensitive substring over the whole row.
+function filterAlerts() {
+  const box = document.getElementById('securityAlerts');
+  const input = document.getElementById('alertFilter');
+  const none = document.getElementById('alertsNoMatch');
+  if (!box || typeof box.querySelectorAll !== 'function') return;
+  const q = ((input && input.value) || '').trim().toLowerCase();
+  let shown = 0;
+  const rows = box.querySelectorAll('tr.alert-row');
+  rows.forEach(tr => {
+    const hit = !q || (tr.textContent || '').toLowerCase().includes(q);
+    tr.classList.toggle('hidden', !hit);
+    if (hit) shown++;
+  });
+  if (none) none.classList.toggle('hidden', !(rows.length && q && !shown));
 }
 
 function setEnrollMsg(text, kind) {

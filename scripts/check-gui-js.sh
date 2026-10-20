@@ -39,6 +39,7 @@ function extractFn(name, text) {
 const showTabSrc = extractFn('showTab', src);
 const refreshSrc = extractFn('refreshSecurity', src);
 const viewSrc = extractFn('tfViewState', src);
+const filterSrc = extractFn('filterAlerts', src);
 
 let activeTab = 'status';
 let fetches = 0;
@@ -81,7 +82,7 @@ global.tfEnrollRequested = false;
 global.tfState = { on: false, enrolled: false };
 global.setRecoveryHint = () => {};
 
-eval(showTabSrc + '\n' + viewSrc + '\n' + refreshSrc + '\n');
+eval(showTabSrc + '\n' + viewSrc + '\n' + filterSrc + '\n' + refreshSrc + '\n');
 if (typeof refreshSecurity !== 'function' || typeof showTab !== 'function') {
   console.error('missing showTab/refreshSecurity after extract');
   process.exit(1);
@@ -348,7 +349,7 @@ eval([
   'function hideRecoveryCodes() { document.getElementById("recoveryCodes").textContent = ""; }',
   'function hideEnrollSecret() { document.getElementById("enrollSecret").textContent = ""; }',
   'let enrollOnly = false; let enrollAutoStarted = false;',
-  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError', 'toggleTwoFactor', 'disableTwoFactor', 'tfViewState'].map(extract),
+  ...['manageFields', 'updateManageButtons', 'isEnrollRequired', 'enterEnrollmentOnly', 'leaveEnrollmentOnly', 'resetSecurityView', 'factorError', 'toggleTwoFactor', 'disableTwoFactor', 'tfViewState', 'filterAlerts'].map(extract),
   extract('refreshSecurity').replace('async function refreshSecurity', 'async function renderSecurity'),
   'Object.assign(T, { updateManageButtons, resetSecurityView, enterEnrollmentOnly, factorError, toggleTwoFactor, posted, renderSecurity, setStatus: (v) => { tfStatusAnswer = v; }, setRequested: (v) => { tfEnrollRequested = v; }, setTF: (v) => { tfState = v; }, requested: () => tfEnrollRequested, state: () => ({ enrollOnly, enrollAutoStarted, activeTab }), setTab: (t) => { activeTab = t; } });',
 ].join('\n'));
@@ -445,4 +446,62 @@ const $ = (id) => document.getElementById(id);
   if (order.some((i, n) => i < 0 || (n && i < order[n - 1]))) fail('enrollment layout order: ' + order);
   console.log('OK: 2FA buttons need password and code; reset clears the view; re-login goes straight to a fresh enrollment; 2FA switch; one 2FA state at a time');
 })().catch((e) => fail(e.stack || e));
+NODE
+
+# Security alerts: time | bold action | details, newest first, filter box.
+TZ=UTC node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function extract(name) {
+  const m = new RegExp('function\\s+' + name + '\\s*\\(').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = src.indexOf('{', m.index + m[0].length - 1), d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}' && --d === 0) { i++; break; } }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const mkEl = () => ({ value: '', classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, contains(c) { return this._s.has(c); } } });
+const els = { alertFilter: mkEl(), alertsNoMatch: mkEl(), securityAlerts: { rows: [], querySelectorAll() { return this.rows; } } };
+global.document = { getElementById: (id) => els[id] || null };
+global.T = {};
+eval(['escapeHtml', 'alertTime', 'alertDetail', 'alertRowsHtml', 'filterAlerts'].map(extract).join('\n')
+  + '\nObject.assign(T, { alertRowsHtml, filterAlerts });');
+if (!/id="alertFilter"[^>]*type="search"[^>]*oninput="filterAlerts\(\)"/.test(html)) fail('filter box must call filterAlerts on input');
+if (html.indexOf('id="alertFilter"') > html.indexOf('id="securityAlerts"')) fail('filter box must sit above the list');
+if (!/\.alerts-table \.alert-at \{[^}]*monospace/.test(html)) fail('time column must be monospace');
+// Out of order on purpose; one message repeats the event time.
+const alerts = [
+  { at: '2026-10-20T14:05:09.120Z', kind: 'login', result: 'ok', ip: '203.0.113.7', message: 'admin login' },
+  { at: '2026-10-20T15:30:00Z', kind: 'balance_drop', message: 'MOR balance decreased by 1.5 MOR at 2026-10-20T15:30:00Z' },
+  { at: '2026-10-19T23:59:59.5Z', kind: '2fa_enroll', message: 'enrolled (2026-10-19 23:59:59)' },
+  { at: '2026-10-19T08:00:00Z', kind: 'key_create', message: 'key created (agent-1)' },
+];
+const out = T.alertRowsHtml(alerts);
+const rows = [...out.matchAll(/<tr class="alert-row"><td class="alert-at">([^<]*)<\/td><td class="alert-kind"><strong>([^<]*)<\/strong><\/td><td class="alert-detail">([^<]*)<\/td><\/tr>/g)]
+  .map((m) => ({ at: m[1], kind: m[2], detail: m[3] }));
+if (rows.length !== 4) fail('want 4 rows of time | bold action | details: ' + out);
+if (rows.map((r) => r.kind).join(',') !== 'balance_drop,login,2fa_enroll,key_create') fail('rows must be newest first: ' + rows.map((r) => r.kind));
+for (const r of rows) {
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(r.at)) fail('time format YYYY-MM-DD HH:MM:SS: ' + r.at);
+  if (/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(r.detail)) fail('details repeat the time: ' + r.detail);
+}
+if (rows[0].at !== '2026-10-20 15:30:00' || rows[2].at !== '2026-10-19 23:59:59') fail('local time: ' + rows.map((r) => r.at));
+if (rows[0].detail !== 'MOR balance decreased by 1.5 MOR') fail('balance detail: ' + rows[0].detail);
+if (rows[1].detail !== 'admin login · ok · 203.0.113.7') fail('login detail: ' + rows[1].detail);
+if (rows[2].detail !== 'enrolled') fail('enroll detail: ' + rows[2].detail);
+if (rows[3].detail !== 'key created (agent-1)') fail('details without a time stay as they are: ' + rows[3].detail);
+// Filter: case-insensitive substring over the row; others hidden.
+els.securityAlerts.rows = rows.map((r) => Object.assign(mkEl(), { textContent: r.at + r.kind + r.detail }));
+const hidden = () => els.securityAlerts.rows.map((r) => r.classList.contains('hidden'));
+els.alertFilter.value = 'LOGIN'; T.filterAlerts();
+if (hidden().join() !== 'true,false,true,true') fail('filter "LOGIN": ' + hidden());
+els.alertFilter.value = 'mor'; T.filterAlerts();
+if (hidden().join() !== 'false,true,true,true') fail('filter "mor": ' + hidden());
+if (!els.alertsNoMatch.classList.contains('hidden')) fail('no-match note shown while rows match');
+els.alertFilter.value = 'nothing-like-this'; T.filterAlerts();
+if (hidden().join() !== 'true,true,true,true' || els.alertsNoMatch.classList.contains('hidden')) fail('no-match: ' + hidden());
+els.alertFilter.value = '  '; T.filterAlerts();
+if (hidden().join() !== 'false,false,false,false' || !els.alertsNoMatch.classList.contains('hidden')) fail('empty filter shows all');
+console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter');
 NODE

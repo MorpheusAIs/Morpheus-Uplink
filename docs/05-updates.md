@@ -34,7 +34,10 @@ router's config.
     <project>_allowance_status <project>_allowance_ctl
   ```
 
-  A fresh deploy also clears the extra router user.
+  Also delete `router.auth` from the Uplink data volume (`/data`), the
+  router credential an earlier test build wrote there (the current build
+  does not read it), and remove the extra router user, or do a fresh
+  deploy if unsure; it clears both.
 
 A fresh deploy starts with empty Uplink state. Generated (ephemeral) API
 keys and the 2FA state (enrollment, recovery codes) are gone, and 2FA

@@ -107,7 +107,8 @@ There is no separate docs host or MCP for Uplink.
    Wrong strings fail resolve. Never invent a flashy name; never point
    agents at `active_models.json` / ALL.
 
-10. **Key roles:** Master (`sk-uplink.…`) = inference + admin; Prompt
+10. **Key roles:** Master (`sk-uplink.…`) = inference, plus admin only with
+    `MASTER_KEY_ADMIN=true` (default off); Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
     named, export/import across wipes. Built-ins derive from `API_KEY_SEED`.
 
@@ -308,7 +309,7 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
 | **3. Secrets** | Fill Encrypted Secrets (block below) — **operator fillables** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
-| **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
+| **4. Deploy** | Start the VM; wait until `uplink` is healthy (proxy-router has no container healthcheck), then check that the GUI Status line reads Healthy. |
 | **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
 | **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
 | **7. Use** | **Probe** once, then put the **Prompt** key in any OpenAI client with base URL `https://<host>/v1`. |
@@ -704,7 +705,7 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 | Var | Used by | Notes |
 |-----|---------|--------|
 | `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
-| `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
+| `ETH_NODE_ADDRESS` | Router only | Base HTTPS RPC. Uplink reads chain state through the router API. |
 | `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
@@ -731,7 +732,8 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
-4. Deploy. Wait for health (`uplink … listening`, router healthy).
+4. Deploy. Wait until `uplink` is healthy (proxy-router has no container
+   healthcheck); after login, the GUI Status line should read Healthy.
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
 6. Turn 2FA on (recommended): Security tab → 2FA switch → scan the QR
    code, confirm a code, and save the 10 recovery codes (shown once).
@@ -871,22 +873,32 @@ One topic at a time. You do not need every section on day one.
 - Locked out (lost authenticator and codes): emergency recovery is one
   restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
+- **Security alerts** (below 2FA): the last 50 audit events (logins
+  and lockouts, 2FA and key changes, boot session checks, balance drops),
+  newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
+  (bold) | details. The filter box above the list hides rows that do not
+  contain the typed text (case-insensitive). The list is kept in memory and
+  starts empty after a restart; forward the container logs for history. It
+  loads once 2FA is enrolled or off; while an enrollment is required it says
+  so instead.
 
 ---
 
 ## API Keys
 
-| Kind | Survives wipe / redeploy? | Role |
+| Kind | Survives a fresh deploy / volume wipe? | Role |
 |------|---------------------------|------|
-| **Master** | Yes (`API_KEY_SEED`) | Inference + admin API |
+| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off) |
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
-| **Ephemeral** | No — export/import | Named keys for apps/agents |
+| **Ephemeral** | No — export/import (kept across restarts and redeploys on the same data volume) | Named keys for apps/agents |
 
 - Rotate built-ins by changing `API_KEY_SEED` and restarting. This also
   invalidates the 2FA secret and recovery codes; restart once with
   `UPLINK_RESET_2FA=true` to clear them, then remove it and enroll again
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
-- Ephemeral: create, red trash to delete, **Export all** / **Import list** after redeploy.
+- Ephemeral: create, red trash to delete, **Export all** / **Import list**
+  after a fresh deploy or a deleted data volume. A restart or redeploy on
+  the same volume keeps them.
 
 ---
 
@@ -938,7 +950,9 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
   dedicated wallet: the boot check and the stop act on every session of
   the wallet.
-- **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
+- **Usage** counters are stored on the Uplink data volume: they survive
+  restarts and redeploys, and reset on a fresh deploy or when the volume is
+  deleted. Funds do not depend on them.
 
 ---
 
@@ -946,7 +960,7 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 1. Open **Probe**.
 2. Pick a model (fuzzy search) and an API key.
-3. **Run test** or **Copy curl**.
+3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
 
 ---
@@ -1050,7 +1064,7 @@ Response: `{"usage":[…]}` — rows with `day`, `keyId`, `model`, `requests`,
 **WARN — scoping:** Prompt and generated keys see **only their own** rows
 (`keyId` matches the caller). Master Bearer returns the **full instance**
 (same table as `GET /admin/usage`). `keyId` is a public id (`master`,
-`prompt`, or generated id) — never an `sk-` secret. Admin Basic does **not**
+`prompt`, or generated id) — never an `sk-` secret. Basic auth does **not**
 unlock `/v1/usage`.
 
 ---
@@ -1098,7 +1112,10 @@ router's config.
     <project>_allowance_status <project>_allowance_ctl
   ```
 
-  A fresh deploy also clears the extra router user.
+  Also delete `router.auth` from the Uplink data volume (`/data`), the
+  router credential an earlier test build wrote there (the current build
+  does not read it), and remove the extra router user, or do a fresh
+  deploy if unsure; it clears both.
 
 A fresh deploy starts with empty Uplink state. Generated (ephemeral) API
 keys and the 2FA state (enrollment, recovery codes) are gone, and 2FA
@@ -1144,7 +1161,7 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 
 | Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`, `/node/*`) |
 |---|---|---|---|
-| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | yes (same power as admin password) |
+| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA |
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
@@ -1185,7 +1202,7 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   `internal/adminauth/recovery.go`. Matching is constant-time over every
   stored code and consumes the match inside one store update, so a code
   works once even under concurrent logins. Recovery logins share the login
-  lockout and rate limit.
+  lockout (and, on SecretVM, the edge rate limit).
 - **Endpoints** (CSRF and session rules as for other admin POSTs):
   `GET /admin/2fa/status` (`on`, `enrolled`, `need2fa`, `recoveryRemaining`),
   `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
@@ -1210,7 +1227,7 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   the switch is on without a secret; it grants nothing but enrollment.
 - **Remove** (`POST /admin/2fa/remove`, the switch's off side) needs a
   valid session, CSRF, the password and a TOTP or recovery code (consumed;
-  a TOTP step works once), under the login lockout and rate limit. In one
+  a TOTP step works once), under the login lockout. In one
   store update it wipes the secret and recovery codes and sets the switch
   off; then it revokes every admin session (this one too), clears the
   cookie and audits `2fa_remove` with `sessions_revoked`. The next login is
@@ -1264,10 +1281,10 @@ Bearer API keys only (`requireAPIKey`). Response `{"usage":[ UsageRow… ]}`.
 | Prompt / generated | Rows where `keyId` equals the caller’s id |
 | Master | Full instance (intentional ops convenience) |
 
-**WARN:** Master is a full usage reader so automation can poll without admin
-Basic. Prompt/generated never see other keys’ rows. `keyId` is public — not
+**WARN:** Master is a full usage reader so automation can poll without an
+admin session. Prompt/generated never see other keys’ rows. `keyId` is public — not
 `sk-`. Empty `X-Uplink-Key-Id` after auth fails closed (no unfiltered dump).
-Admin Basic on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
+Basic auth on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
 
 The proxy-router still has its own Basic-auth surface (`COOKIE_CONTENT`).
 Uplink uses one full-power router credential and enforces Prompt vs Master at
@@ -1604,10 +1621,19 @@ multi-arch image is pushed.
   - **E**: each env example is identical to its source, has no duplicate
     keys, names only variables its compose reads, and sets every required
     one; `env.secretvm.example` sets exactly the six.
+  - **D**: security defaults (`SECURITY_DEFAULTS`): `MASTER_KEY_ADMIN` is
+    `false` in the SecretVM, generic and Railway templates and absent from
+    the local compose; `UPLINK_RESET_2FA`, `PROXY_STORE_CHAT_CONTEXT` and
+    `PROXY_FORWARD_CHAT_CONTEXT` are `false` wherever they appear. Each
+    pinned variable has exactly that value in the compose and its env
+    example (default or literal, quoted or with `export`) and is assigned
+    at most once per file. Railway's env example must set
+    `PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP` and `ETH_NODE_CHAIN_ID`
+    actively.
 - `pr` (pull_request CI, step "Deploy assets") generates against the fake
-  digest `sha256:000…0`, runs `check`, then the self-tests: 14 broken
-  variants (one per failure mode) that must each be rejected by the
-  matching rule. Run it locally with `bash scripts/deploy-assets.sh pr`.
+  digest `sha256:000…0`, runs `check`, then the self-tests: broken
+  variants (at least one per failure mode of every rule) that must each be
+  rejected by the matching rule. Run it locally with `bash scripts/deploy-assets.sh pr`.
 
 Other pull_request checks in the same job: `check-router-digest.sh`,
 `check-compose-config.sh`, `check-compose-policy.sh`,
@@ -1620,7 +1646,7 @@ Other pull_request checks in the same job: `check-router-digest.sh`,
 ```
 cmd/uplink/          entrypoint
 internal/config/     env config
-internal/keys/       sk-… generation, deterministic master key
+internal/keymaker/   sk-… generation, deterministic master key
 internal/store/      JSON state (keys, usage), atomic writes
 internal/catalog/    active.mor.org model name → blockchain id
 internal/router/     proxy-router client (sessions, balance, forward)
@@ -1824,8 +1850,11 @@ docker volume rm <project>_router_auth <project>_manager_cred \
   <project>_allowance_status <project>_allowance_ctl
 ```
 
-An earlier test build may also have left an extra scoped router user in
-the router's config; a fresh deploy clears it. On a production SecretVM
+Also delete `router.auth` from the Uplink data volume (`/data`): the
+router credential an earlier test build wrote there. The current build
+does not read it. An earlier test build may also have left an extra scoped
+router user in the router's config: remove it, or do a fresh deploy if
+unsure (a fresh deploy clears both). On a production SecretVM
 (no shell) a fresh deploy is the only fix; see
 [deploy/secretvm](../secretvm/README.md#upgrading-from-an-earlier-test-build).
 
@@ -1855,7 +1884,7 @@ Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked
-until native expiry or manual admin/`/node` close.
+until native expiry or a manual close from the GUI.
 
 ## L1 - privacy env
 
@@ -2004,7 +2033,7 @@ The router can do gateway-managed session cleanup. Uplink does not use it:
 - Keep the native expiry loop. Do not assume a heartbeat/lease.
 - Misconfiguration blast radius: sessions may not expire/cleanup as
   operators expect; collateral can remain locked until native expiry or
-  manual close via admin/`/node` (admin-gated).
+  manual close from the GUI (or admin-gated `/node`).
 - Treat cleanup as **native router expiry + Uplink housekeeping** only.
 
 ## L1 - privacy env honesty

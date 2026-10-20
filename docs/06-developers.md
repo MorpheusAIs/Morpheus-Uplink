@@ -12,7 +12,7 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 
 | Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`, `/node/*`) |
 |---|---|---|---|
-| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | yes (same power as admin password) |
+| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA |
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
@@ -53,7 +53,7 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   `internal/adminauth/recovery.go`. Matching is constant-time over every
   stored code and consumes the match inside one store update, so a code
   works once even under concurrent logins. Recovery logins share the login
-  lockout and rate limit.
+  lockout (and, on SecretVM, the edge rate limit).
 - **Endpoints** (CSRF and session rules as for other admin POSTs):
   `GET /admin/2fa/status` (`on`, `enrolled`, `need2fa`, `recoveryRemaining`),
   `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
@@ -78,7 +78,7 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   the switch is on without a secret; it grants nothing but enrollment.
 - **Remove** (`POST /admin/2fa/remove`, the switch's off side) needs a
   valid session, CSRF, the password and a TOTP or recovery code (consumed;
-  a TOTP step works once), under the login lockout and rate limit. In one
+  a TOTP step works once), under the login lockout. In one
   store update it wipes the secret and recovery codes and sets the switch
   off; then it revokes every admin session (this one too), clears the
   cookie and audits `2fa_remove` with `sessions_revoked`. The next login is
@@ -132,10 +132,10 @@ Bearer API keys only (`requireAPIKey`). Response `{"usage":[ UsageRow… ]}`.
 | Prompt / generated | Rows where `keyId` equals the caller’s id |
 | Master | Full instance (intentional ops convenience) |
 
-**WARN:** Master is a full usage reader so automation can poll without admin
-Basic. Prompt/generated never see other keys’ rows. `keyId` is public — not
+**WARN:** Master is a full usage reader so automation can poll without an
+admin session. Prompt/generated never see other keys’ rows. `keyId` is public — not
 `sk-`. Empty `X-Uplink-Key-Id` after auth fails closed (no unfiltered dump).
-Admin Basic on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
+Basic auth on `/v1/usage` → 401. Keep `GET /admin/usage` for the GUI.
 
 The proxy-router still has its own Basic-auth surface (`COOKIE_CONTENT`).
 Uplink uses one full-power router credential and enforces Prompt vs Master at
@@ -472,10 +472,19 @@ multi-arch image is pushed.
   - **E**: each env example is identical to its source, has no duplicate
     keys, names only variables its compose reads, and sets every required
     one; `env.secretvm.example` sets exactly the six.
+  - **D**: security defaults (`SECURITY_DEFAULTS`): `MASTER_KEY_ADMIN` is
+    `false` in the SecretVM, generic and Railway templates and absent from
+    the local compose; `UPLINK_RESET_2FA`, `PROXY_STORE_CHAT_CONTEXT` and
+    `PROXY_FORWARD_CHAT_CONTEXT` are `false` wherever they appear. Each
+    pinned variable has exactly that value in the compose and its env
+    example (default or literal, quoted or with `export`) and is assigned
+    at most once per file. Railway's env example must set
+    `PROXY_STORE_CHAT_CONTEXT`, `LOG_LEVEL_APP` and `ETH_NODE_CHAIN_ID`
+    actively.
 - `pr` (pull_request CI, step "Deploy assets") generates against the fake
-  digest `sha256:000…0`, runs `check`, then the self-tests: 14 broken
-  variants (one per failure mode) that must each be rejected by the
-  matching rule. Run it locally with `bash scripts/deploy-assets.sh pr`.
+  digest `sha256:000…0`, runs `check`, then the self-tests: broken
+  variants (at least one per failure mode of every rule) that must each be
+  rejected by the matching rule. Run it locally with `bash scripts/deploy-assets.sh pr`.
 
 Other pull_request checks in the same job: `check-router-digest.sh`,
 `check-compose-config.sh`, `check-compose-policy.sh`,
@@ -488,7 +497,7 @@ Other pull_request checks in the same job: `check-router-digest.sh`,
 ```
 cmd/uplink/          entrypoint
 internal/config/     env config
-internal/keys/       sk-… generation, deterministic master key
+internal/keymaker/   sk-… generation, deterministic master key
 internal/store/      JSON state (keys, usage), atomic writes
 internal/catalog/    active.mor.org model name → blockchain id
 internal/router/     proxy-router client (sessions, balance, forward)

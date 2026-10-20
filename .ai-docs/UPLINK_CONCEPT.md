@@ -170,7 +170,9 @@ gateway mode"), at which point Uplink shrinks to just GUI + metering, or disappe
    (`sk-uplink.…`, prompt + admin, can mint/revoke subkeys) and **prompt**
    (`sk-prompt.…`, inference only, safe default for clients). Generated subkeys are
    prompt-scoped, SHA-256 at rest. GUI auth = Basic admin password; master key =
-   Bearer equivalent for automation.
+   Bearer equivalent for automation. *(Superseded: password + session-cookie
+   login, optional TOTP 2FA; Basic auth is refused. The master key is admin
+   only with `MASTER_KEY_ADMIN=true`, default off.)*
 
 ### Persistence stance (ephemeral-storage-proof)
 

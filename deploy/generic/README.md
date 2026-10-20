@@ -43,8 +43,11 @@ docker volume rm <project>_router_auth <project>_manager_cred \
   <project>_allowance_status <project>_allowance_ctl
 ```
 
-An earlier test build may also have left an extra scoped router user in
-the router's config; a fresh deploy clears it. On a production SecretVM
+Also delete `router.auth` from the Uplink data volume (`/data`): the
+router credential an earlier test build wrote there. The current build
+does not read it. An earlier test build may also have left an extra scoped
+router user in the router's config: remove it, or do a fresh deploy if
+unsure (a fresh deploy clears both). On a production SecretVM
 (no shell) a fresh deploy is the only fix; see
 [deploy/secretvm](../secretvm/README.md#upgrading-from-an-earlier-test-build).
 
@@ -74,7 +77,7 @@ Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked
-until native expiry or manual admin/`/node` close.
+until native expiry or a manual close from the GUI.
 
 ## L1 - privacy env
 
