@@ -28,6 +28,22 @@ off).
   ETH_NODE_USE_SUBSCRIPTIONS, BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS,
   MOR_TOKEN_ADDRESS. Never describe router PROXY_*/LOG_LEVEL_* as Uplink knobs.
 
+## Upgrading from an earlier test build
+
+SecretVM upgrades, and `docker compose up` without `--remove-orphans`, do
+not remove services that were dropped from the compose file. If you are
+coming from an earlier test build, do a fresh deploy, or remove the
+orphaned `router-allowance-manager` and `router-user-init` containers (for
+example `docker compose up -d --remove-orphans` where available). Then
+delete the old volumes `router_auth`, `manager_cred`, `allowance_status`
+and `allowance_ctl`. Docker prefixes volume names with the compose project
+name:
+
+```bash
+docker volume rm <project>_router_auth <project>_manager_cred \
+  <project>_allowance_status <project>_allowance_ctl
+```
+
 ## Session stake (locks, not spends)
 
 Uplink talks to proxy-router over the internal network with the router's

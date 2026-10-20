@@ -795,6 +795,9 @@ generic, Railway and local: there is no environment variable for it.
 - **Turn off:** the switch asks for the password plus a current TOTP or
   recovery code. It removes the secret and recovery codes and signs out
   every session; login is password only again.
+- **Reset lockdown:** after a Reset the switch stays on, and the next
+  password login gets 403 on every admin route except 2FA status,
+  enrollment and logout until a new enrollment is confirmed.
 - **Persistent:** the switch is stored with the 2FA state in `DATA_DIR`
   (`uplink-state.json`), so it survives restarts and redeploys. Keep
   `DATA_DIR` on a persistent volume.
@@ -1069,6 +1072,24 @@ unlock `/v1/usage`.
 2. Download the new release compose (`docker-compose.secretvm.deployed.yml`, `docker-compose.generic.deployed.yml`, or for Railway the digests in `docker-compose.railway.deployed.yml`). Keep the **same** secrets / `.env` (`API_KEY_SEED`, `WALLET_PRIVATE_KEY`).
 3. Export ephemeral keys **before** wiping storage if volumes recreate.
 4. After restart: Status health → Probe once → reclaim if **To claim** &gt; 0.
+
+---
+
+## Upgrading from an earlier test build
+
+SecretVM upgrades, and `docker compose up` without `--remove-orphans`, do
+not remove services that were dropped from the compose file. If you are
+coming from an earlier test build, do a fresh deploy, or remove the
+orphaned `router-allowance-manager` and `router-user-init` containers (for
+example `docker compose up -d --remove-orphans` where available). Then
+delete the old volumes `router_auth`, `manager_cred`, `allowance_status`
+and `allowance_ctl`. Docker prefixes volume names with the compose project
+name:
+
+```bash
+docker volume rm <project>_router_auth <project>_manager_cred \
+  <project>_allowance_status <project>_allowance_ctl
+```
 
 ---
 
@@ -1673,6 +1694,22 @@ image digest-pinned) and fill the form from `env.secretvm.example` (the
 six secrets):
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
+## Upgrading from an earlier test build
+
+SecretVM upgrades, and `docker compose up` without `--remove-orphans`, do
+not remove services that were dropped from the compose file. If you are
+coming from an earlier test build, do a fresh deploy, or remove the
+orphaned `router-allowance-manager` and `router-user-init` containers (for
+example `docker compose up -d --remove-orphans` where available). Then
+delete the old volumes `router_auth`, `manager_cred`, `allowance_status`
+and `allowance_ctl`. Docker prefixes volume names with the compose project
+name:
+
+```bash
+docker volume rm <project>_router_auth <project>_manager_cred \
+  <project>_allowance_status <project>_allowance_ctl
+```
+
 ## Session stake (locks, not spends)
 
 Uplink talks to proxy-router over the internal network with the router's
@@ -1751,6 +1788,22 @@ off).
   PROXY_FORWARD_CHAT_CONTEXT, LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID,
   ETH_NODE_USE_SUBSCRIPTIONS, BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS,
   MOR_TOKEN_ADDRESS. Never describe router PROXY_*/LOG_LEVEL_* as Uplink knobs.
+
+## Upgrading from an earlier test build
+
+SecretVM upgrades, and `docker compose up` without `--remove-orphans`, do
+not remove services that were dropped from the compose file. If you are
+coming from an earlier test build, do a fresh deploy, or remove the
+orphaned `router-allowance-manager` and `router-user-init` containers (for
+example `docker compose up -d --remove-orphans` where available). Then
+delete the old volumes `router_auth`, `manager_cred`, `allowance_status`
+and `allowance_ctl`. Docker prefixes volume names with the compose project
+name:
+
+```bash
+docker volume rm <project>_router_auth <project>_manager_cred \
+  <project>_allowance_status <project>_allowance_ctl
+```
 
 ## Session stake (locks, not spends)
 

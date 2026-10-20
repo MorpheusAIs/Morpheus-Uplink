@@ -274,6 +274,9 @@ generic, Railway and local: there is no environment variable for it.
 - **Turn off:** the switch asks for the password plus a current TOTP or
   recovery code. It removes the secret and recovery codes and signs out
   every session; login is password only again.
+- **Reset lockdown:** after a Reset the switch stays on, and the next
+  password login gets 403 on every admin route except 2FA status,
+  enrollment and logout until a new enrollment is confirmed.
 - **Persistent:** the switch is stored with the 2FA state in `DATA_DIR`
   (`uplink-state.json`), so it survives restarts and redeploys. Keep
   `DATA_DIR` on a persistent volume.
