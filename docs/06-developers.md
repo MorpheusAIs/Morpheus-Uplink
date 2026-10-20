@@ -418,6 +418,10 @@ release), so the checks, e2e and asset check run when they change.
 
 `scripts/deploy-assets.sh` builds the release assets from the templates and
 checks them; the release job and the pull_request job run the same script.
+The publish job runs `generate` + `check` twice: before the image push
+against a placeholder digest (a bad asset set fails before anything is
+published), and after it with the real digest, which only exists once the
+multi-arch image is pushed.
 
 | Asset | Template | Env example source |
 |-------|----------|--------------------|

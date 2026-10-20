@@ -344,6 +344,18 @@ jobs:
             TAGS="${TAGS},${IMAGE_NAME}:latest"
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+      # Before anything is published: build the release asset set against a
+      # placeholder digest and run every check on it (pins, TODO, variables,
+      # env examples, security defaults). The real digest exists only after
+      # the multi-arch push, so the step after the push pins and checks it.
+      - name: Check deploy assets before publishing (placeholder digest)
+        run: |
+          PRE="${RUNNER_TEMP}/deploy-assets-precheck"
+          PLACEHOLDER="sha256:$(printf '0%.0s' $(seq 64))"
+          mkdir -p "$PRE"
+          bash scripts/deploy-assets.sh generate "${IMAGE_NAME}" "${PLACEHOLDER}" "$PRE"
+          bash scripts/deploy-assets.sh check "${IMAGE_NAME}" "${PLACEHOLDER}" "$PRE"
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
