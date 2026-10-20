@@ -198,7 +198,7 @@ an API key.
   fitness guarantee.
 - A **single-tenant** gateway: one wallet, one session pool. Any Prompt or
   ephemeral API key can open sessions and **escrow / lock MOR** from that
-  wallet. Treat every inference key as spend authority on this box.
+  wallet. Treat every inference key as authority to lock this wallet's MOR.
 - Admin login and the Master key can reach `/admin/*` and `/node/*` (full
   proxy-router power). Protect them like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
@@ -282,6 +282,7 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 - Same shape clients already know: `POST /v1/chat/completions`, embeddings,
   `GET /v1/models`, Bearer `sk-…` keys
 - Sessions open and reuse automatically (model name → on-chain session)
+- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a dedicated wallet ([details](docs/06-developers.md#sessions-across-restarts))
 - Admin GUI at `/gui` — balances, keys, Probe, usage
 - You pay providers in MOR from the wallet you fund — no multi-tenant credits
 
@@ -296,7 +297,7 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill Encrypted Secrets (block below) — **six keys only** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
+| **3. Secrets** | Fill Encrypted Secrets (block below) — **operator fillables** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
 | **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
 | **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
 | **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
@@ -316,7 +317,7 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
 Form stays **six** fillables. Tunables change via compose/code, **not** Encrypted Secrets:
-- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
@@ -332,7 +333,7 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 |------|---------|
 | **1. DNS / ports** | Point A/AAAA at the box; open **80** and **443**. |
 | **2. Compose** | Download **`docker-compose.generic.deployed.yml`** (+ `env.generic.example` → `.env`) from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the six fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
+| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the operator fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
 | **4. Deploy** | `docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d` (Caddy + LE). |
 | **5. GUI → fund → Probe** | Open `https://$PUBLIC_HOST/gui/` → fund ETH+MOR on Base → Probe → Prompt key at `/v1`. |
 
@@ -348,7 +349,7 @@ Same image pair; **no** Railway-specific release compose yet — use the in-repo
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Pin `ghcr.io/morpheusais/uplink` (+ Lumerin) to release digests — not bare `:latest`. |
-| **3. Secrets** | Set the six fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
+| **3. Secrets** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
 | **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
 
@@ -379,8 +380,9 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
 
 - **Not the hosted APIGW.** No Morpheus credits account, no shared pool with
   strangers. One wallet, one gateway, your ops.
-- **Any Prompt / ephemeral key can lock MOR** from that wallet. Treat keys like
-  spend authority; keep Master off shared machines.
+- **Any Prompt / ephemeral key can lock MOR** from that wallet as session
+  stake (returned, held at most until the next UTC day). Keep Master off
+  shared machines.
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
@@ -569,7 +571,7 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
   `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
   `HOUSEKEEPING=true`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
-  `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`,
+  `DATA_DIR`, `USAGE_PRUNE_DAYS`,
   `CLOSE_SESSIONS_ON_EXIT`) are Uplink process env too. Diamond /
   `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env`; godotenv -- process env wins):
@@ -632,7 +634,7 @@ Product rule: **form stays six**; tunables change via compose/code, not Encrypte
 | Bucket | Where | Vars |
 |--------|-------|------|
 | **Minimum to run** | Operator fillables everywhere | `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, `WEB_PUBLIC_URL` |
-| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT` |
+| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT` |
 | **Router tunable / additional** | proxy-router only (`router_network_env`; godotenv -- process env wins) | `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `TCP` / `ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not** Uplink operator knobs. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
@@ -644,13 +646,24 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 | Var | Used by | Notes |
 |-----|---------|--------|
-| `WALLET_PRIVATE_KEY` | Router (+ Uplink reclaim) | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. |
+| `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
 | `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
-| `COOKIE_CONTENT` | Router + Uplink | `user:password` Basic auth for the router API. Same value in both containers. |
+| `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
 | `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
 | `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt (platform-specific; not one of the six). |
+
+</details>
+
+<details>
+<summary><strong>Session stake (locks, not spends)</strong></summary>
+
+A session stake is locked while the session runs and is returned to this
+wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink
+only opens staking-mode sessions (`directPayment` is always false). Use a
+dedicated wallet: the boot reconcile and a graceful stop act on every open
+session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
 
 </details>
 
@@ -734,6 +747,11 @@ One topic at a time. You do not need every section on day one.
 - URL: `https://<your-host>/gui/`
 - User: `admin`
 - Password: `ADMIN_PASSWORD`
+- Two steps when 2FA is enrolled: password first, then the 6-digit code (or
+  a recovery code). Wrong password and missing code get the same answer, so
+  the page never reveals whether 2FA is enrolled; lockout and audit apply to
+  both steps.
+- Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
 
 ---
 
@@ -771,10 +789,14 @@ Then the clock:
 
 | Bucket | Meaning |
 |--------|---------|
-| **Wallet** | Spendable MOR |
+| **Wallet** | Liquid MOR in the wallet |
 | **Active** | Open session stake |
 | **On hold** | Closed/expired stake still daylocked |
 | **To claim** | Daylock done — reclaim to Wallet |
+
+**Session stake (locks, not spends).** Stake is locked while a session runs
+and returned to this wallet, held at most until the next UTC day. See
+[02-bootstrap](02-bootstrap.md) for the full wording.
 
 **Practical tip:** if you only need a short burst, close the session when you are done so unused duration returns immediately as liquid. If you leave sessions open until they expire, plan float for the **full** stake until the next reclaim cycle.
 
@@ -784,7 +806,16 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 ## Sessions & Usage
 
-- Open sessions rehydrate from chain after restart (still-valid ones are reused).
+- On boot Uplink lists the open sessions before opening any: still-valid
+  ones are reused (one per model), expired and duplicate ones are closed so
+  their stake is returned, and sessions for models not in the catalog are
+  left to expire. The Status tab shows the last boot check and its counts.
+  A graceful `docker stop` closes every open session on the wallet before
+  Uplink exits, including sessions for models not in the catalog and, on a
+  shared wallet, the other client's sessions; the stake is returned (a
+  lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
+  dedicated wallet: the boot check and the stop act on every session of
+  the wallet.
 - **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
 
 ---
@@ -964,8 +995,10 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
-GUI login is Basic auth (`admin` + `ADMIN_PASSWORD`). The Master key exists so
-automation can hit admin APIs without that password.
+GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
+code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
+is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
+token only when `MASTER_KEY_ADMIN=true` (default off).
 
 ### Soft revoke (tombstone)
 
@@ -1052,9 +1085,9 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 
 | Var | Required | Purpose |
 |---|---|---|
-| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet (router + Uplink reclaim) |
+| `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet, **router only** (Uplink holds no key; reclaim runs via the router API) |
 | `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
-| `COOKIE_CONTENT` | yes | Router basic auth `user:pass` (`ROUTER_AUTH` fallback locally) |
+| `COOKIE_CONTENT` | yes | Router `user:pass` (proxy-router + Uplink). Uplink reads `ROUTER_AUTH` first, then `COOKIE_CONTENT` |
 | `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
 | `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
 | `WEB_PUBLIC_URL` | yes (deploy) | Public HTTPS origin |
@@ -1067,13 +1100,15 @@ Encrypted Secrets. Sources: `internal/config/config.go`, SecretVM
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | `true` | Provider failover at open |
-| `HOUSEKEEPING` | on when wallet key present | Post-midnight stake reclaim |
+| `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |
 | `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
-| `SESSION_DIRECT_PAYMENT` | `false` | Direct payment vs stake |
-| `CLOSE_SESSIONS_ON_EXIT` | `true` | Close pooled sessions on shutdown |
+| `SESSION_DIRECT_PAYMENT` | ignored | Removed: sessions are always staking-mode (`directPayment:false`); setting `true` only logs a warning |
+| `CLOSE_SESSIONS_ON_EXIT` | `true` | On a graceful stop, close every open session on the wallet (as of the last scan, including uncatalogued models and other clients' sessions); `false` leaves them for the next boot reconcile |
+| `UPLINK_RECONCILE_GATE_SECONDS` | `60` | Boot reconcile: how long session opens wait for the first session list |
+| `UPLINK_RECONCILE_RETRY_SECONDS` | `30` | Boot reconcile: background retry interval after that |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are
 **not** Uplink operator knobs.
@@ -1095,6 +1130,117 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 | `MOR_TOKEN_ADDRESS` | MOR ERC-20 |
 
 ---
+
+## Router access and restart safety
+
+- Uplink calls proxy-router over the internal network with the router's
+  `COOKIE_CONTENT` (or `ROUTER_AUTH`). The router port is never published.
+- The router image is `FROM scratch` (no shell, no wget), so it has no
+  container healthcheck and `depends_on` is start order only. Uplink retries
+  the router itself; `/admin/status` reports `routerAuth` (a 401 means the
+  cookies do not match).
+- Uplink never asks for direct-payment sessions: the open-session body pins
+  `directPayment:false`, and the router client refuses to send any body
+  that sets it (`scripts/check-no-direct-payment.sh` guards the source).
+
+Tests: `scripts/check-no-direct-payment.sh`, `scripts/check-compose-policy.sh`,
+the mock-router e2e `scripts/e2e-mock-router.sh` (session logic) and the
+real-router smoke `scripts/e2e-real-router.sh` (pinned v7.15.0 image).
+
+### Sessions across restarts
+
+**Stop.** The `uplink` service has no `init: true`: the entrypoint `exec`s
+`su-exec uplink /usr/local/bin/uplink`, so the app is PID 1 and receives
+`docker stop`'s SIGTERM itself (no CAP_KILL needed). It stops accepting
+requests, lets in-flight ones finish for up to 30 s, then closes sessions
+(`CLOSE_SESSIONS_ON_EXIT`, default `true`). The whole stop is bounded to
+40 s from SIGTERM, with at most 8 s per close; a session not closed in time
+is logged as "left for boot reconcile". `stop_grace_period: 45s` leaves
+room for this. CI checks every template for it
+(`check-compose-policy.sh`, rule S).
+
+A graceful `docker stop` closes every open session on the wallet, as of
+Uplink's most recent session scan: its own pooled sessions, sessions for
+models that are not in the catalog, and, on a shared wallet, the other
+client's sessions. Closing returns the stake (on hold at most until the next
+UTC day); it is a lock, not a loss, and costs gas per close. Set
+`CLOSE_SESSIONS_ON_EXIT=false` to opt out: sessions then stay open across a
+stop and the next boot reconcile adopts or closes them.
+
+**Boot reconcile.** A close on stop is best-effort; a crash, `docker kill`
+or a VM wipe leaves sessions open with their stake locked. So on every boot,
+before any request may open a session:
+
+- *When:* right after start-up. The first step is `GET /wallet` on the
+  router, so the reconcile only proceeds once the router answers. It then lists the wallet's open sessions.
+- *Scope: the wallet. A dedicated wallet is required.* The router does not
+  report which client opened a session, so the
+  reconcile acts on every open session of the wallet. Recording the ids
+  Uplink opened in `DATA_DIR` was considered and not used: a VM wipe or a
+  lost volume, the case the reconcile exists for, would lose that record
+  too and leave every session orphaned. If the wallet is shared with
+  another client, that client's expired sessions, and its second session
+  for a model Uplink also adopts, may be closed at boot, and a graceful
+  `docker stop` closes all of its open sessions (see *Stop* above).
+  Closing returns the stake (on hold at most until the next UTC day) and
+  costs gas; it is a liveness issue for that client, not a loss.
+- *Listing window:* the list is read newest first and stops after three
+  pages of only closed sessions. A very old open session beyond that is
+  neither adopted nor closed by the reconcile; it expires on its own.
+- *Adopted:* the latest-ending session per model that is not closed and
+  has more than the pool's 90 s expiry buffer left. Never extended; no
+  session is opened by the reconcile.
+- *Closed:* only `expired` (past its end or inside the buffer) and
+  `duplicate` (another usable session for a model that already has an
+  adopted one).
+- *Never closed:* a session whose model is not in the catalog is skipped
+  (counted as `skipped`) and left to expire. Model ids are compared
+  case-insensitively, and the pool keys sessions by the lowercase model
+  id, so a session adopted under a differently cased id is reused. An empty catalog (`{"models":[]}` or `{}`) or one
+  that cannot be read is treated as unknown: nothing is skipped for it and
+  usable sessions are adopted.
+- *Cap:* at most 20 closes per pass (`MaxBootCloses`), expired first. The
+  rest are counted as `deferred` and a `session_reconcile_cap` audit event
+  is written. Deferred expired sessions are closed by later scans; deferred
+  duplicates are left to expire.
+- *Gate:* session opens wait until the list succeeded and adopt/close is
+  decided, so a request that arrives during boot uses the adopted session
+  instead of opening a second one. The gate is then released and the
+  closes run in the background, so a slow router close never holds
+  requests. Status polls during the reconcile show the previous scan.
+- *List failure or partial list:* an error on any page, or a row that
+  cannot be verified (no id, no model, no end time), means no closes and
+  no adopts for that attempt. It is retried with backoff (2 s doubling,
+  15 s cap) for up to 60 s (`UPLINK_RECONCILE_GATE_SECONDS`). After that
+  the gate opens, but Uplink does not open a new session until some session
+  list succeeds (the request gets an error instead), so it never opens next
+  to a session it could not see. The reconcile keeps retrying every 30 s
+  (`UPLINK_RECONCILE_RETRY_SECONDS`); such a late pass closes expired
+  sessions only, because the pool may already be serving a "duplicate".
+- *Failed closes:* counted as `failed`. An expired session whose close
+  failed, or that the cap deferred, is closed by a later scan
+  (housekeeping and the pool close expired sessions they see), with the
+  same `session_reconcile_close` audit event marked `"source":"rescan"`;
+  a duplicate whose close failed is left to expire.
+- *Idempotent:* re-running it adopts the same sessions and closes nothing
+  new.
+- *Audit:* one `session_reconcile_adopt` event per adopted session, one
+  `session_reconcile_close` event per close (reason `expired` or
+  `duplicate`, result, first 10 characters of the session id), a
+  `session_reconcile_cap` event when the cap is hit, and one
+  `session_reconcile` summary line per pass (`open`, `adopted`, `closed`,
+  `failed`, `skipped`, `deferred`, `attempts`, `late`, and `catalog`, the
+  number of catalog models, `-1` when unknown); a
+  `"result":"deferred"` line when the gate opened before a list succeeded.
+  No secrets; no full session ids.
+- *Visibility:* `/admin/status` (`sessionReconcile`), the GUI Status tab,
+  and the status file `DATA_DIR/session-reconcile.json` (uplink, 0640,
+  written atomically) show the state (`reconciling`, `closing`, `ok`,
+  `partial`, `deferred`, `retrying`), the time of the last pass, its
+  counts, and whether new opens are held.
+
+Session ids in Uplink's other log lines are shortened to the first 10
+characters as well.
 
 ## CI/CD and versioning
 
@@ -1147,6 +1293,13 @@ Concept sketch (optional): [`.ai-docs/UPLINK_CONCEPT.md`](../.ai-docs/UPLINK_CON
 
 [← Updates](05-updates.md) · [Guide home](README.md)
 
+## Quiet boot / log forwarding
+
+Uplink does not print config or secrets at process start (listen line only).
+Forward container stdout/stderr with your host log driver (json-file rotation
+is set in compose) or a SIEM agent. Do not scrape environment variables from
+the runtime.
+
 
 ================================================================
 
@@ -1174,14 +1327,14 @@ The operator guide is split into short chapters so you can open one topic at a t
 # SecretVM overlay
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
-certs; Encrypted Secrets supply only the six operator fillables (wallet /
+certs; Encrypted Secrets supply only the operator fillables (wallet /
 RPC / cookie / admin / seed / WEB_PUBLIC_URL). Form stays six; tunables
 change via compose/code, not Encrypted Secrets:
 
 - **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
   ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
-  SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT). Diamond / ETH_NODE_CHAIN_ID
+  CLOSE_SESSIONS_ON_EXIT). Diamond / ETH_NODE_CHAIN_ID
   are not Uplink operator knobs.
 - **Router** (`router_network_env`; godotenv -- process env wins):
   PROXY_STORE_CHAT_CONTEXT, PROXY_FORWARD_CHAT_CONTEXT,
@@ -1194,6 +1347,15 @@ Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
 Prefer digest-pinned release assets:
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
+## Session stake (locks, not spends)
+
+Uplink talks to proxy-router over the internal network with the router's
+`COOKIE_CONTENT`; the router port is never published. A session stake is
+locked while the session runs and is returned to this wallet, held at most
+until the next UTC day. Sessions cost ETH gas. Uplink only opens
+staking-mode sessions (`directPayment` is always false). Use a dedicated
+wallet.
+
 ## H3 - single replica
 
 Wallet-bearing `proxy-router` must run as **one replica**. Multi-replica is
@@ -1201,7 +1363,7 @@ unsupported on stock 7.11 (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup or send journal/lease headers.
 Rely on native router expiry + Uplink housekeeping. Sessions can stay locked
@@ -1222,6 +1384,13 @@ Docker provider or Traefik service labels. Do not invent Traefik flags that
 break TEE TLS, and do not put the socket back. Buffering class for
 streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
 
+## Edge allowlist / rate limit
+
+Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
+(`/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck`; else 404 via low-priority
+deny router), and an average/burst rate limit middleware on the allowlist
+router. Router `:8082` is not published. Traefik still gets zero secrets.
+
 
 ================================================================
 
@@ -1237,17 +1406,26 @@ https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## Var ownership
 
-Form/`.env` stays the six operator fillables (+ `PUBLIC_HOST` for Caddy).
+Form/`.env` stays the operator fillables (+ `PUBLIC_HOST` for Caddy).
 Tunables change via compose/code:
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
-  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router** (proxy-router process env): PROXY_STORE_CHAT_CONTEXT,
   PROXY_FORWARD_CHAT_CONTEXT, LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID,
   ETH_NODE_USE_SUBSCRIPTIONS, BLOCKSCOUT_API_URL, DIAMOND_CONTRACT_ADDRESS,
   MOR_TOKEN_ADDRESS. Never describe router PROXY_*/LOG_LEVEL_* as Uplink knobs.
+
+## Session stake (locks, not spends)
+
+Uplink talks to proxy-router over the internal network with the router's
+`COOKIE_CONTENT`; the router port is never published. A session stake is
+locked while the session runs and is returned to this wallet, held at most
+until the next UTC day. Sessions cost ETH gas. Uplink only opens
+staking-mode sessions (`directPayment` is always false). Use a dedicated
+wallet.
 
 ## H3 - single replica
 
@@ -1256,7 +1434,7 @@ unsupported on stock 7.11.
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.15.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked
@@ -1271,6 +1449,14 @@ honored; live acceptance pending**). Not TEE privacy.
 
 Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
 
+## Edge allowlist / rate limit
+
+Caddy allowlists `/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck` (else 404) and
+writes JSON access logs to stdout. Stock `caddy:*-alpine` has no rate_limit
+module; put a reverse-proxy / WAF rate limit in front, or rebuild Caddy with
+`github.com/mholt/caddy-ratelimit` if you need in-process limits. Router
+`:8082` stays off the public edge.
+
 
 ================================================================
 
@@ -1280,7 +1466,7 @@ Caddy `reverse_proxy` uses `flush_interval -1` so chat SSE is not buffered.
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.14.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.15.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -1298,7 +1484,7 @@ Production path: download digest-pinned release assets from
 (`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
 this scaffold when you cut a real deploy. Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4`
 
 ## Services
 
@@ -1310,7 +1496,7 @@ See `docker-compose.yml` and `railway.toml` (non-secret knobs only).
 ## H4 - operator fillables (Railway Secrets / vars)
 
 Never put these in `railway.toml`, image labels, build args, or committed
-compose values. Same six as SecretVM Encrypted Secrets / generic `.env`:
+compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 
 - `WALLET_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
@@ -1324,12 +1510,21 @@ Keep ownership separate:
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
-  DATA_DIR, USAGE_PRUNE_DAYS, SESSION_DIRECT_PAYMENT, CLOSE_SESSIONS_ON_EXIT.
+  DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router**: PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR (see L1 below).
   Never put router PROXY_*/LOG_LEVEL_* into Uplink bake docs.
 
 No wallet material in logs or (future) journals.
+
+## Session stake (locks, not spends)
+
+Uplink talks to proxy-router over the internal network with the router's
+`COOKIE_CONTENT`; the router port is never published. A session stake is
+locked while the session runs and is returned to this wallet, held at most
+until the next UTC day. Sessions cost ETH gas. Uplink only opens
+staking-mode sessions (`directPayment` is always false). Use a dedicated
+wallet.
 
 ## H3 - single replica (wallet-bearing proxy-router)
 
@@ -1339,7 +1534,7 @@ cross-replica wallet lock on stock 7.11).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.14.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.15.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -1361,7 +1556,7 @@ Compose sets on `proxy-router`:
 - `LOG_LEVEL_APP=warn` / `LOG_LEVEL_TCP=warn` / `LOG_LEVEL_ETH_RPC=warn`
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.14.0 digest until verified.
+privacy on the pinned v7.15.0 digest until verified.
 
 ## M1 / keep list
 
@@ -1382,4 +1577,17 @@ privacy on the pinned v7.14.0 digest until verified.
 
 **Done** when GUI login works and Probe returns a completion. Bootstrap summary:
 [docs/02-bootstrap.md -- First start -- Railway](../../docs/02-bootstrap.md#first-start--railway).
+
+## Platform edge limits (Railway)
+
+Railway terminates TLS and exposes only the uplink service port you bind
+(`8080`). There is no Traefik/Caddy file provider on this path, so Uplink
+cannot enforce path allowlists or login rate limits at the platform edge.
+
+What Railway can / cannot do for this overlay:
+
+- Can: private networking between uplink and proxy-router; single public port.
+- Cannot (from this compose): Traefik-style path allowlist, access-log middleware,
+  or router-login rate limit. Rely on Railway dashboard networking + Uplink
+  admin lockout (application layer). Do not publish proxy-router `:8082`.
 

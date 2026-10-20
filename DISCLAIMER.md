@@ -27,7 +27,7 @@ an API key.
   fitness guarantee.
 - A **single-tenant** gateway: one wallet, one session pool. Any Prompt or
   ephemeral API key can open sessions and **escrow / lock MOR** from that
-  wallet. Treat every inference key as spend authority on this box.
+  wallet. Treat every inference key as authority to lock this wallet's MOR.
 - Admin login and the Master key can reach `/admin/*` and `/node/*` (full
   proxy-router power). Protect them like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose

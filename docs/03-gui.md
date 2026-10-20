@@ -11,6 +11,11 @@ One topic at a time. You do not need every section on day one.
 - URL: `https://<your-host>/gui/`
 - User: `admin`
 - Password: `ADMIN_PASSWORD`
+- Two steps when 2FA is enrolled: password first, then the 6-digit code (or
+  a recovery code). Wrong password and missing code get the same answer, so
+  the page never reveals whether 2FA is enrolled; lockout and audit apply to
+  both steps.
+- Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
 
 ---
 
@@ -48,10 +53,14 @@ Then the clock:
 
 | Bucket | Meaning |
 |--------|---------|
-| **Wallet** | Spendable MOR |
+| **Wallet** | Liquid MOR in the wallet |
 | **Active** | Open session stake |
 | **On hold** | Closed/expired stake still daylocked |
 | **To claim** | Daylock done — reclaim to Wallet |
+
+**Session stake (locks, not spends).** Stake is locked while a session runs
+and returned to this wallet, held at most until the next UTC day. See
+[02-bootstrap](02-bootstrap.md) for the full wording.
 
 **Practical tip:** if you only need a short burst, close the session when you are done so unused duration returns immediately as liquid. If you leave sessions open until they expire, plan float for the **full** stake until the next reclaim cycle.
 
@@ -61,7 +70,16 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 
 ## Sessions & Usage
 
-- Open sessions rehydrate from chain after restart (still-valid ones are reused).
+- On boot Uplink lists the open sessions before opening any: still-valid
+  ones are reused (one per model), expired and duplicate ones are closed so
+  their stake is returned, and sessions for models not in the catalog are
+  left to expire. The Status tab shows the last boot check and its counts.
+  A graceful `docker stop` closes every open session on the wallet before
+  Uplink exits, including sessions for models not in the catalog and, on a
+  shared wallet, the other client's sessions; the stake is returned (a
+  lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
+  dedicated wallet: the boot check and the stop act on every session of
+  the wallet.
 - **Usage** counters are local scratchpad — they reset on redeploy; funds do not.
 
 ---

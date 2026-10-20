@@ -80,7 +80,7 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
   `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
   `HOUSEKEEPING=true`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
-  `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`,
+  `DATA_DIR`, `USAGE_PRUNE_DAYS`,
   `CLOSE_SESSIONS_ON_EXIT`) are Uplink process env too. Diamond /
   `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env`; godotenv -- process env wins):
@@ -143,7 +143,7 @@ Product rule: **form stays six**; tunables change via compose/code, not Encrypte
 | Bucket | Where | Vars |
 |--------|-------|------|
 | **Minimum to run** | Operator fillables everywhere | `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, `WEB_PUBLIC_URL` |
-| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT` |
+| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT` |
 | **Router tunable / additional** | proxy-router only (`router_network_env`; godotenv -- process env wins) | `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `TCP` / `ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not** Uplink operator knobs. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
@@ -155,13 +155,24 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 | Var | Used by | Notes |
 |-----|---------|--------|
-| `WALLET_PRIVATE_KEY` | Router (+ Uplink reclaim) | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. |
+| `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
 | `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC. |
-| `COOKIE_CONTENT` | Router + Uplink | `user:password` Basic auth for the router API. Same value in both containers. |
+| `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys. |
 | `WEB_PUBLIC_URL` | Router (+ Uplink) | Public HTTPS origin (`https://….vm.scrtlabs.com`, `https://$PUBLIC_HOST`, or Railway URL). |
 | `PUBLIC_HOST` | Caddy (generic only) | DNS name for Let’s Encrypt (platform-specific; not one of the six). |
+
+</details>
+
+<details>
+<summary><strong>Session stake (locks, not spends)</strong></summary>
+
+A session stake is locked while the session runs and is returned to this
+wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink
+only opens staking-mode sessions (`directPayment` is always false). Use a
+dedicated wallet: the boot reconcile and a graceful stop act on every open
+session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
 
 </details>
 

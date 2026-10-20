@@ -35,6 +35,7 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 - Same shape clients already know: `POST /v1/chat/completions`, embeddings,
   `GET /v1/models`, Bearer `sk-…` keys
 - Sessions open and reuse automatically (model name → on-chain session)
+- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a dedicated wallet ([details](docs/06-developers.md#sessions-across-restarts))
 - Admin GUI at `/gui` — balances, keys, Probe, usage
 - You pay providers in MOR from the wallet you fund — no multi-tenant credits
 
@@ -49,7 +50,7 @@ the release compose → Encrypted Secrets → fund → Probe → point a client 
 |------|---------|
 | **1. Box** | Create a SecretVM that accepts Docker Compose + Encrypted Secrets. |
 | **2. Compose** | Paste **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill Encrypted Secrets (block below) — **six keys only** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
+| **3. Secrets** | Fill Encrypted Secrets (block below) — **operator fillables** (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`). |
 | **4. Deploy** | Start the VM; wait until Uplink and the router are healthy. |
 | **5. GUI** | Open `https://<host>/gui/` → `admin` / your `ADMIN_PASSWORD`. |
 | **6. Fund** | On **Status**, copy the wallet → send a little **ETH** + **MOR** on Base. |
@@ -69,7 +70,7 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 
 `openssl rand -hex 32` for the seed. Prefer a **dedicated** consumer wallet.
 Form stays **six** fillables. Tunables change via compose/code, **not** Encrypted Secrets:
-- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `SESSION_DIRECT_PAYMENT`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+- **Uplink** (`uplink_bake_env` / Uplink process): `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT`. Diamond / `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
 - **Router** (`router_network_env` / proxy-router only; godotenv -- process env wins): `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP`/`TCP`/`ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.
 Full walkthrough (and plain Docker VPS): [docs/02-bootstrap.md](docs/02-bootstrap.md).
 
@@ -85,7 +86,7 @@ Same GHCR images (`ghcr.io/morpheusais/uplink` from [v1.0.13 / latest](https://g
 |------|---------|
 | **1. DNS / ports** | Point A/AAAA at the box; open **80** and **443**. |
 | **2. Compose** | Download **`docker-compose.generic.deployed.yml`** (+ `env.generic.example` → `.env`) from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest). |
-| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the six fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
+| **3. Secrets** | Fill `.env`: `PUBLIC_HOST` + the operator fillables (wallet / RPC / cookie / admin / seed / `WEB_PUBLIC_URL`) — never commit. |
 | **4. Deploy** | `docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d` (Caddy + LE). |
 | **5. GUI → fund → Probe** | Open `https://$PUBLIC_HOST/gui/` → fund ETH+MOR on Base → Probe → Prompt key at `/v1`. |
 
@@ -101,7 +102,7 @@ Same image pair; **no** Railway-specific release compose yet — use the in-repo
 |------|---------|
 | **1. Project** | Create Railway project: uplink + proxy-router on a private network. |
 | **2. Images** | Pin `ghcr.io/morpheusais/uplink` (+ Lumerin) to release digests — not bare `:latest`. |
-| **3. Secrets** | Set the six fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
+| **3. Secrets** | Set the operator fillables (wallet / admin / seed / cookie / RPC / `WEB_PUBLIC_URL`) as **Railway Secrets** / vars. |
 | **4. Replicas** | `proxy-router` replicas = **1** (wallet-bearing). |
 | **5. Edge** | Public HTTPS → uplink `:8080` only; open `/gui/` → fund → Probe → `/v1`. |
 
@@ -132,8 +133,9 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
 
 - **Not the hosted APIGW.** No Morpheus credits account, no shared pool with
   strangers. One wallet, one gateway, your ops.
-- **Any Prompt / ephemeral key can lock MOR** from that wallet. Treat keys like
-  spend authority; keep Master off shared machines.
+- **Any Prompt / ephemeral key can lock MOR** from that wallet as session
+  stake (returned, held at most until the next UTC day). Keep Master off
+  shared machines.
 - **Built-in keys survive a wipe** if you keep the same `API_KEY_SEED`.
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
