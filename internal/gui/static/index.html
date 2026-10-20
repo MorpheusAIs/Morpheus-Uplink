@@ -360,7 +360,46 @@
   }
   .connect-hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
   .connect-hint code { font-size: 11px; }
-  #tab-status .mor-grid { margin-top: 14px; }
+  #tab-status .mor-grid { margin-top: 4px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #tab-status .sys-line .dot { font-size: 12px; margin-right: 6px; }
+  #tab-status .sys-line .dot.ok { color: var(--ok); }
+  #tab-status .sys-line .dot.bad { color: var(--bad); }
+  .tiles-head { display: flex; justify-content: flex-end; margin-top: 10px; min-height: 18px; }
+  .tile {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px; min-width: 0;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 6px; }
+  .tile .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; word-break: break-all; }
+  .tile .v small { font-size: 13px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+  .tile .sub { font-size: 12px; color: var(--muted); min-height: 1em; }
+  .tile .sub.msg-err { color: var(--warn, #c90); }
+  .tile button { align-self: flex-start; font-size: 12px; padding: 6px 12px; margin-top: 4px; }
+  .tip {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--muted); cursor: help; font-size: 13px; line-height: 1; text-transform: none;
+    letter-spacing: 0; font-weight: 400; border-radius: 50%; outline: none;
+  }
+  .tip:hover, .tip:focus-visible { color: var(--green-light); }
+  .tip:focus-visible { box-shadow: 0 0 0 2px rgba(32, 220, 142, 0.45); }
+  .tip[data-tip]:hover::after, .tip[data-tip]:focus::after {
+    content: attr(data-tip); position: absolute; z-index: 20; top: calc(100% + 6px); right: -8px;
+    width: max-content; max-width: 280px; white-space: normal; text-align: left;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.4;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  }
+  details.fold > summary {
+    cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--green); list-style-position: inside;
+  }
+  details.fold.low > summary { color: #fbbf24; }
+  .sep-dot { color: var(--border); padding: 0 6px; }
+  #fundSection, #supportSection { padding-top: 12px; padding-bottom: 12px; }
+  @media (max-width: 640px) {
+    #tab-status .mor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
 
   .disk-card { margin-bottom: 0; }
   .disk-banner {
@@ -432,7 +471,6 @@
     white-space: pre-wrap;
   }
 
-  #tab-status .fund-callout { margin-top: 16px; }
   #tab-status .support-actions { margin-top: 4px; }
   /* Keep model picker compact — full-bleed dropdowns get messy on desktop. */
   .connect-model {
@@ -850,14 +888,23 @@
   <main>
     <!-- STATUS -->
     <div class="panel active" id="tab-status">
+      <!-- 1. Status line + 2. headline numbers. Copy lives in UI_COPY (script). -->
+      <section id="statusOverview" aria-label="Status">
+        <div class="sys-line" id="stats" role="status"></div>
+        <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
+        <div class="tiles-head">
+          <span class="tip" tabindex="0" data-tip-key="tilesShared">&#9432;</span>
+        </div>
+        <div class="mor-grid" id="morBuckets"></div>
+        <p class="note hidden" id="morNote" style="margin-top:8px"></p>
+      </section>
+
+      <!-- 3. Connect a client -->
       <section id="connectClient">
-        <h2>Connect a client</h2>
-        <p class="note" style="margin:0 0 14px">
-          Three things for Cursor, SDKs, or any OpenAI-compatible harness: base URL, key, model name.
-        </p>
+        <h2 data-copy="connectTitle">Connect a client</h2>
         <div class="connect-grid">
           <div class="connect-field">
-            <label for="connectBaseUrl">Base URL</label>
+            <label for="connectBaseUrl" data-copy="baseUrlLabel">Base URL</label>
             <div class="secret-row">
               <code id="connectBaseUrl">…</code>
               <button type="button" class="icon" title="Copy base URL" onclick="copyConnectBaseUrl(this)" aria-label="Copy base URL">
@@ -866,7 +913,8 @@
             </div>
           </div>
           <div class="connect-field">
-            <label for="connectKeySelect">API key</label>
+            <label for="connectKeySelect"><span data-copy="apiKeyLabel">API key</span>
+              <span class="tip" tabindex="0" id="connectKeyTip" data-tip-key="keyTipPrompt">&#9432;</span></label>
             <div class="secret-row">
               <select id="connectKeySelect" onchange="onConnectKeyChange()"></select>
               <button type="button" class="icon" title="Copy API key" onclick="copyConnectKey(this)" aria-label="Copy API key">
@@ -875,88 +923,78 @@
             </div>
           </div>
           <div class="connect-field connect-model">
-            <label for="connectModelSelect">Model <span id="connectModelDurHint" style="font-weight:500;letter-spacing:0;text-transform:none;color:var(--muted)"></span></label>
+            <label for="connectModelSelect"><span data-copy="modelLabel">Model</span>
+              <span class="tip" tabindex="0" id="connectModelDurHint">&#9432;</span></label>
             <div class="secret-row">
-              <select id="connectModelSelect" title="Estimated lock uses deploy default session length">
+              <select id="connectModelSelect">
                 <option value="">Loading catalog…</option>
               </select>
-              <button type="button" class="icon" title="Copy model name" onclick="copyConnectModel(this)" aria-label="Copy model name">
+              <button type="button" class="icon" title="Copy model ID" onclick="copyConnectModel(this)" aria-label="Copy model ID">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
               </button>
             </div>
           </div>
         </div>
-        <p class="connect-hint" id="connectKeyHint">
-          Prompt key is inference-only (recommended). Model list shows ~MOR lock for the deploy default session.
-        </p>
       </section>
 
-      <section>
-        <h2>Status &amp; wallet</h2>
-        <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
-        <div class="sys-line" id="stats"></div>
-        <div class="mor-grid" id="morBuckets"></div>
-        <p class="note" id="morNote" style="margin-top:8px"></p>
-        <details class="note" id="stakeHelp" style="margin-top:4px">
-          <summary>Session stake: locks, not spends</summary>
-          <p style="margin:4px 0">A session stake is locked while the session runs and is returned to this wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink only opens staking-mode sessions (never direct payment).</p>
-          <p style="margin:4px 0"><strong>Stopping Uplink.</strong> A graceful <code>docker stop</code> closes every open session on this wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions. The stake is returned (a lock, not a loss). <code>CLOSE_SESSIONS_ON_EXIT=false</code> opts out. Use a dedicated wallet.</p>
-        </details>
-        <p class="note" id="sessionReconcileLine" style="margin-top:4px"></p>
-        <div class="callout fund-callout">
-          <strong>Need more MOR?</strong>
-          <p class="note" style="margin:4px 0 0">
-            Fund this consumer address from MetaMask / Rabby on Base — swap ETH → MOR, then send MOR plus a little ETH for gas.
-          </p>
+      <!-- 4. Need more MOR? (collapsed unless the wallet is low) -->
+      <section id="fundSection">
+        <details id="fundDetails" class="fold">
+          <summary id="fundSummary" data-copy="fundSummary">Add MOR</summary>
+          <p class="note" style="margin:8px 0 0" data-copy="fundHow">Send MOR plus a little ETH for gas to this wallet on Base.</p>
           <div class="secret-row">
-            <span class="note" style="margin:0">Wallet:</span>
+            <span class="note" style="margin:0" data-copy="walletLabel">Wallet:</span>
             <code id="walletMasked">…</code>
             <span class="note" id="walletSourceNote" style="margin:0"></span>
             <button type="button" class="icon" title="Copy full address" onclick="copySecret('wallet', this)" aria-label="Copy wallet address">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
             </button>
+            <a class="btn ghost" href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
+               target="_blank" rel="noopener noreferrer" data-copy="fundUniswap">Get MOR on Uniswap</a>
           </div>
-          <div class="row" style="margin-top:12px">
-            <a class="btn" href="https://app.uniswap.org/swap?chain=base&amp;inputCurrency=ETH&amp;outputCurrency=0x7431ada8a591c955a994a21710752ef9b882b8e3"
-               target="_blank" rel="noopener noreferrer">Get MOR on Uniswap</a>
-          </div>
-        </div>
+        </details>
       </section>
 
-      <section>
-        <h2>Support</h2>
-        <p class="note" style="margin:0 0 12px">
-          Bundle exports versions, health, sessions, and reclaim status — no private keys.
-          Container logs: host <code>docker logs</code> or your VPS log panel.
-        </p>
-        <div class="disk-banner" id="diskWarnBannerSupport">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
-        <div class="disk-meters" id="diskMetersSupport"></div>
-        <div class="disk-actions" style="margin-bottom:12px">
-          <button type="button" class="ghost" onclick="pruneUsageHistory()">Clear older usage history</button>
-          <span class="note" id="diskPruneMsgSupport" style="margin:0"></span>
-        </div>
-        <div class="disk-host-hint" id="diskHostHintSupport">
-          <div class="callout warn">
-            <strong>Disk still full — reclaim Docker logs on host</strong>
-            <p class="note" style="margin:4px 0 0">
-              Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
-              <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
-            </p>
-            <pre># SecretVM
+      <!-- 5. Support (collapsed by default; opens itself on a disk warning) -->
+      <section id="supportSection">
+        <details id="supportDetails" class="fold">
+          <summary data-copy="supportSummary">Support</summary>
+          <div class="row support-actions" style="margin-top:10px">
+            <button class="ghost" type="button" onclick="downloadSupportBundle()" data-copy="supportBundle">Download support bundle</button>
+            <span class="tip" tabindex="0" data-tip-key="supportBundleTip">&#9432;</span>
+            <span class="note" id="supportMsg" style="margin:0"></span>
+          </div>
+          <p class="note" style="margin:10px 0 0">
+            <span id="sessionReconcileLine"></span>
+          </p>
+          <p class="note" style="margin:6px 0 0">
+            <span data-copy="supportStop">Stopping Uplink closes open sessions on this wallet.</span>
+            <span class="tip" tabindex="0" data-tip-key="supportStopTip">&#9432;</span>
+            <span class="sep-dot">·</span>
+            <span data-copy="supportRouterApi">Router admin API</span>
+            <span class="tip" tabindex="0" data-tip-key="supportRouterApiTip">&#9432;</span>
+          </p>
+          <div class="disk-banner" id="diskWarnBannerSupport" style="margin-top:12px">Disk space is low — free space below 2 GiB or 15% on a watched path.</div>
+          <div class="disk-meters" id="diskMetersSupport" style="margin-top:12px"></div>
+          <div class="disk-actions">
+            <button type="button" class="ghost" onclick="pruneUsageHistory()">Clear older usage history</button>
+            <span class="note" id="diskPruneMsgSupport" style="margin:0"></span>
+          </div>
+          <div class="disk-host-hint" id="diskHostHintSupport">
+            <div class="callout warn">
+              <strong>Disk still full — reclaim Docker logs on host</strong>
+              <p class="note" style="margin:4px 0 0">
+                Uplink cannot remove Docker container logs. To free space from rotated/fat json-file logs,
+                <strong>recreate</strong> long-running containers (keeps volumes). Copy-paste on the host — never auto-run from the product:
+              </p>
+              <pre># SecretVM
 docker compose -f docker-compose.secretvm.deployed.yml up -d --force-recreate --no-deps uplink proxy-router traefik
 
 # Generic
 docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --no-deps caddy uplink proxy-router</pre>
+            </div>
           </div>
-        </div>
-        <div class="row support-actions">
-          <button class="ghost" type="button" onclick="downloadSupportBundle()">Download support bundle</button>
-          <span class="note" id="supportMsg" style="margin:0"></span>
-        </div>
-        <p class="note" style="margin-top:12px">
-          Raw node API (Swagger):
-          <a href="/node/swagger/index.html" target="_blank">/node/swagger/index.html</a>
-        </p>
+        </details>
       </section>
     </div>
 
@@ -978,7 +1016,27 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           </form>
         </div>
         <p class="note" id="enrollMsg" role="status" style="margin:0"></p>
-        <pre id="recoveryCodes" class="note" style="display:none;white-space:pre-wrap"></pre>
+        <div id="recoveryBox" class="callout hidden" style="margin-top:10px">
+          <strong data-copy="recoveryShownOnce">Recovery codes (shown once).</strong>
+          <pre id="recoveryCodes" class="note" style="white-space:pre-wrap;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px"></pre>
+          <div class="row">
+            <button type="button" class="ghost" onclick="copyRecoveryCodes()">Copy</button>
+            <button type="button" class="ghost" onclick="downloadRecoveryCodes()">Download .txt</button>
+            <button type="button" class="ghost" onclick="hideRecoveryCodes()">I saved them</button>
+          </div>
+        </div>
+        <form id="twoFactorManage" class="stack hidden" style="gap:8px;margin-top:12px" onsubmit="event.preventDefault()">
+          <p class="note" style="margin:0" data-copy="factorNeeded">Enter your password and a current authenticator code or a recovery code.</p>
+          <div class="row">
+            <input id="managePw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px">
+            <input id="manageCode" type="text" autocomplete="one-time-code" placeholder="123456 or recovery code" aria-label="Authenticator code or recovery code" style="flex:1;min-width:160px">
+          </div>
+          <div class="row">
+            <button type="button" class="ghost" onclick="regenerateRecoveryCodes()" data-copy="regenTitle">Regenerate recovery codes</button>
+            <button type="button" class="danger-ghost" onclick="resetTwoFactor()" data-copy="resetTitle">Reset 2FA</button>
+          </div>
+          <p class="note" id="manageMsg" role="status" style="margin:0"></p>
+        </form>
         <div class="row" style="margin-top:8px">
           <button class="ghost" type="button" onclick="logoutAllSessions()">Revoke all sessions</button>
           <button class="ghost" type="button" onclick="logout()">Log out</button>
@@ -1235,6 +1293,78 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 </div>
 
 <script>
+// ---- GUI copy -------------------------------------------------------------
+// Status page and 2FA text. Text only: a copy pass edits these strings and
+// nothing else. Functions take the values they print.
+const UI_COPY = {
+  // Status line
+  healthy: 'Healthy',
+  routerAuthFail: 'Router rejected Uplink\'s credential',
+  routerDown: 'Router not responding',
+  reconcileHeld: 'Session check retrying',
+  diskLow: 'Disk space low',
+  openSessions: (n) => n + ' open session' + (n === 1 ? '' : 's'),
+  uplinkVer: (v) => 'Uplink ' + v,
+  routerVer: (v) => 'Router ' + v,
+  // Headline numbers
+  tilesShared: 'Sessions lock MOR, they don\'t spend it. It always comes back to this wallet, by the next UTC day at the latest.',
+  tileWallet: 'Wallet',
+  tileWalletTip: 'MOR in this wallet, ready to use.',
+  tileActive: 'Active',
+  tileActiveTip: 'MOR locked in sessions that are open now.',
+  tileOnHold: 'On hold',
+  tileOnHoldTip: 'MOR from closed sessions. It comes back to Wallet after 00:00 UTC.',
+  onHoldBackBy: (t) => 'Back by ' + t,
+  tileClaim: 'To claim',
+  tileClaimTip: 'MOR you can reclaim now.',
+  reclaim: 'Reclaim',
+  reclaiming: 'Reclaiming…',
+  reclaimFailed: (m) => 'Reclaim failed: ' + m,
+  reclaimLastError: (m) => 'Last reclaim error: ' + m,
+  balancesUnavailable: 'Could not refresh on-hold / to-claim balances right now.',
+  // Connect a client
+  connectTitle: 'Connect a client',
+  baseUrlLabel: 'Base URL',
+  apiKeyLabel: 'API key',
+  modelLabel: 'Model',
+  keyTipPrompt: 'Prompt key: inference only (recommended). Ephemeral keys work the same; create more on the API Keys tab. The master key stays on the API Keys tab.',
+  keyTipEphemeral: 'Ephemeral key: inference only. Export it from API Keys if you need it after a redeploy.',
+  modelTip: (dur) => '~MOR lock · ' + dur + ' default. The copy button copies the full model ID.',
+  modelTipAuth: 'Lock estimate unavailable: router rejected Uplink\'s credential.',
+  modelTipNotReady: 'Lock estimate unavailable: router not ready yet.',
+  modelTipError: 'Lock estimate unavailable.',
+  // Need more MOR?
+  fundSummary: 'Add MOR',
+  fundSummaryLow: 'Need more MOR? This wallet is low',
+  fundHow: 'Fund this wallet from MetaMask / Rabby on Base: swap ETH to MOR, then send MOR plus a little ETH for gas.',
+  walletLabel: 'Wallet:',
+  fundUniswap: 'Get MOR on Uniswap',
+  // Support
+  supportSummary: 'Support',
+  supportBundle: 'Download support bundle',
+  supportBundleTip: 'The bundle has versions, health, sessions and reclaim status. It has no private keys. Container logs: docker logs on the host, or your VPS log panel.',
+  supportStop: 'Stopping Uplink closes open sessions on this wallet.',
+  supportStopTip: 'A graceful docker stop closes every open session on this wallet, including sessions for models not in the catalog and, on a shared wallet, the other client\'s sessions. Stakes are returned. CLOSE_SESSIONS_ON_EXIT=false opts out. Use a dedicated wallet.',
+  supportRouterApi: 'Router admin API',
+  supportRouterApiTip: 'The router admin API isn\'t exposed through Uplink: the router port is never published and the public edge does not route to it.',
+  // Two-factor auth (Security tab)
+  tfEnrolled: (n) => '2FA enrolled · ' + n + ' recovery code' + (n === 1 ? '' : 's') + ' left.',
+  tfNotEnrolled: '2FA not enrolled.',
+  tfRequired: ' Enrollment required before other admin actions.',
+  tfBreakGlass: ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.',
+  tfReenroll: '2FA was reset. Enroll again below; new recovery codes are issued when you confirm.',
+  recoveryShownOnce: 'Recovery codes (shown once). Each works one time. Store them offline.',
+  recoveryEnrolled: '2FA enabled. Save the recovery codes below; they are shown once.',
+  recoveryRegenerated: 'New recovery codes issued. The old ones no longer work.',
+  recoveryCopied: 'Recovery codes copied.',
+  recoveryNoneLeft: 'No recovery codes left. Regenerate a new set.',
+  regenTitle: 'Regenerate recovery codes',
+  resetTitle: 'Reset 2FA',
+  resetConfirm: 'Reset 2FA? This removes the authenticator and all recovery codes and logs out every admin session. You will enroll again after logging in.',
+  resetDone: '2FA reset. All sessions were logged out. Log in with your password and enroll again.',
+  factorNeeded: 'Enter your password and a current authenticator code or a recovery code.',
+};
+
 let authed = false;
 let lastRouterProblem = null; // { kind, text } from /admin/status
 let catalogState = { state: 'idle', error: '' }; // idle | loading | ok | error
@@ -1367,6 +1497,30 @@ async function api(path, opts = {}) {
   return res.text();
 }
 
+/** Accessible ⓘ: focusable, announced via aria-label, shown via CSS on hover/focus. */
+function tipHTML(text) {
+  const t = escapeAttr(text);
+  return `<span class="tip" tabindex="0" role="img" data-tip="${t}" aria-label="${t}">&#9432;</span>`;
+}
+function setTip(el, text) {
+  if (!el) return;
+  el.setAttribute('data-tip', text);
+  el.setAttribute('aria-label', text);
+  el.setAttribute('role', 'img');
+}
+/** Fill static text and tooltips from UI_COPY. */
+function applyCopy(root) {
+  const r = root || document;
+  r.querySelectorAll('[data-copy]').forEach(el => {
+    const v = UI_COPY[el.getAttribute('data-copy')];
+    if (typeof v === 'string') el.textContent = v;
+  });
+  r.querySelectorAll('[data-tip-key]').forEach(el => {
+    const v = UI_COPY[el.getAttribute('data-tip-key')];
+    if (typeof v === 'string') setTip(el, v);
+  });
+}
+
 function renderSessionReconcile(sr) {
   const el = document.getElementById('sessionReconcileLine');
   if (!el) return;
@@ -1450,11 +1604,17 @@ async function refreshSecurity() {
       if (res.status === 401) { showLogin(); return; }
       if (!res.ok) throw new Error(await res.text() || res.statusText);
       const tf = await res.json();
-      let msg = tf.enrolled ? '2FA enrolled.' : '2FA not enrolled.';
-      if (tf.required && !tf.enrolled) msg += ' Enrollment required before other admin actions.';
-      if (tf.breakGlassWarn) msg += ' Break-glass wipe already applied - remove UPLINK_RESET_2FA.';
+      const left = Number(tf.recoveryRemaining) || 0;
+      let msg = tf.enrolled ? UI_COPY.tfEnrolled(left) : UI_COPY.tfNotEnrolled;
+      if (tf.enrolled && left === 0) msg += ' ' + UI_COPY.recoveryNoneLeft;
+      if (tf.required && !tf.enrolled) msg += UI_COPY.tfRequired;
+      if (tf.breakGlassWarn) msg += UI_COPY.tfBreakGlass;
+      if (!tf.enrolled && reenrollPending()) msg = UI_COPY.tfReenroll + ' ' + msg;
       stEl.textContent = msg;
       if (enrollBox) enrollBox.style.display = tf.enrolled ? 'none' : 'flex';
+      const manage = document.getElementById('twoFactorManage');
+      if (manage) manage.classList.toggle('hidden', !tf.enrolled);
+      if (tf.enrolled) setRecoveryHint(left);
       if (tf.need2fa && activeTab !== 'security') showTab('security');
     } catch (e) {
       stEl.textContent = 'Could not load 2FA status.';
@@ -1507,10 +1667,9 @@ function hideEnrollSecret() {
 async function startTotpEnroll() {
   const secretEl = document.getElementById('enrollSecret');
   const qr = document.getElementById('enrollQr');
-  const rec = document.getElementById('recoveryCodes');
   const form = document.getElementById('enrollConfirmForm');
   const codeEl = document.getElementById('enrollCode');
-  if (rec) { rec.style.display = 'none'; rec.textContent = ''; }
+  hideRecoveryCodes();
   setEnrollMsg('', '');
   try {
     const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -1531,7 +1690,6 @@ async function startTotpEnroll() {
 async function confirmTotpEnroll() {
   const codeEl = document.getElementById('enrollCode');
   const code = ((codeEl || {}).value || '').trim();
-  const rec = document.getElementById('recoveryCodes');
   if (!/^\d{6}$/.test(code)) {
     setEnrollMsg('Enter the 6 digits shown in your authenticator app.', 'err');
     if (codeEl) codeEl.focus();
@@ -1547,16 +1705,110 @@ async function confirmTotpEnroll() {
     hideEnrollSecret();
     if (codeEl) codeEl.value = '';
     setTwoFactorHint(true);
-    setEnrollMsg('2FA enabled. Save the recovery codes below; they are shown once.', 'ok');
-    if (rec && data.recoveryCodes) {
-      rec.style.display = 'block';
-      rec.textContent = 'Recovery codes (shown once):\n' + data.recoveryCodes.join('\n');
-    }
+    setEnrollMsg(UI_COPY.recoveryEnrolled, 'ok');
+    showRecoveryCodes(data.recoveryCodes || []);
+    clearReenrollPending();
     refreshSecurity();
   } catch (e) {
     setEnrollMsg('Code not accepted: ' + e.message + '. Check the time on your device and try the next code.', 'err');
     if (codeEl) { codeEl.select(); codeEl.focus(); }
   }
+}
+
+// Recovery codes live only in this box until the operator hides them.
+let shownRecoveryCodes = [];
+function showRecoveryCodes(codes) {
+  shownRecoveryCodes = (codes || []).slice();
+  const box = document.getElementById('recoveryBox');
+  const pre = document.getElementById('recoveryCodes');
+  if (!box || !pre) return;
+  pre.textContent = shownRecoveryCodes.join('\n');
+  box.classList.toggle('hidden', !shownRecoveryCodes.length);
+  setRecoveryHint(shownRecoveryCodes.length);
+}
+function hideRecoveryCodes() {
+  shownRecoveryCodes = [];
+  const box = document.getElementById('recoveryBox');
+  const pre = document.getElementById('recoveryCodes');
+  if (pre) pre.textContent = '';
+  if (box) box.classList.add('hidden');
+}
+function recoveryCodesText() {
+  return 'Morpheus Uplink recovery codes (' + location.host + ')\n'
+    + 'Generated ' + new Date().toISOString() + '. Each code works once.\n\n'
+    + shownRecoveryCodes.join('\n') + '\n';
+}
+async function copyRecoveryCodes() {
+  if (!shownRecoveryCodes.length) return;
+  try {
+    await navigator.clipboard.writeText(shownRecoveryCodes.join('\n'));
+    setEnrollMsg(UI_COPY.recoveryCopied, 'ok');
+  } catch (e) { setEnrollMsg('Copy failed: ' + e.message, 'err'); }
+}
+function downloadRecoveryCodes() {
+  if (!shownRecoveryCodes.length) return;
+  const blob = new Blob([recoveryCodesText()], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uplink-recovery-codes-' + location.hostname + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function manageFields() {
+  const pw = document.getElementById('managePw');
+  const code = document.getElementById('manageCode');
+  return { pwEl: pw, codeEl: code, password: (pw && pw.value) || '', code: ((code && code.value) || '').trim() };
+}
+function setManageMsg(text, kind) {
+  const el = document.getElementById('manageMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('msg-ok', kind === 'ok');
+  el.classList.toggle('msg-err', kind === 'err');
+}
+async function postFactor(path, f) {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: f.password, code: f.code }),
+  });
+  if (f.pwEl) f.pwEl.value = '';
+  if (f.codeEl) f.codeEl.value = '';
+  return res;
+}
+async function factorError(res) {
+  if (res.status === 429) return 'Too many attempts. Retry after ' + (res.headers.get('Retry-After') || '?') + 's.';
+  if (res.status === 401) return 'Password or code not accepted.';
+  return (await res.text()) || res.statusText;
+}
+async function regenerateRecoveryCodes() {
+  const f = manageFields();
+  if (!f.password || !f.code) { setManageMsg(UI_COPY.factorNeeded, 'err'); return; }
+  try {
+    const res = await postFactor('/admin/2fa/recovery/regen', f);
+    if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
+    const data = await res.json();
+    setManageMsg(UI_COPY.recoveryRegenerated, 'ok');
+    showRecoveryCodes(data.recoveryCodes || []);
+    refreshSecurity();
+  } catch (e) { setManageMsg(e.message, 'err'); }
+}
+async function resetTwoFactor() {
+  const f = manageFields();
+  if (!f.password || !f.code) { setManageMsg(UI_COPY.factorNeeded, 'err'); return; }
+  if (!confirm(UI_COPY.resetConfirm)) return;
+  try {
+    const res = await postFactor('/admin/2fa/reset', f);
+    if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
+    hideRecoveryCodes();
+    setTwoFactorHint(false);
+    setRecoveryHint(0);
+    markReenrollPending();
+    showLogin();
+    document.getElementById('loginMsg').textContent = UI_COPY.resetDone;
+  } catch (e) { setManageMsg(e.message, 'err'); }
 }
 
 async function logoutAllSessions() {
@@ -1585,12 +1837,28 @@ function twoFactorHint() {
 function setTwoFactorHint(enrolled) {
   try { localStorage.setItem(TWOFA_HINT_KEY, enrolled ? '1' : '0'); } catch (_) {}
 }
+// Local hints only (same idea as TWOFA_HINT_KEY): the server never says
+// before a correct password whether recovery codes exist.
+const RECOVERY_HINT_KEY = 'uplink.2fa.recoveryLeft';
+const REENROLL_KEY = 'uplink.2fa.reenroll';
+function recoveryHint() {
+  try { return localStorage.getItem(RECOVERY_HINT_KEY); } catch (_) { return null; }
+}
+function setRecoveryHint(n) {
+  try { localStorage.setItem(RECOVERY_HINT_KEY, String(Number(n) || 0)); } catch (_) {}
+}
+function markReenrollPending() { try { localStorage.setItem(REENROLL_KEY, '1'); } catch (_) {} }
+function clearReenrollPending() { try { localStorage.removeItem(REENROLL_KEY); } catch (_) {} }
+function reenrollPending() { try { return localStorage.getItem(REENROLL_KEY) === '1'; } catch (_) { return false; } }
 
 function setLoginStep(step) {
   document.getElementById('loginStepPassword').classList.toggle('hidden', step !== 'password');
   document.getElementById('loginStepCode').classList.toggle('hidden', step !== 'code');
   if (step === 'code') {
     const c = document.getElementById('totpCode');
+    // Hide "Use a recovery code" when this browser knows none are left.
+    const tog = document.getElementById('recoveryToggle');
+    if (tog) tog.classList.toggle('hidden', recoveryHint() === '0');
     c.value = '';
     setTimeout(() => c.focus(), 0);
   } else {
@@ -1651,6 +1919,7 @@ async function postLogin(password, code) {
 async function finishLogin(res, msg) {
   const data = await res.json();
   setTwoFactorHint(!!data.enrolled);
+  if (data.enrolled) { setRecoveryHint(data.recoveryRemaining); clearReenrollPending(); }
   loginPassword = '';
   document.getElementById('pw').value = '';
   document.getElementById('totpCode').value = '';
@@ -1662,6 +1931,7 @@ async function finishLogin(res, msg) {
     showTab('security');
     return;
   }
+  if (!data.enrolled && reenrollPending()) showTab('security');
   refresh();
 }
 
@@ -1854,53 +2124,28 @@ async function doRefresh() {
     setHeaderBalances(mor.liquidWei ?? bal.mor, bal.eth);
     checkForUpdate(st.version || 'dev');
 
-    renderSysLine(st.version || 'dev', rv, !st.routerError, (st.sessions || []).length);
+    renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).length);
     renderDiskStatus(st.disk || null);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
-    const lockedWei = mor.onHoldLockedWei != null ? String(mor.onHoldLockedWei) : null;
     const hk = st.housekeep || {};
     const hkLast = hk.last || {};
     reclaimReady = !!hk.reclaimReady;
-    const canReclaim = BigInt(lastClaimableWei || '0') > 0n;
-
-    let holdNote = '';
-    if (lockedWei != null && mor.nextUnlockUTC) {
-      holdNote = 'On-hold unlocks after 00:00 UTC · next ≈ ' + new Date(mor.nextUnlockUTC).toUTCString();
-    } else if (mor.onHoldReadFailed) {
-      holdNote = 'Could not refresh on-hold / to-claim balances right now.';
+    let hkErr = '';
+    if (hkLast.status === 'error' && hkLast.message && !/estimategas|execution reverted/i.test(hkLast.message)) {
+      hkErr = hkLast.message;
     }
-    document.getElementById('morNote').textContent = holdNote;
-
-    const claimVal = mor.onHoldClaimableWei != null ? fmtMor(mor.onHoldClaimableWei) + ' MOR' : '—';
-    const lockedVal = lockedWei != null ? fmtMor(lockedWei) + ' MOR' : '—';
-    let hkMsg = 'Nothing to reclaim yet';
-    if (canReclaim) {
-      hkMsg = 'Past daylock — reclaim to wallet';
-    } else if (hkLast.status === 'actioned' && hkLast.message) {
-      hkMsg = hkLast.message;
-    } else if (hkLast.status === 'error' && hkLast.message && /estimategas|execution reverted/i.test(hkLast.message)) {
-      hkMsg = 'Nothing claimable yet (on-hold unlocks at 00:00 UTC)';
-    } else if (hkLast.status === 'skipped' && hkLast.message) {
-      hkMsg = hkLast.message;
-    } else if (hkLast.status === 'error' && hkLast.message) {
-      hkMsg = 'error — ' + hkLast.message;
-    }
-
-    document.getElementById('morBuckets').innerHTML =
-      `<div class="stat"><div class="v">${fmtMor(mor.liquidWei ?? bal.mor)} MOR</div><div class="k">Wallet</div></div>` +
-      `<div class="stat"><div class="v">${fmtMor(mor.activeWei)} MOR</div><div class="k">Active</div></div>` +
-      `<div class="stat"><div class="v">${lockedVal}</div><div class="k">On hold</div></div>` +
-      `<div class="claim-col">
-         <div class="stat">
-           <div class="v">${claimVal}</div>
-           <div class="k">To claim</div>
-         </div>
-         <div class="reclaim-wrap">
-           <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" ${canReclaim ? '' : 'disabled'}>Reclaim</button>
-           <span class="note" id="hkNote">${escapeHtml(hkMsg)}</span>
-         </div>
-       </div>`;
+    const walletWei = mor.liquidWei ?? bal.mor;
+    renderMorTiles({
+      walletWei,
+      activeWei: mor.activeWei,
+      onHoldWei: mor.onHoldLockedWei,
+      nextUnlockUTC: mor.nextUnlockUTC || '',
+      claimWei: mor.onHoldClaimableWei,
+      readFailed: !!mor.onHoldReadFailed,
+      hkErr,
+    });
+    renderFund(walletWei);
 
     // Keep the last address we saw; the server already falls back to the
     // last router answer.
@@ -1984,7 +2229,11 @@ function renderDiskStatus(disk) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('show', warn);
   }
+  const sup = document.getElementById('supportDetails');
+  if (sup && warn && !supportAutoOpened) { sup.open = true; supportAutoOpened = true; }
+  if (!warn) supportAutoOpened = false;
 }
+let supportAutoOpened = false;
 
 function setDiskPruneMsg(msg) {
   for (const id of ['diskPruneMsgSupport']) {
@@ -2017,23 +2266,112 @@ async function pruneUsageHistory() {
   }
 }
 
-function renderSysLine(uplinkVer, routerVer, routerOk, openSessions) {
+/** One plain reason when not healthy (first match wins), else Healthy. */
+function statusHealth(st) {
+  const p = routerProblem(st);
+  if (p && p.kind === 'router_auth') return { ok: false, text: UI_COPY.routerAuthFail };
+  if (p) return { ok: false, text: UI_COPY.routerDown };
+  if (st && st.sessionReconcile && st.sessionReconcile.opensHeld) return { ok: false, text: UI_COPY.reconcileHeld };
+  if (st && st.disk && st.disk.warn) return { ok: false, text: UI_COPY.diskLow };
+  return { ok: true, text: UI_COPY.healthy };
+}
+
+/** ● Healthy · N open sessions · Uplink vX · Router vY */
+function renderSysLine(uplinkVer, routerVer, health, openSessions) {
   const el = document.getElementById('stats');
   if (!el) return;
+  const h = health || { ok: true, text: UI_COPY.healthy };
   const up = escapeHtml(String(uplinkVer).replace(/^v?/, 'v'));
   const rt = routerVer ? escapeHtml(String(routerVer).replace(/^v?/, 'v')) : '—';
-  const health = routerOk
-    ? '<span class="ok">Healthy</span>'
-    : '<span class="bad">Router unhealthy</span>';
   const n = Number(openSessions) || 0;
+  const cls = h.ok ? 'ok' : 'bad';
   el.innerHTML =
-    `<span class="ver" id="uplinkChip" title="Uplink">Uplink ${up}</span>` +
+    `<span class="dot ${cls}" aria-hidden="true">●</span><span class="${cls}">${escapeHtml(h.text)}</span>` +
     `<span class="sep">·</span>` +
-    `<a class="ver" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node">Router ${rt}</a>` +
+    `<span class="sessions">${escapeHtml(UI_COPY.openSessions(n))}</span>` +
     `<span class="sep">·</span>` +
-    health +
+    `<span class="ver" id="uplinkChip">${escapeHtml(UI_COPY.uplinkVer(up))}</span>` +
     `<span class="sep">·</span>` +
-    `<span class="sessions">${n} open session${n === 1 ? '' : 's'}</span>`;
+    `<a class="ver" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node">${escapeHtml(UI_COPY.routerVer(rt))}</a>`;
+}
+
+/** Local time an on-hold stake returns, e.g. "8:00 PM EDT" (weekday added if not today). */
+function fmtUnlockLocal(iso, now) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const ref = now || new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  if (d.toDateString() === ref.toDateString()) return time;
+  return d.toLocaleDateString([], { weekday: 'short' }) + ' ' + time;
+}
+
+function weiIsPositive(v) {
+  try { return BigInt(String(v ?? '0')) > 0n; } catch (_) { return false; }
+}
+
+function morTileHTML(label, tip, value, sub, extra) {
+  return `<div class="tile"><div class="k">${escapeHtml(label)} ${tipHTML(tip)}</div>`
+    + `<div class="v">${value}</div><div class="sub">${sub || ''}</div>${extra || ''}</div>`;
+}
+
+/** Four headline tiles. Reclaim sits under To claim and only shows when > 0. */
+function renderMorTiles(v) {
+  const el = document.getElementById('morBuckets');
+  if (!el) return;
+  const amt = (w) => (w == null || w === '') ? '—' : escapeHtml(fmtMor(w)) + '<small>MOR</small>';
+  const onHoldSub = (weiIsPositive(v.onHoldWei) && v.nextUnlockUTC)
+    ? escapeHtml(UI_COPY.onHoldBackBy(fmtUnlockLocal(v.nextUnlockUTC, v.now)))
+    : '';
+  const canReclaim = weiIsPositive(v.claimWei);
+  const claimExtra = (canReclaim
+    ? `<button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()">${escapeHtml(UI_COPY.reclaim)}</button>`
+    : '');
+  const claimSub = `<span id="hkNote"${v.hkErr ? ' class="msg-err"' : ''}>${v.hkErr ? escapeHtml(UI_COPY.reclaimLastError(v.hkErr)) : ''}</span>`;
+  el.innerHTML =
+    morTileHTML(UI_COPY.tileWallet, UI_COPY.tileWalletTip, amt(v.walletWei), '') +
+    morTileHTML(UI_COPY.tileActive, UI_COPY.tileActiveTip, amt(v.activeWei), '') +
+    morTileHTML(UI_COPY.tileOnHold, UI_COPY.tileOnHoldTip, amt(v.onHoldWei), onHoldSub) +
+    morTileHTML(UI_COPY.tileClaim, UI_COPY.tileClaimTip, amt(v.claimWei), claimSub, claimExtra);
+  const note = document.getElementById('morNote');
+  if (note) {
+    note.textContent = v.readFailed ? UI_COPY.balancesUnavailable : '';
+    note.classList.toggle('hidden', !v.readFailed);
+  }
+}
+
+// "Add MOR" opens (and is highlighted) only when the wallet is low: less than
+// LOW_WALLET_STAKES x the median estimated session stake at the deploy
+// default duration, or less than LOW_WALLET_MIN_MOR when no estimate is known.
+const LOW_WALLET_STAKES = 2;
+const LOW_WALLET_MIN_MOR = 1;
+
+function lowWalletThresholdMor(stakesMor) {
+  const xs = (stakesMor || []).filter(x => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+  if (!xs.length) return LOW_WALLET_MIN_MOR;
+  const mid = xs.length >> 1;
+  const median = xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+  return LOW_WALLET_STAKES * median;
+}
+
+function isWalletLow(walletWei, stakesMor) {
+  if (walletWei == null || walletWei === '') return false;
+  const mor = Number(walletWei) / 1e18;
+  if (!Number.isFinite(mor)) return false;
+  return mor < lowWalletThresholdMor(stakesMor);
+}
+
+let fundAutoOpened = false;
+function renderFund(walletWei) {
+  const det = document.getElementById('fundDetails');
+  const sum = document.getElementById('fundSummary');
+  if (!det || !sum) return;
+  const stakes = allModels.map(m => connectStakeMor(m.id)).filter(x => x != null);
+  const low = isWalletLow(walletWei, stakes);
+  det.classList.toggle('low', low);
+  sum.textContent = low ? UI_COPY.fundSummaryLow : UI_COPY.fundSummary;
+  if (low && !fundAutoOpened) { det.open = true; fundAutoOpened = true; }
+  if (!low) fundAutoOpened = false;
 }
 
 function setSessNote(msg) {
@@ -2118,13 +2456,7 @@ function connectKeySecret() {
 
 function onConnectKeyChange() {
   const id = document.getElementById('connectKeySelect')?.value || 'prompt';
-  const hint = document.getElementById('connectKeyHint');
-  if (!hint) return;
-  if (id === 'prompt') {
-    hint.textContent = 'Prompt key is inference-only (recommended). Ephemeral keys work the same — create more on the API Keys tab. Master stays on API Keys only.';
-  } else {
-    hint.textContent = 'Ephemeral key — inference only. Export it from API Keys if you need it after a redeploy.';
-  }
+  setTip(document.getElementById('connectKeyTip'), id === 'prompt' ? UI_COPY.keyTipPrompt : UI_COPY.keyTipEphemeral);
 }
 
 function flashIconCopied(btn) {
@@ -2185,34 +2517,28 @@ function connectStakeMor(id) {
   return st.stakeMor * (toDur / fromDur);
 }
 
-function connectModelOptionLabel(id) {
+/** Option text: name and ~lock only. The ID stays behind the copy button. */
+function connectModelOptionLabel(id, dupIndex) {
   const m = modelBySendableId(id);
   const stake = connectStakeMor(id);
-  const name = m ? modelTitle(m) : id;
-  const twin = (m && m.name && m.name !== m.id) ? ' ' + shortSecret(m.id) : '';
-  // Duration/unit live in the field label — keep options to name + lock amount.
+  const name = (m ? modelTitle(m) : id) + (dupIndex > 1 ? ' (' + dupIndex + ')' : '');
   if (stake != null) {
-    return name + twin + '\u2003\u2003~\u202f' + fmtMorRate(stake);
+    return name + '\u2003\u2003~\u202f' + fmtMorRate(stake);
   }
-  return name + twin;
+  return name;
 }
 
 function populateConnectModels() {
   const sel = document.getElementById('connectModelSelect');
   if (!sel) return;
-  const hint = document.getElementById('connectModelDurHint');
   const dur = connectDefaultDurationSec();
-  if (hint) {
-    let h = '(~MOR lock · ' + fmtDuration(dur) + ' default)';
-    if (stakeEstimateError) {
-      h = stakeEstimateError.kind === 'router_auth'
-        ? '(lock estimate unavailable: router rejected Uplink\'s credential)'
-        : stakeEstimateError.kind === 'router_not_ready'
-          ? '(lock estimate unavailable: router not ready yet)'
-          : '(lock estimate unavailable)';
-    }
-    hint.textContent = h;
+  let h = UI_COPY.modelTip(fmtDuration(dur));
+  if (stakeEstimateError) {
+    h = stakeEstimateError.kind === 'router_auth' ? UI_COPY.modelTipAuth
+      : stakeEstimateError.kind === 'router_not_ready' ? UI_COPY.modelTipNotReady
+        : UI_COPY.modelTipError;
   }
+  setTip(document.getElementById('connectModelDurHint'), h);
   const prev = sel.value || selectedModel || '';
   if (!allModels.length) {
     let label = 'Loading model catalog…';
@@ -2225,9 +2551,14 @@ function populateConnectModels() {
     return;
   }
   const ids = allModels.map(m => m.id).sort((a, b) => a.localeCompare(b));
-  sel.innerHTML = ids.map(id =>
-    `<option value="${escapeAttr(id)}">${escapeHtml(connectModelOptionLabel(id))}</option>`
-  ).join('');
+  const seenNames = {};
+  sel.innerHTML = ids.map(id => {
+    const m = modelBySendableId(id);
+    const nm = m ? modelTitle(m) : id;
+    seenNames[nm] = (seenNames[nm] || 0) + 1;
+    // value is the full model ID; copyConnectModel copies it as-is.
+    return `<option value="${escapeAttr(id)}">${escapeHtml(connectModelOptionLabel(id, seenNames[nm]))}</option>`;
+  }).join('');
   if (prev && ids.includes(prev)) sel.value = prev;
   else if (selectedModel && ids.includes(selectedModel)) sel.value = selectedModel;
   else sel.selectedIndex = 0;
@@ -3129,13 +3460,13 @@ async function runHousekeep() {
   const btn = document.getElementById('hkBtn');
   const note = document.getElementById('hkNote');
   if (btn) btn.disabled = true;
-  if (note) note.textContent = 'Reclaiming…';
+  if (note) note.textContent = UI_COPY.reclaiming;
   try {
     const res = await api('/admin/housekeep', { method: 'POST' });
     if (note) note.textContent = (res.status || '') + ' — ' + (res.message || 'done');
     refresh();
   } catch (e) {
-    if (note) note.textContent = 'Reclaim failed: ' + e.message;
+    if (note) note.textContent = UI_COPY.reclaimFailed(e.message);
     if (btn) btn.disabled = !(reclaimReady && BigInt(lastClaimableWei || '0') > 0n);
   }
 }
@@ -3512,22 +3843,14 @@ function enterUiPreview() {
   liquidWei = String(135864n * 10n ** 14n); // 13.5864 MOR
   const ethWei = String(374n * 10n ** 13n); // 0.00374 ETH
   setHeaderBalances(liquidWei, ethWei);
-  renderSysLine('preview', 'preview', true, 0);
-  document.getElementById('morBuckets').innerHTML =
-    `<div class="stat"><div class="v">13.5864 MOR</div><div class="k">Wallet</div></div>` +
-    `<div class="stat"><div class="v">0 MOR</div><div class="k">Active</div></div>` +
-    `<div class="stat"><div class="v">0.3636 MOR</div><div class="k">On hold</div></div>` +
-    `<div class="claim-col">
-       <div class="stat">
-         <div class="v">0 MOR</div>
-         <div class="k">To claim</div>
-       </div>
-       <div class="reclaim-wrap">
-         <button type="button" class="ghost" id="hkBtn" onclick="runHousekeep()" disabled>Reclaim</button>
-         <span class="note" id="hkNote">Nothing to reclaim yet</span>
-       </div>
-     </div>`;
-  document.getElementById('morNote').textContent = 'On-hold unlocks after 00:00 UTC · next ≈ Tue, 11 Aug 2026 00:00:00 GMT';
+  renderSysLine('v1.0.15', 'v7.15.0', { ok: true, text: UI_COPY.healthy }, 0);
+  const nextMidnight = new Date(); nextMidnight.setUTCHours(24, 0, 0, 0);
+  renderMorTiles({
+    walletWei: liquidWei, activeWei: '0', onHoldWei: String(3636n * 10n ** 14n),
+    nextUnlockUTC: nextMidnight.toISOString(), claimWei: String(1212n * 10n ** 14n), readFailed: false, hkErr: '',
+  });
+  renderSessionReconcile({ state: 'ok', at: new Date().toISOString(), adopted: 0, closed: 0, skipped: 0, deferred: 0 });
+  renderFund(liquidWei);
   document.getElementById('walletMasked').textContent = '0x0000…0000';
   allModels = [
     { id: 'glm-5.2', tags: ['LLM', 'glm', 'size:l'], priceMorPerHour: 0.0959 },
@@ -3571,6 +3894,7 @@ themeMq.addEventListener('change', () => {
 });
 applyTheme(themePref);
 
+applyCopy();
 startMatrixRain();
 
 const previewMode = new URLSearchParams(location.search).has('preview')

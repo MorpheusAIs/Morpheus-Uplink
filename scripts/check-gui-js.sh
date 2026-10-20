@@ -50,6 +50,7 @@ global.document = {
     if (id === 'securityAlerts') return { textContent: '', innerHTML: '' };
     if (id === 'twoFactorStatus') return { textContent: '' };
     if (id === 'twoFactorEnroll') return { style: { display: 'none' } };
+    if (id === 'twoFactorManage') return { classList: { toggle() {} } };
     if (id === 'app') return { classList: { contains: () => true } };
     return { classList: { toggle() {}, contains: () => false }, style: {}, textContent: '' };
   },
@@ -73,6 +74,9 @@ global.fetch = async (url, opts = {}) => {
   return { status: 200, ok: true, json: async () => ({}), text: async () => '' };
 };
 global.showLogin = () => {};
+global.UI_COPY = new Proxy({}, { get: (_, k) => (typeof k === 'string' && /^tf|recovery/.test(k) ? (() => String(k)) : String(k)) });
+global.reenrollPending = () => false;
+global.setRecoveryHint = () => {};
 
 eval(showTabSrc + '\n' + refreshSrc + '\n');
 if (typeof refreshSecurity !== 'function' || typeof showTab !== 'function') {
@@ -170,5 +174,127 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
   if (clip.length !== 2 || clip.some((c) => c !== FULL)) fail('clipboard got ' + JSON.stringify(clip));
   if (reveals !== 1) fail('reveal not cached: ' + reveals);
   console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key');
+})().catch((e) => fail(e.stack || e));
+NODE
+
+# Status page: tiles, reclaim placement, unlock time, low-wallet rule,
+# health reason, model labels, centralized copy, no Swagger link, and the
+# login recovery toggle.
+TZ=America/New_York node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function extract(name) {
+  const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = m.index + m[0].length, d = 1;
+  while (i < src.length && d > 0) { const c = src[i++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(m.index, i);
+}
+function constBlock(name) {
+  const i = src.indexOf('const ' + name + ' = {');
+  if (i < 0) throw new Error('missing const ' + name);
+  let j = src.indexOf('{', i) + 1, d = 1;
+  while (j < src.length && d > 0) { const c = src[j++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(i, j) + ';';
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const els = {};
+const elem = (id) => (els[id] = els[id] || { id, innerHTML: '', textContent: '', open: false, attrs: {},
+  classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, add(c) { this._s.add(c); }, contains(c) { return this._s.has(c); } },
+  setAttribute(k, v) { this.attrs[k] = v; } });
+global.document = { getElementById: elem };
+let store = {};
+global.localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+let clip = [];
+Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { clip.push(t); } } }, configurable: true, writable: true });
+eval([
+  constBlock('UI_COPY'),
+  'let allModels = []; let modelStakes = {}; let modelStakesDurationSec = 600; let defaultSessionDuration = 600; const MIN_SESSION_DURATION = 600; let selectedModel = "";',
+  'let stakeEstimateError = null; let catalogState = { state: "ok" }; let authed = true; let fundAutoOpened = false;',
+  'const LOW_WALLET_STAKES = 2; const LOW_WALLET_MIN_MOR = 1; const RECOVERY_HINT_KEY = "uplink.2fa.recoveryLeft"; let loginPassword = ""; let recoveryMode = false;',
+  'function flashIconCopied() {} function probeDurationSec() { return 600; }',
+  ...['escapeHtml', 'escapeAttr', 'tipHTML', 'setTip', 'fmtMor', 'fmtUnlockLocal', 'weiIsPositive', 'morTileHTML', 'renderMorTiles',
+      'lowWalletThresholdMor', 'isWalletLow', 'renderFund', 'routerProblem', 'statusHealth', 'renderSysLine',
+      'modelBySendableId', 'stakeKeyFor', 'stakeRecord', 'modelTitle', 'connectDefaultDurationSec', 'connectStakeMor', 'fmtMorRate', 'fmtDuration',
+      'connectModelOptionLabel', 'populateConnectModels', 'copyConnectModel', 'recoveryHint', 'setLoginStep', 'setRecoveryMode'].map(extract),
+  'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, isWalletLow, lowWalletThresholdMor, statusHealth, renderSysLine, renderFund,',
+  '  populateConnectModels, copyConnectModel, setLoginStep, setModels(m, st) { allModels = m; modelStakes = st || {}; } };',
+].join('\n'));
+const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
+(async () => {
+  // Four tiles; Reclaim only when To claim > 0; on-hold subline in local time.
+  const unlock = '2026-10-21T00:00:00Z';
+  T.renderMorTiles({ walletWei: MOR(13.5), activeWei: '0', onHoldWei: MOR(0.36), nextUnlockUTC: unlock, claimWei: '0', now: new Date('2026-10-20T15:00:00Z') });
+  let h = els.morBuckets.innerHTML;
+  if ((h.match(/class="tile"/g) || []).length !== 4) fail('want 4 tiles: ' + h);
+  if (/id="hkBtn"/.test(h)) fail('Reclaim shown with nothing to claim');
+  if (!/id="hkNote"/.test(h)) fail('hkNote missing');
+  if (!h.includes('Back by 8:00 PM EDT')) fail('on-hold subline: ' + h);
+  for (const k of ['tileWalletTip', 'tileActiveTip', 'tileOnHoldTip', 'tileClaimTip']) {
+    if (!h.includes('aria-label="' + T.UI_COPY[k].replace(/'/g, "'") + '"')) fail('tile tooltip missing aria-label: ' + k);
+  }
+  T.renderMorTiles({ walletWei: MOR(1), activeWei: MOR(0.5), onHoldWei: '0', claimWei: MOR(0.12) });
+  h = els.morBuckets.innerHTML;
+  if (!/id="hkBtn"/.test(h)) fail('Reclaim missing with an amount to claim');
+  if (h.indexOf('id="hkBtn"') < h.lastIndexOf('class="tile"')) fail('Reclaim must sit in the To claim tile');
+  if (h.includes('Back by')) fail('on-hold subline shown with nothing on hold');
+  if (T.fmtUnlockLocal(unlock, new Date('2026-10-19T12:00:00Z')).indexOf('Tue') !== 0) fail('weekday prefix when not today: ' + T.fmtUnlockLocal(unlock, new Date('2026-10-19T12:00:00Z')));
+  if (/onHold.*00:00 UTC.*next/i.test(src)) fail('old on-hold repeat paragraph still present');
+
+  // Low wallet: fixed floor without estimates, 2x median stake with them.
+  if (!T.isWalletLow(MOR(0.5), []) || T.isWalletLow(MOR(1.5), [])) fail('fixed low-wallet floor');
+  if (T.lowWalletThresholdMor([1, 3, 2]) !== 4) fail('2x median threshold');
+  if (!T.isWalletLow(MOR(3.9), [1, 2, 3]) || T.isWalletLow(MOR(4.1), [1, 2, 3])) fail('low wallet vs stakes');
+  T.renderFund(MOR(0.2));
+  if (!els.fundDetails.open || els.fundSummary.textContent !== T.UI_COPY.fundSummaryLow) fail('low wallet must open Add MOR');
+  els.fundDetails.open = false; T.renderFund(MOR(50));
+  if (els.fundDetails.open || els.fundSummary.textContent !== T.UI_COPY.fundSummary) fail('Add MOR must stay collapsed when not low');
+
+  // Status line: Healthy, or the plain reason.
+  if (T.statusHealth({}).text !== 'Healthy') fail('healthy');
+  if (T.statusHealth({ routerError: 'x' }).text !== T.UI_COPY.routerDown) fail('router down reason');
+  if (T.statusHealth({ routerAuth: { ok: false } }).text !== T.UI_COPY.routerAuthFail) fail('router auth reason');
+  T.renderSysLine('1.0.15', '7.15.0', T.statusHealth({}), 0);
+  const line = els.stats.innerHTML.replace(/<[^>]+>/g, '');
+  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.15.0') fail('status line: ' + line);
+
+  // Model dropdown: name + lock, no hash; copy copies the full ID.
+  const ID = '0x' + 'ab'.repeat(32);
+  T.setModels([{ id: ID, name: 'glm-5.2', blockchainId: ID }, { id: 'x2', name: 'glm-5.2' }], { [ID]: { stakeMor: 0.36 } });
+  els.connectModelSelect = { value: '', innerHTML: '' };
+  T.populateConnectModels();
+  const opts = els.connectModelSelect.innerHTML;
+  if (opts.replace(/value="[^"]*"/g, '').includes('0x')) fail('model option shows the ID/hash: ' + opts);
+  if (!opts.includes('glm-5.2 (2)')) fail('duplicate names need a plain suffix: ' + opts);
+  els.connectModelSelect.value = ID;
+  await T.copyConnectModel();
+  if (clip[clip.length - 1] !== ID) fail('copy must copy the full model ID, got ' + clip[clip.length - 1]);
+
+  // Copy is centralized: every data-copy / data-tip-key names a UI_COPY string.
+  for (const m of html.matchAll(/data-(?:copy|tip-key)="([^"]+)"/g)) {
+    if (typeof T.UI_COPY[m[1]] !== 'string') fail('UI_COPY missing key ' + m[1]);
+  }
+  for (const k of ['tilesShared', 'tileWalletTip', 'tileActiveTip', 'tileOnHoldTip', 'tileClaimTip']) {
+    if (!T.UI_COPY[k]) fail('missing copy ' + k);
+  }
+  if (!/lock/i.test(T.UI_COPY.tilesShared) || !/back to this wallet/i.test(T.UI_COPY.tilesShared)) fail('shared tooltip must keep lock-not-spend meaning');
+  if (/swagger/i.test(html)) fail('GUI must not link to Swagger');
+  if (/allowance|resync/i.test(html)) fail('dropped allowance/resync UI is back');
+  if (/outflow/i.test(html)) fail('outflow wording in GUI');
+
+  // Login: hide "Use a recovery code" when this browser knows none are left.
+  els.totpCode = { value: 'x', focus() {}, removeAttribute() {}, setAttribute() {}, classList: { add() {}, remove() {} } };
+  els.loginStepPassword = elem('loginStepPassword'); els.loginStepCode = elem('loginStepCode');
+  store['uplink.2fa.recoveryLeft'] = '0';
+  T.setLoginStep('code');
+  if (!els.recoveryToggle.classList.contains('hidden')) fail('recovery toggle shown with 0 codes');
+  store['uplink.2fa.recoveryLeft'] = '3';
+  T.setLoginStep('code');
+  if (els.recoveryToggle.classList.contains('hidden')) fail('recovery toggle hidden with codes left');
+  delete store['uplink.2fa.recoveryLeft'];
+  T.setLoginStep('code');
+  if (els.recoveryToggle.classList.contains('hidden')) fail('recovery toggle hidden when unknown');
+  console.log('OK: status tiles, reclaim placement, unlock time, low wallet, health line, model labels, copy keys, login recovery toggle');
 })().catch((e) => fail(e.stack || e));
 NODE
