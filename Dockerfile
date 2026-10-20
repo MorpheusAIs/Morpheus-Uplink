@@ -1,14 +1,15 @@
-FROM golang:1.26.6-alpine AS build
+FROM golang:1.26.9-alpine AS build
 ARG VERSION=dev
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY go.mod go.sum* ./
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /uplink ./cmd/uplink
 
 FROM alpine:3.24
 # Runtime user uid 10001 (CI PR smoke asserts non-root drop via su-exec).
-RUN apk add --no-cache ca-certificates su-exec \
+# curl: in-container diagnostics (the e2e drives Uplink with it).
+RUN apk add --no-cache ca-certificates su-exec curl \
   && adduser -D -u 10001 uplink \
   && mkdir -p /data && chown uplink:uplink /data
 COPY --from=build /uplink /usr/local/bin/uplink

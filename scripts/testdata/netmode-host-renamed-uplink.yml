@@ -1,0 +1,5 @@
+# Fixture: Uplink image under a renamed service ("gw") on host network must be rejected.
+services:
+  gw:
+    image: ghcr.io/morpheusais/uplink:v0.1.0
+    network_mode: host

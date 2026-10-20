@@ -1,0 +1,5 @@
+# Unrenderable on purpose: the port guard must report an error, not a rejection.
+services:
+  proxy-router:
+    image: alpine
+    ports: [
