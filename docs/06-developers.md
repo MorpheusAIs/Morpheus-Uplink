@@ -156,6 +156,22 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 - Uplink calls proxy-router over the internal network with the router's
   `COOKIE_CONTENT` (or `ROUTER_AUTH`). The router port is never published.
+- `/node/*` is an admin-gated passthrough to the router API (Swagger and
+  read-only inspection). Before forwarding, the path is %-decoded once and
+  normalized; encoded `/`, `\\`, `.` or `%`, dot segments and empty segments
+  are refused. It is then matched case-insensitively on segment boundaries.
+  Refused for every method, with a `node_passthrough_block` audit event
+  (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
+  `/wallet*`, `/auth*`, `/ipfs*`, and the session-open routes
+  `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
+  `/blockchain/models/{id}/session`. The router receives exactly the
+  normalized path; method-override headers, `_method` query parameters and
+  the admin cookie are stripped. Router redirects are not followed (502).
+  The route list with router source refs is in `internal/api/nodeproxy.go`.
+- Admin responses (`/admin/*`, `/node/*`) carry `Cache-Control: no-store`
+  and `Pragma: no-cache`. Cookie-authenticated non-GET admin requests need
+  both `Sec-Fetch-Site: same-origin` and an `Origin` matching
+  `WEB_PUBLIC_URL`.
 - The router image is `FROM scratch` (no shell, no wget), so it has no
   container healthcheck and `depends_on` is start order only. Uplink retries
   the router itself; `/admin/status` reports `routerAuth` (a 401 means the

@@ -146,6 +146,9 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   `https://active.mor.org/gateway_bids.json`. Never default to
   `active_models.json` / ALL.
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
+- **`/node/*` router passthrough** is admin-gated and refuses routes that
+  send or approve funds, change the wallet, open sessions, change router users
+  or permissions, or use IPFS (403, audited). [Details](docs/06-developers.md#router-access-and-restart-safety)
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
 Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.

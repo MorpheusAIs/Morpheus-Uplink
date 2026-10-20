@@ -82,7 +82,9 @@ There is no separate docs host or MCP for Uplink.
 
 7. **Do not expose the proxy-router admin port publicly.** Only the TLS
    front (Uplink on `:443` / local `:8080`) should be public. Router `:8082`
-   stays on the compose network; `/node/*` is the admin-gated passthrough.
+   stays on the compose network; `/node/*` is the admin-gated passthrough,
+   with a block list for routes that move funds or change the wallet, users or
+   permissions (see `internal/api/nodeproxy.go`).
    Consumer nodes need **no inbound `:3333`** — they dial out to providers.
 
 8. **Deploy from GitHub Release assets, not `git clone`, for production.**  
@@ -199,8 +201,11 @@ an API key.
 - A **single-tenant** gateway: one wallet, one session pool. Any Prompt or
   ephemeral API key can open sessions and **escrow / lock MOR** from that
   wallet. Treat every inference key as authority to lock this wallet's MOR.
-- Admin login and the Master key can reach `/admin/*` and `/node/*` (full
-  proxy-router power). Protect them like the wallet.
+- Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
+  `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
+  routes that send or approve funds, change the wallet, open sessions, change
+  router users or permissions, or use IPFS. Protect admin access like the
+  wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
 
@@ -393,6 +398,9 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   `https://active.mor.org/gateway_bids.json`. Never default to
   `active_models.json` / ALL.
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
+- **`/node/*` router passthrough** is admin-gated and refuses routes that
+  send or approve funds, change the wallet, open sessions, change router users
+  or permissions, or use IPFS (403, audited). [Details](docs/06-developers.md#router-access-and-restart-safety)
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
 Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.
@@ -1135,6 +1143,22 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 - Uplink calls proxy-router over the internal network with the router's
   `COOKIE_CONTENT` (or `ROUTER_AUTH`). The router port is never published.
+- `/node/*` is an admin-gated passthrough to the router API (Swagger and
+  read-only inspection). Before forwarding, the path is %-decoded once and
+  normalized; encoded `/`, `\\`, `.` or `%`, dot segments and empty segments
+  are refused. It is then matched case-insensitively on segment boundaries.
+  Refused for every method, with a `node_passthrough_block` audit event
+  (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
+  `/wallet*`, `/auth*`, `/ipfs*`, and the session-open routes
+  `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
+  `/blockchain/models/{id}/session`. The router receives exactly the
+  normalized path; method-override headers, `_method` query parameters and
+  the admin cookie are stripped. Router redirects are not followed (502).
+  The route list with router source refs is in `internal/api/nodeproxy.go`.
+- Admin responses (`/admin/*`, `/node/*`) carry `Cache-Control: no-store`
+  and `Pragma: no-cache`. Cookie-authenticated non-GET admin requests need
+  both `Sec-Fetch-Site: same-origin` and an `Origin` matching
+  `WEB_PUBLIC_URL`.
 - The router image is `FROM scratch` (no shell, no wget), so it has no
   container healthcheck and `depends_on` is start order only. Uplink retries
   the router itself; `/admin/status` reports `routerAuth` (a 401 means the
@@ -1560,7 +1584,8 @@ privacy on the pinned v7.15.0 digest until verified.
 
 ## M1 / keep list
 
-- `/node/*` remains **admin-gated** (Basic admin or Master Bearer)
+- `/node/*` remains **admin-gated** (admin session, or the Master key with
+  `MASTER_KEY_ADMIN=true`), with a block list (see docs/06-developers.md)
 - Keep: Basic admin, `sk-` keys, soft-revoke, `GET /v1/usage`,
   `gateway_models.json`, GHCR release-asset deploy
 
