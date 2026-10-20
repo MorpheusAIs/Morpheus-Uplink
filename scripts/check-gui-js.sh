@@ -505,3 +505,33 @@ els.alertFilter.value = '  '; T.filterAlerts();
 if (hidden().join() !== 'false,false,false,false' || !els.alertsNoMatch.classList.contains('hidden')) fail('empty filter shows all');
 console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter');
 NODE
+
+# Status warns when the page origin is not WEB_PUBLIC_URL (text only).
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function fn(name) {
+  const m = new RegExp('^function\\s+' + name + '\\s*\\(', 'm').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  return src.slice(m.index, src.indexOf('\n}', m.index) + 2);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const ui = /const UI_COPY = \{[\s\S]*?\n\};/.exec(src);
+if (!ui) fail('UI_COPY not found');
+const el = { textContent: '', classList: { _h: true, toggle(c, on) { this._h = on; } } };
+global.document = { getElementById: (id) => (id === 'originWarn' ? el : null) };
+global.location = { origin: 'https://new-host.example' };
+eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['originWarning', 'renderOriginWarn'].map(fn).join('\n')
+  + '\nObject.assign(global, { originWarning, renderOriginWarn });');
+if (originWarning({ webPublicUrl: 'https://new-host.example' }, 'https://New-Host.example/') !== '') fail('matching origin must not warn');
+if (originWarning({}, 'https://x.example') !== '') fail('no warning without the status field');
+const w = originWarning({ webPublicUrl: 'https://old-host.example' }, 'https://new-host.example');
+if (!w.includes('open at https://new-host.example') || !w.includes('WEB_PUBLIC_URL is https://old-host.example')) fail('mismatch warning: ' + w);
+renderOriginWarn({ webPublicUrl: 'https://old-host.example' });
+if (el.classList._h || !el.textContent.includes('old-host.example')) fail('Status warning not shown');
+renderOriginWarn({ webPublicUrl: 'https://new-host.example' });
+if (!el.classList._h || el.textContent) fail('Status warning not cleared');
+if (html.indexOf('id="originWarn"') < 0 || html.indexOf('id="originWarn"') > html.indexOf('id="connectClient"')) fail('originWarn must be on the Status overview');
+console.log('OK: Status warns when the page origin is not WEB_PUBLIC_URL');
+NODE

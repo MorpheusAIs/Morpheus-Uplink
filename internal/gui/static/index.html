@@ -906,6 +906,7 @@
       <section id="statusOverview" aria-label="Status">
         <div class="sys-line" id="stats" role="status"></div>
         <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
+        <div class="callout warn hidden" id="originWarn" role="alert"></div>
         <div class="tiles-head">
           <span data-copy="tilesHead"></span>
           <span class="tip" tabindex="0" data-tip-key="tilesShared">&#9432;</span>
@@ -1323,6 +1324,9 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 // Status page and 2FA text. Text only: a copy pass edits these strings and
 // nothing else. Functions take the values they print.
 const UI_COPY = {
+  // Admin changes are accepted only from WEB_PUBLIC_URL.
+  originMismatch: (here, want) => 'This page is open at ' + here + ', but WEB_PUBLIC_URL is ' + want
+    + '. Admin changes (keys, 2FA, sessions) are refused until they match: set WEB_PUBLIC_URL to the address you open (scheme and host) and redeploy.',
   // Status line
   healthy: 'Healthy',
   routerAuthFail: 'Router rejected Uplink\'s credential',
@@ -2338,6 +2342,22 @@ function routerProblem(st) {
   return null;
 }
 
+// originWarning: '' when this page is open at WEB_PUBLIC_URL (or the
+// status has no webPublicUrl), else the warning text.
+function originWarning(st, here) {
+  const want = String((st && st.webPublicUrl) || '').toLowerCase();
+  here = String(here || '').toLowerCase().replace(/\/$/, '');
+  return want && want !== here ? UI_COPY.originMismatch(here, want) : '';
+}
+
+function renderOriginWarn(st) {
+  const el = document.getElementById('originWarn');
+  if (!el) return;
+  const msg = originWarning(st, location.origin);
+  el.textContent = msg;
+  el.classList.toggle('hidden', !msg);
+}
+
 function renderRouterBanner(st) {
   const el = document.getElementById('routerAuthBanner');
   if (!el) return;
@@ -2415,6 +2435,7 @@ async function doRefresh() {
         : '';
     }
     renderRouterBanner(st);
+    renderOriginWarn(st);
     renderSessionReconcile(st.sessionReconcile || {});
 
     const rawSessions = st.sessions || [];

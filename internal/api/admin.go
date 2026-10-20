@@ -154,6 +154,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"poolSessions":           s.pool.Snapshot(),
 		"sessionDurationSec":     s.cfg.SessionDurationSec,
 		"sessionDurationDefault": s.cfg.SessionDurationSec,
+		// Origin admin changes are accepted from (the GUI warns on a mismatch).
+		"webPublicUrl": webPublicOrigin(s.cfg.WebPublicURL),
 	}
 	// Read-only router wallet (replaces former /node/wallet passthrough).
 	// Falls back to the last router answer when the router is unavailable.

@@ -31,3 +31,13 @@ func originsMatch(origin, webPublic string) bool {
 	}
 	return strings.EqualFold(o.Scheme, w.Scheme) && strings.EqualFold(o.Host, w.Host)
 }
+
+// webPublicOrigin is WEB_PUBLIC_URL as lowercase scheme://host ("" when
+// unset or unparseable), for the GUI's origin warning.
+func webPublicOrigin(raw string) string {
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(raw), "/"))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme + "://" + u.Host)
+}
