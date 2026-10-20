@@ -152,8 +152,10 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   2FA (password plus a code). Reset wipes the secret and codes and signs out
   every session; the next password login goes straight to a new enrollment
   with a fresh secret. Removing 2FA is refused while it is required
-  (`ADMIN_2FA_REQUIRED`, on by default except Railway). Locked out: one
-  restart with `UPLINK_RESET_2FA=true`.
+  (`ADMIN_2FA_REQUIRED`): on by default in the SecretVM and generic
+  templates, off in local dev and the bare binary, and opt-in on Railway
+  for now (default off; set it once `DATA_DIR` is on a persistent volume).
+  Locked out: one restart with `UPLINK_RESET_2FA=true`.
   [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 - **`/node/*` router passthrough** takes GET, HEAD, POST and DELETE only,
