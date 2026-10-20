@@ -19,10 +19,22 @@ One topic at a time. You do not need every section on day one.
 - Status, top to bottom: a status line (health or the reason it is not
   healthy, open sessions, versions), the four MOR numbers below, Connect a
   client, then Add MOR and Support (both collapsed). Hover or focus an &#9432; for help.
-- Security: enrolling 2FA shows 10 recovery codes once; save them. Each
-  works once in place of the 6-digit code. Regenerate them or reset 2FA from
-  the same tab (password plus a code). Reset signs out every session; enroll
-  again on the next login.
+  There is no low-wallet warning: watch the Wallet number, and keep a
+  little ETH on the wallet for gas (check it in your wallet app).
+- Security: enrolling 2FA (scan the QR code, confirm a code) shows 10
+  recovery codes once; save them. Each works once in place of the 6-digit
+  code. Regenerate them or reset 2FA from the same tab: the buttons enable
+  once both the password and a code are filled in.
+- Reset wipes the 2FA secret and all recovery codes and signs out every
+  session (you land on the login screen). Log in with the password: you go
+  straight to a new enrollment with a new QR code; the old authenticator
+  entry and old recovery codes no longer work. While 2FA is required
+  (default on SecretVM and generic) only the Security tab shows until the
+  new enrollment is confirmed. Removing 2FA outright is refused while it is
+  required.
+- Locked out (lost authenticator and codes): restart once with
+  `UPLINK_RESET_2FA=true`, then remove it
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 
 ---
 

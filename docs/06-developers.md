@@ -43,10 +43,20 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
   remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
   code.
-- **Reset** wipes the TOTP secret and all recovery codes, revokes every
-  admin session (this one too) and clears the cookie. With
-  `ADMIN_2FA_REQUIRED=true` the next login can only enroll again, which
-  issues new codes.
+- **Lifecycle.** Enroll: Security tab, scan the QR code, confirm a code;
+  the 10 recovery codes are shown once. Regenerate: replaces all codes
+  (password plus a code), shown once. Reset: below. Remove: below. In the
+  GUI, Regenerate and Reset stay disabled until both the password and the
+  code field are filled.
+- **Reset** wipes the TOTP secret, all recovery codes and any pending
+  enrollment, and persists that in one store update. It revokes every admin
+  session (this one too), clears the cookie, and audits `2fa_reset` with
+  `sessions_revoked`. The GUI drops to the login screen with the Security
+  view cleared. The next password login goes straight to a new enrollment
+  with a fresh secret; the old secret and old recovery codes never work
+  again. With `ADMIN_2FA_REQUIRED=true`, every other admin route answers 403
+  `2fa enrollment required` until that enrollment is confirmed, and the GUI
+  shows only the Security tab.
 - **Remove** is refused with 409 when `ADMIN_2FA_REQUIRED=true` (use Reset
   instead); nothing is consumed. Otherwise it wipes 2FA and, like Reset,
   revokes every admin session and clears the cookie. The GUI offers Reset
@@ -68,8 +78,10 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
   `2fa_reset_breakglass` `blocked` and the Security tab asks you to remove
   it. Restart once with it set, then unset it and restart; that clears the
   marker for any future use. Log in with the password and enroll again
-  (required first when `ADMIN_2FA_REQUIRED=true`). On SecretVM set it in the
-  `uplink_bake_env` block (see [02-bootstrap.md](02-bootstrap.md)).
+  (required first when `ADMIN_2FA_REQUIRED=true`). On SecretVM add
+  `UPLINK_RESET_2FA=true` to the `uplink_bake_env` block (see
+  [02-bootstrap.md](02-bootstrap.md)); on generic, Railway and local set it
+  in the environment (`${UPLINK_RESET_2FA:-false}` in the compose).
 - Logout and **Revoke all sessions** end the server-side session; there is
   no remembered device, so the next login asks for a fresh code.
 
@@ -117,7 +129,7 @@ Same images; different compose. Assets from the
 |--------|---------|--------|
 | **SecretVM (default)** | `docker-compose.secretvm.deployed.yml` | Encrypted Secrets; platform TLS |
 | **Any Docker VPS** | `docker-compose.generic.deployed.yml` | `.env` + Caddy / Let’s Encrypt (`PUBLIC_HOST`) |
-| **Railway** | `deploy/railway/` scaffold | Same digests; Railway secret vars (H4); single-replica router (H3) |
+| **Railway** | `docker-compose.railway.deployed.yml` (reference) + `deploy/railway/` | Railway does not run compose: copy its digests and vars into the services; single-replica router |
 | **TEE / compose clouds** | generic pattern | Phala / dstack fit here |
 
 Step-by-step: [02-bootstrap.md](02-bootstrap.md). On SecretVM, Uplink bake
@@ -156,14 +168,34 @@ Sources: `internal/config/config.go`, SecretVM `uplink_bake_env` /
 
 Generic, Railway and local compose templates take every tunable as an
 env-overridable default (`${VAR:-default}`): leave it unset for the
-default, or set it in `.env` / the shell / Railway Variables. Overridable
-there: `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `ACTIVE_MODELS_URL`,
-`GATEWAY_BIDS_URL`, `HOUSEKEEPING`, `ADMIN_2FA_REQUIRED` (generic),
-`MASTER_KEY_ADMIN` (generic, Railway), `PROXY_STORE_CHAT_CONTEXT`,
-`PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` /
-`LOG_LEVEL_ETH_RPC`, `ETH_NODE_USE_SUBSCRIPTIONS`. Setting
-`ADMIN_2FA_REQUIRED=false` or `MASTER_KEY_ADMIN=true` weakens admin
-security. SecretVM keeps tunables in compose `configs:` (form stays six).
+default, or set it in `.env` or the shell. Overridable in all three:
+
+- Uplink: `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`,
+  `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `HOUSEKEEPING`,
+  `UPLINK_RESET_2FA` (default `false`).
+- Router: `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`,
+  `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
+  `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
+  `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
+- Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true` on
+  generic, `false` on Railway, whose volume persistence is up to you) and
+  `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
+  admin access on weakens admin security.
+
+The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
+takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
+does not run compose, so `${VAR:-default}` is not evaluated there; set
+plain values in the service variables (Railway's own reference syntax is
+`${{SERVICE.VAR}}`), see [deploy/railway/README.md](../deploy/railway/README.md).
+
+SecretVM has no `${VAR:-default}` overrides: it turns every `${...}` into a
+form field, so its compose uses exactly the six secrets and keeps tunables
+in the `configs:` block (`uplink_bake_env`, `router_network_env`).
+`ADMIN_2FA_REQUIRED=true` and `MASTER_KEY_ADMIN=false` are fixed there.
+
+Each env example (`env.template`, `env.example`, `.env.example`) lists only
+keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
+[Release assets](#release-assets)).
 
 ### 1. Minimum to run (six operator fillables)
 
@@ -218,26 +250,29 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 ## Router access and restart safety
 
 - Uplink calls proxy-router over the internal network with the router's
-  `COOKIE_CONTENT` (or `ROUTER_AUTH`). The router port is never published.
+  own credential, `ROUTER_AUTH` or else `COOKIE_CONTENT` (the same
+  `user:password` the router uses). There is no separate scoped router user
+  and no allowance service; MOR approvals stay on the router. The router
+  port is never published.
 - `/node/*` is an admin-gated passthrough for read-only router inspection
   by scripts. The GUI does not link it, and the SecretVM edge (Traefik)
-  does not route `/node` publicly. Before forwarding, the path is %-decoded once and
-  normalized; encoded `/`, `\\`, `.` or `%`, dot segments and empty segments
-  are refused. It is then matched case-insensitively on segment boundaries.
-  Refused for every method, with a `node_passthrough_block` audit event
-  (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
-  router file-access routes (`/ipfs*`,
-  `/v1/audio/transcriptions`, `/docker/build*`, `/docker/container/start`),
-  routes that take a caller-chosen provider address (`/proxy/provider/ping`,
-  `/proxy/sessions/initiate`), and the session-open routes
-  `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
-  `/blockchain/models/{id}/session`. Refused for every method except GET and
-  HEAD (reads pass through): `/wallet*`, `/auth*`, `/config*`,
-  `/blockchain/providers`, `/blockchain/models`, `/blockchain/bids`. Only
-  GET, HEAD, POST and DELETE are forwarded; any other method gets 403. The router receives exactly the
-  normalized path; method-override headers, `_method` query parameters and
-  the admin cookie are stripped. Router redirects are not followed (502).
-  The route list with router source refs is in `internal/api/nodeproxy.go`.
+  does not route `/node` publicly. Only GET, HEAD, POST and DELETE are
+  forwarded; any other method gets 403. Paths are normalized before they
+  are matched, and anything ambiguous is refused. Refused for every method,
+  with a `node_passthrough_block` audit event (method and path only):
+  - sending or approving funds;
+  - opening sessions;
+  - router file-access routes;
+  - routes that make the router contact a caller-chosen address.
+
+  Refused except for reads (GET and HEAD pass through):
+  - wallet, router users and permissions, and router config;
+  - creating providers, models and bids.
+
+  The router receives exactly the normalized path, without method-override
+  headers or the admin cookie, and its redirects are not followed (502).
+  The route list, with router source references, is in
+  `internal/api/nodeproxy.go` and is pinned by `internal/api/nodeproxy_test.go`.
 - Admin responses (`/admin/*`, `/node/*`) carry `Cache-Control: no-store`
   and `Pragma: no-cache`. Cookie-authenticated non-GET admin requests need
   both `Sec-Fetch-Site: same-origin` and an `Origin` matching
@@ -365,7 +400,7 @@ characters as well.
 | `cmd/**`, `internal/**` | Binary + embedded GUI |
 | `go.mod`, `go.sum` | Module graph |
 | `Dockerfile` | Image build |
-| `deploy/**` | Image entrypoint + release compose/env assets |
+| `deploy/**` | Image entrypoint + release compose/env templates |
 | `docker-compose.local.yml` | Local-stack / ASCII contract in CI |
 | `.github/workflows/build.yml` | Pipeline itself |
 
@@ -376,6 +411,43 @@ runs — any matching path is enough.
 
 Keep the `uplink` GHCR package **public** so SecretVM can pull anonymously.
 Workflow: [`.github/workflows/build.yml`](../.github/workflows/build.yml).
+
+`scripts/deploy-assets.sh` and `.env.example` also trigger pull_request CI
+(not a release), so the asset check runs when they change.
+
+### Release assets
+
+`scripts/deploy-assets.sh` builds the release assets from the templates and
+checks them; the release job and the pull_request job run the same script.
+
+| Asset | Template | Env example source |
+|-------|----------|--------------------|
+| `docker-compose.secretvm.deployed.yml`, `env.secretvm.example` | `deploy/secretvm/docker-compose.yml` | `deploy/secretvm/env.template` |
+| `docker-compose.generic.deployed.yml`, `env.generic.example` | `deploy/generic/docker-compose.yml` | `deploy/generic/env.example` |
+| `docker-compose.railway.deployed.yml`, `env.railway.example` | `deploy/railway/docker-compose.yml` | `deploy/railway/env.example` |
+
+`docker-compose.local.yml` with `.env.example` is checked too (no asset).
+
+- `generate IMAGE DIGEST DIR` replaces the one Uplink image line with
+  `IMAGE@DIGEST` and copies the env examples.
+- `check IMAGE DIGEST DIR` enforces:
+  - **P**: every image is `@sha256:` pinned, none is `:latest`, and Uplink
+    is exactly `IMAGE@DIGEST`;
+  - **T**: no `TODO` or `REPLACE` in the assets or templates;
+  - **V**: `${...}` variables: SecretVM uses exactly the six secrets; the
+    others use their required variables plus the documented overrides
+    (with defaults);
+  - **E**: each env example is identical to its source, has no duplicate
+    keys, names only variables its compose reads, and sets every required
+    one; `env.secretvm.example` sets exactly the six.
+- `pr` (pull_request CI, step "Deploy assets") generates against the fake
+  digest `sha256:000…0`, runs `check`, then the self-tests: 14 broken
+  variants (one per failure mode) that must each be rejected by the
+  matching rule. Run it locally with `bash scripts/deploy-assets.sh pr`.
+
+Other pull_request checks in the same job: `check-router-digest.sh`,
+`check-compose-config.sh`, `check-compose-policy.sh`,
+`check-no-direct-payment.sh`, `check-gui-js.sh`.
 
 ---
 

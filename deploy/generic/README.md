@@ -3,7 +3,8 @@
 Caddy + Let's Encrypt; secrets via `.env` (never commit). Same GHCR image
 pair as [SecretVM](../secretvm/) and [Railway](../railway/).
 
-Prefer digest-pinned release assets:
+Deploy the release assets `docker-compose.generic.deployed.yml` (every
+image digest-pinned) and `env.generic.example` (copy to `.env`):
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## Var ownership
@@ -11,7 +12,10 @@ https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 Form/`.env` stays the operator fillables (+ `PUBLIC_HOST` for Caddy).
 Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
 keeps the default; set one in `.env` to override (see `env.example`).
-`ADMIN_2FA_REQUIRED=false` or `MASTER_KEY_ADMIN=true` weakens admin security.
+Admin auth defaults to 2FA required (`ADMIN_2FA_REQUIRED`, default true) and
+master key admin access off (`MASTER_KEY_ADMIN`, default false); changing
+either weakens admin security. 2FA break-glass: `UPLINK_RESET_2FA=true` for
+one restart, then remove it.
 
 - **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
   SESSION_FAILOVER, HOUSEKEEPING; wiring defaults UPLINK_LISTEN, ROUTER_URL,
@@ -34,7 +38,7 @@ wallet.
 ## H3 - single replica
 
 Wallet-bearing `proxy-router` must run as **one replica**. Multi-replica is
-unsupported on stock 7.11.
+unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 

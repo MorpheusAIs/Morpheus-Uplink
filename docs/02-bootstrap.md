@@ -6,7 +6,8 @@ First boot → funded wallet → GUI login. **No git clone** — download the pu
 
 **Default path is SecretVM** ([Secret Labs](https://docs.scrt.network/)). Use
 generic VPS if you already run your own Docker + TLS. **Railway** is a
-scaffold overlay (same image pair; secrets in Railway Secrets only).
+scaffold overlay (same image pair; secrets in Railway Secrets only; the
+release ships a digest-pinned reference compose for it).
 Supported hosts: SecretVM, generic VPS, and this scaffold only -- not third-party
 consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 
@@ -15,17 +16,17 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.14.0**). Pick the skin that matches your host:
+proxy-router **v7.15.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
 | **SecretVM (recommended)** | Fastest first run — Encrypted Secrets + platform TLS (Traefik) | `docker-compose.secretvm.deployed.yml` + `env.secretvm.example` |
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
-| **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `deploy/railway/` + [operator checklist](../deploy/railway/README.md) |
+| **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `docker-compose.railway.deployed.yml` + `env.railway.example` (reference; Railway does not run compose) + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.14.0@sha256:cc7948399212dd4b2ab89ead5daeb8bac3b25f973a92a5f7928c72bba78ff556` (digest-pinned in compose)
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
 
-**Pin note:** tag `v7.14.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.15.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
@@ -86,10 +87,14 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
   `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
-  `HOUSEKEEPING=true`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
+  `HOUSEKEEPING=true`, and admin auth fixed to `ADMIN_2FA_REQUIRED=true`,
+  `MASTER_KEY_ADMIN=false`. Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
   `DATA_DIR`, `USAGE_PRUNE_DAYS`,
   `CLOSE_SESSIONS_ON_EXIT`) are Uplink process env too. Diamond /
   `ETH_NODE_CHAIN_ID` are **not** Uplink operator knobs.
+  2FA break-glass: add `UPLINK_RESET_2FA=true` to `uplink_bake_env`,
+  redeploy once, then remove it and redeploy
+  ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 - **Router** (`router_network_env`; godotenv -- process env wins):
   `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`,
   `LOG_LEVEL_APP` / `LOG_LEVEL_TCP` / `LOG_LEVEL_ETH_RPC`,
@@ -116,8 +121,12 @@ WEB_PUBLIC_URL=https://uplink.yourdomain.com
 ```
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`): unset
-keeps the default; set one in `.env` to override. `ADMIN_2FA_REQUIRED=false`
-or `MASTER_KEY_ADMIN=true` weakens admin security. Keep ownership separate:
+keeps the default; set one in `.env` to override (the list is in
+[06](06-developers.md#environment-variables)). Admin auth defaults to
+2FA required (`ADMIN_2FA_REQUIRED=true`) and master key admin access off
+(`MASTER_KEY_ADMIN=false`); changing either weakens admin security.
+2FA break-glass: `UPLINK_RESET_2FA=true` in `.env` for one restart, then
+remove it. Keep ownership separate:
 **Uplink** session/catalog/housekeeping (+ wiring defaults);
 **Router** `PROXY_*` / `LOG_LEVEL_*` / chain / Diamond / MOR. Never describe
 router `PROXY_*` / `LOG_LEVEL_*` as Uplink knobs.
@@ -138,9 +147,11 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 - RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
-Tunables are env-overridable compose defaults; set one as a Railway
-Variable to override (Uplink vs router ownership stays separate; see
-SecretVM block above). Full checklist:
+Tunables are compose defaults; set one as a Railway Variable to override
+(Uplink vs router ownership stays separate; see SecretVM block above).
+Railway does not run compose, so `${VAR:-default}` is not evaluated there:
+set plain values. 2FA is opt-in on Railway (`ADMIN_2FA_REQUIRED`, default
+`false`); set it `true` once `DATA_DIR` is on a persistent volume. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -195,6 +206,9 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
 4. Deploy. Wait for health (`uplink … listening`, router healthy).
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
+6. 2FA is required: the first login opens only the Security tab. Scan the
+   QR code, confirm a code, and save the 10 recovery codes (shown once).
+   Every other tab appears after that.
 
 ---
 
@@ -214,19 +228,21 @@ nano .env   # or your editor
 docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 ```
 
-Open `https://$PUBLIC_HOST/gui/`.
+Open `https://$PUBLIC_HOST/gui/` and enroll 2FA on the Security tab (required
+by default, as on SecretVM).
 
 ---
 
 ## First start — Railway
 
-Scaffold only — same digests as SecretVM/generic; pin images; single-replica
+Scaffold — the release's `docker-compose.railway.deployed.yml` is the
+reference (same digests as SecretVM/generic); single-replica
 proxy-router. Full step→done checklist:
 **[deploy/railway/README.md](../deploy/railway/README.md)**.
 
 1. Create a Railway project with uplink + proxy-router on a private network.
 2. Set secret-class vars as **Railway Secrets** only (see Secrets above).
-3. Pin uplink (and router) to release digests — not bare `:latest`.
+3. Use the uplink and router digests from `docker-compose.railway.deployed.yml` — not bare `:latest`.
 4. Replicas = **1** for wallet-bearing `proxy-router`.
 5. Confirm only uplink is public (`:8080` behind Railway HTTPS).
 6. Open `https://<public>/gui/` → fund wallet → Probe (same as other hosts).

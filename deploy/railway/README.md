@@ -15,10 +15,12 @@ for the Lumerin node.
 | [Generic](../generic/) | Caddy + Let's Encrypt | `.env` (not committed) |
 | **Railway (this)** | Railway HTTPS in front of uplink `:8080` | Railway **secret** vars (H4) |
 
-Production path: download digest-pinned release assets from
-[GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-(`docker-compose.*.deployed.yml`). Prefer those digests over `:latest` in
-this scaffold when you cut a real deploy. Stock router pin today:
+Production path: the release ships `docker-compose.railway.deployed.yml`
+(every image digest-pinned) and `env.railway.example` on
+[GitHub Releases](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest).
+Railway does not run compose, so use them as the reference: copy the image
+digests and variables into the Railway services instead of `:latest`.
+Stock router pin today:
 
 `ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4`
 
@@ -42,7 +44,10 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. `MASTER_KEY_ADMIN=true` weakens admin security.
+Railway Secrets. 2FA is opt-in here (`ADMIN_2FA_REQUIRED`, default false,
+because volume persistence is up to you); set it true once `DATA_DIR` is on
+a persistent volume. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA
+break-glass: `UPLINK_RESET_2FA=true` for one restart, then remove it.
 
 Railway caveat: Railway does not run `docker-compose.yml`; each service's
 environment comes from its Railway Variables. Railway variables have no
@@ -76,7 +81,7 @@ wallet.
 
 This overlay **requires a single replica** for the wallet-bearing
 `proxy-router` service. Multi-replica is **explicitly unsupported** (no
-cross-replica wallet lock on stock 7.11).
+cross-replica wallet lock on the stock router).
 
 ## H2 - managed-mode blast radius
 
@@ -117,7 +122,7 @@ privacy on the pinned v7.15.0 digest until verified.
 |------|-----------|
 | **1. Project** | Railway project has uplink + proxy-router on a private network (compose plugin or two services). |
 | **2. Secrets** | H4 vars are **Railway Secrets** only; non-secrets are plain vars. |
-| **3. Digests** | Images pinned to [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) digests (not bare `:latest`). |
+| **3. Digests** | Images pinned to the digests in the [release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) `docker-compose.railway.deployed.yml` (not bare `:latest`). |
 | **4. Replicas** | `proxy-router` replicas = **1** (H3). |
 | **5. Public edge** | Only uplink is publicly reachable (Railway HTTPS -> `:8080`). |
 | **6. GUI + fund** | `https://<public>/gui` works; wallet funded per [docs/01-prerequisites.md](../../docs/01-prerequisites.md). |

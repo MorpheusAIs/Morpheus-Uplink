@@ -2,14 +2,20 @@
 
 Default production host for Uplink. Traefik terminates TLS with SecretVM
 certs; Encrypted Secrets supply only the operator fillables (wallet /
-RPC / cookie / admin / seed / WEB_PUBLIC_URL). Form stays six; tunables
-change via compose/code, not Encrypted Secrets:
+RPC / cookie / admin / seed / WEB_PUBLIC_URL). The form has exactly six
+fields: SecretVM makes a field of every `environment:` key (literals too),
+so the compose has no other. Tunables change via compose/code, not
+Encrypted Secrets:
 
 - **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
   ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
-  CLOSE_SESSIONS_ON_EXIT). Diamond / ETH_NODE_CHAIN_ID
-  are not Uplink operator knobs.
+  CLOSE_SESSIONS_ON_EXIT), and admin auth fixed to ADMIN_2FA_REQUIRED=true,
+  MASTER_KEY_ADMIN=false (bake values win over environment:). Diamond /
+  ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **2FA break-glass**: add `UPLINK_RESET_2FA=true` to `uplink_bake_env`,
+  redeploy once, then remove it and redeploy (see
+  [docs/06-developers.md](../../docs/06-developers.md#admin-2fa-and-recovery-codes)).
 - **Router** (`router_network_env`; godotenv -- process env wins):
   PROXY_STORE_CHAT_CONTEXT, PROXY_FORWARD_CHAT_CONTEXT,
   LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID, ETH_NODE_USE_SUBSCRIPTIONS,
@@ -25,7 +31,9 @@ the six secrets, so there are no `${VAR:-default}` overrides here (unlike
 generic / Railway / local).
 
 Same GHCR image pair as [generic](../generic/) and [Railway](../railway/).
-Prefer digest-pinned release assets:
+Deploy the release asset `docker-compose.secretvm.deployed.yml` (every
+image digest-pinned) and fill the form from `env.secretvm.example` (the
+six secrets):
 https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest
 
 ## Session stake (locks, not spends)
@@ -40,7 +48,7 @@ wallet.
 ## H3 - single replica
 
 Wallet-bearing `proxy-router` must run as **one replica**. Multi-replica is
-unsupported on stock 7.11 (no cross-replica wallet lock).
+unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
