@@ -268,7 +268,7 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 				res.Skipped++
 				continue
 			}
-			p.entries[key] = entry{sessionID: s.ID, expiresAt: usableUntil, stake: s.Stake}
+			p.entries[key] = entry{sessionID: s.ID, expiresAt: usableUntil, stake: s.Stake, provider: s.Provider}
 			p.mu.Unlock()
 			res.Adopted++
 			emit(ReconcileEvent{Kind: "session_reconcile_adopt", Reason: ReasonUsable, Session: short(s.ID), Result: "ok", Source: "boot"})

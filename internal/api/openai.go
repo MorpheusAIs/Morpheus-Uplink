@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
 	"github.com/absgrafx/morpheus-uplink/internal/pool"
+	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
@@ -111,35 +113,133 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		}
 		sessionID := ensured.SessionID
 
-		// First attempt probes. Only rotate the session when the router says
-		// the session itself is dead — provider/prompt errors must not burn
-		// another stake while a usable session is still open on-chain.
+		// First attempt probes: a non-2xx is not written to the client, so
+		// it can be classified (see classifyForwardError) and either fail
+		// over to another provider, reopen a dead session, or be relayed
+		// with the router's real status.
 		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
 		if err != nil {
 			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
-			if !isSessionDeadError(err) {
+			switch dec := classifyForwardError(err); {
+			case dec == decTransport:
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
 				return
-			}
-			s.pool.Invalidate(modelID)
-			ensured, err = s.pool.EnsureDuration(modelID, durationSec)
-			if err != nil {
-				writeOpenAIError(w, http.StatusBadGateway, "failed to reopen session: "+err.Error())
-				return
-			}
-			if ensured.Opened {
-				s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
-			}
-			sessionID = ensured.SessionID
-			res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
-			if err != nil {
-				log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
-				writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
+			case dec == decSessionDead:
+				s.pool.Invalidate(modelID)
+				ensured, err = s.pool.EnsureDuration(modelID, durationSec)
+				if err != nil {
+					writeOpenAIError(w, http.StatusBadGateway, "failed to reopen session: "+err.Error())
+					return
+				}
+				if ensured.Opened {
+					s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
+				}
+				sessionID = ensured.SessionID
+				res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
+				if err != nil {
+					log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+					writeOpenAIError(w, http.StatusBadGateway, "inference failed: "+err.Error())
+					return
+				}
+			case dec == decFailover && s.cfg.SessionFailover:
+				res, err = s.failoverAndRetry(w, r, routerPath, body, keyID, reqModel, modelID, sessionID, durationSec, err)
+				if err != nil {
+					return // already answered
+				}
+			default:
+				relayRouterError(w, err)
 				return
 			}
 		}
+		if res.MidStreamProviderError {
+			s.afterStreamProviderError(reqModel, modelID, sessionID, durationSec, res.MidStreamStatus)
+		}
 		s.store.RecordUsage(keyID, reqModel, res.PromptTokens, res.CompletionTokens)
 	}
+}
+
+// errAnswered marks a request whose error reply was already written.
+var errAnswered = errors.New("answered")
+
+// failoverAndRetry moves the model to another provider and sends the
+// request once more. Exactly one retry: a provider failure on it cools
+// that provider too and is relayed, with no second failover.
+func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
+	keyID, reqModel, modelID, failedID string, durationSec int, firstErr error) (*router.ForwardResult, error) {
+	class := statusClass(firstErr)
+	fr, ferr := s.pool.Failover(modelID, failedID, durationSec, true)
+	if fr.CloseFailed {
+		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "close_failed")
+	}
+	if ferr != nil {
+		outcome := "reopen_failed"
+		if errors.Is(ferr, pool.ErrNoAlternate) {
+			outcome = "no_alternate"
+		}
+		log.Printf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
+		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
+		relayRouterError(w, firstErr) // the original status and body
+		return nil, errAnswered
+	}
+	if fr.Opened {
+		s.store.TrackSessionOpen(fr.SessionID, keyID, reqModel)
+	}
+	res, err := s.router.Forward(w, routerPath, fr.SessionID, r.Header, body, true)
+	if fr.Replaced {
+		// Another request did the failover (and its audit); this one only
+		// retried on the replacement.
+		if err != nil {
+			if classifyForwardError(err) == decFailover {
+				s.pool.MarkSessionCooling(modelID, fr.SessionID)
+			}
+			relayRouterError(w, err)
+			return nil, errAnswered
+		}
+		return res, nil
+	}
+	if err != nil {
+		log.Printf("api: forward retry after failover (model %s, session %s): %v", reqModel, pool.ShortID(fr.SessionID), err)
+		if classifyForwardError(err) == decFailover {
+			s.pool.MarkSessionCooling(modelID, fr.SessionID)
+		}
+		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "retry_failed")
+		relayRouterError(w, err)
+		return nil, errAnswered
+	}
+	s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "retried_ok")
+	return res, nil
+}
+
+// afterStreamProviderError handles a provider failure after part of an
+// answer was streamed: the client already got an SSE error event; here the
+// provider starts its cool-down and the session is retired (only when
+// another provider exists) so the next request opens elsewhere. In the
+// background: the response is finished.
+func (s *Server) afterStreamProviderError(reqModel, modelID, sessionID string, durationSec, status int) {
+	class := fmt.Sprint(status)
+	if status >= 500 {
+		class = "5xx"
+	}
+	if !s.cfg.SessionFailover {
+		return
+	}
+	go func() {
+		fr, err := s.pool.Failover(modelID, sessionID, durationSec, false)
+		if fr.Replaced {
+			return
+		}
+		if fr.CloseFailed {
+			s.auditFailover(reqModel, sessionID, fr.FailedProvider, class, "close_failed")
+		}
+		outcome := "stream_retired"
+		if err != nil {
+			outcome = "no_alternate"
+			if !errors.Is(err, pool.ErrNoAlternate) {
+				outcome = "reopen_failed"
+			}
+		}
+		s.auditFailover(reqModel, sessionID, fr.FailedProvider, class, outcome)
+	}()
 }
 
 // isSessionDeadError is true when the router rejected the session id itself

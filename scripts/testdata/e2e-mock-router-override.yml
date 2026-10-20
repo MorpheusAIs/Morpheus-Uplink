@@ -37,6 +37,7 @@ configs:
     content: |-
       SESSION_DURATION_SECONDS=600
       SESSION_FAILOVER=true
+      UPLINK_PROVIDER_COOLDOWN_SECONDS=600
       ACTIVE_MODELS_URL=${E2E_ROUTER_BASE:-http://proxy-router:8082}/e2e/catalog
       GATEWAY_BIDS_URL=${E2E_ROUTER_BASE:-http://proxy-router:8082}/e2e/bids
       HOUSEKEEPING=true

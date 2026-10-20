@@ -132,36 +132,10 @@ func newServerAgainstRouter(t *testing.T, rt *httptest.Server, seed string) (*ht
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true), rc, nil)
+	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, cfg
-}
-
-func TestProviderErrorDoesNotOpenSecondSession(t *testing.T) {
-	var opened atomic.Int32
-	rt := newRouterWithChat(t, &opened, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "provider exploded", http.StatusBadGateway)
-	})
-	t.Cleanup(rt.Close)
-	ts, cfg := newServerAgainstRouter(t, rt, "provider-err-seed")
-	master := keymaker.MasterKey(cfg.APIKeySeed)
-
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+master)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		t.Fatal("expected non-OK when provider returns 502")
-	}
-	if opened.Load() != 1 {
-		t.Fatalf("OpenSession count=%d want 1 (no blind replay on provider 5xx)", opened.Load())
-	}
 }
 
 func TestPartialSSEDoesNotOpenSecondSession(t *testing.T) {

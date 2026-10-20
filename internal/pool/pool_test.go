@@ -47,7 +47,7 @@ func TestRehydrateAdoptsOpenSession(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	rc := router.New(ts.URL, "admin", "pass")
-	p := New(rc, 600, true)
+	p := New(rc, 600)
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestEnsureDurationAdoptsChainBeforeOpen(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	rc := router.New(ts.URL, "admin", "pass")
-	p := New(rc, 600, true)
+	p := New(rc, 600)
 	// Simulate invalidate after a bad prompt while chain session remains open.
 	p.Invalidate(modelID)
 	res, err := p.EnsureDuration(modelID, 600)

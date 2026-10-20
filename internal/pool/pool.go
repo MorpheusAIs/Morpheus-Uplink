@@ -21,6 +21,7 @@ type entry struct {
 	sessionID string
 	expiresAt time.Time
 	stake     *big.Int
+	provider  string // lowercase provider address; "" when not known
 }
 
 // OnSessionClosed is invoked after a successful on-chain close so callers can
@@ -30,11 +31,17 @@ type OnSessionClosed func(sessionID string)
 type Pool struct {
 	client   *router.Client
 	duration int
-	failover bool
 
 	mu      sync.Mutex
 	entries map[string]entry       // normModel(modelID) -> session
 	opening map[string]*sync.Mutex // per-model open lock
+
+	// Provider failover memory (failover.go). In memory only: a restart
+	// forgets cool-downs, and Rehydrate rediscovers sessions.
+	fmu      sync.Mutex
+	cooldown time.Duration        // 0: no memory across requests
+	cooling  map[string]time.Time // normModel|provider -> until
+	retired  map[string]time.Time // session id -> on-chain end (never re-adopted)
 
 	onClosed OnSessionClosed
 
@@ -70,14 +77,17 @@ type ChainSession struct {
 }
 
 // New builds the session pool. Sessions are always staking-mode (never
-// direct payment).
-func New(client *router.Client, durationSec int, failover bool) *Pool {
+// direct payment), and the router's own in-prompt failover is always off:
+// provider failover is run by the pool (Failover).
+func New(client *router.Client, durationSec int) *Pool {
 	return &Pool{
 		client:   client,
 		duration: durationSec,
-		failover: failover,
 		entries:  map[string]entry{},
 		opening:  map[string]*sync.Mutex{},
+		cooldown: DefaultProviderCooldown,
+		cooling:  map[string]time.Time{},
+		retired:  map[string]time.Time{},
 	}
 }
 
@@ -148,12 +158,8 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 		p.mu.Unlock()
 		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
 	}
-	lock, ok := p.opening[key]
-	if !ok {
-		lock = &sync.Mutex{}
-		p.opening[key] = lock
-	}
 	p.mu.Unlock()
+	lock := p.openLock(key)
 
 	p.waitGate()
 	lock.Lock()
@@ -176,21 +182,36 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 		return res, nil
 	}
 
-	sessionID, err := p.client.OpenSession(modelID, router.OpenSessionRequest{
-		SessionDuration: durationSec,
-		Failover:        p.failover,
-	})
+	sessionID, provider, err := p.openAvoidingCooling(modelID, durationSec)
 	if err != nil {
 		return EnsureResult{}, err
 	}
+	p.store(key, sessionID, provider, durationSec)
+	log.Printf("pool: opened session %s for model %s (duration %ds)", short(sessionID), modelID, durationSec)
+	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
+}
+
+// openLock returns the per-model open lock.
+func (p *Pool) openLock(key string) *sync.Mutex {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	lock, ok := p.opening[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		p.opening[key] = lock
+	}
+	return lock
+}
+
+// store pools a session this pool just opened.
+func (p *Pool) store(key, sessionID, provider string, durationSec int) {
 	p.mu.Lock()
 	p.entries[key] = entry{
 		sessionID: sessionID,
 		expiresAt: time.Now().Add(time.Duration(durationSec)*time.Second - expiryBuffer),
+		provider:  provider,
 	}
 	p.mu.Unlock()
-	log.Printf("pool: opened session %s for model %s (duration %ds)", short(sessionID), modelID, durationSec)
-	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
 }
 
 func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, bool) {
@@ -313,6 +334,7 @@ func (p *Pool) rehydrate(force bool) error {
 		if p.isClosing(s.ID) {
 			continue // the boot reconcile is closing it
 		}
+		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider)
 		if !usable {
 			// Past end (or inside buffer): ask router to close so unused
 			// returns and used moves to the daylock queue.
@@ -333,7 +355,9 @@ func (p *Pool) rehydrate(force bool) error {
 			}
 			continue
 		}
-		if cur, ok := best[normModel(s.ModelAgentID)]; !ok || s.EndsAt > cur.EndsAt {
+		// Retired (failed over) sessions and sessions on a cooling provider
+		// stay visible but are never adopted back into the pool.
+		if cur, ok := best[normModel(s.ModelAgentID)]; !skipAdopt && (!ok || s.EndsAt > cur.EndsAt) {
 			best[normModel(s.ModelAgentID)] = s
 		}
 		display = append(display, ChainSession{
@@ -355,6 +379,7 @@ func (p *Pool) rehydrate(force bool) error {
 			sessionID: s.ID,
 			expiresAt: usableUntil,
 			stake:     s.Stake,
+			provider:  s.Provider,
 		}
 		adopted++
 	}

@@ -20,11 +20,18 @@ func TestOpenSessionNeverDirectPayment(t *testing.T) {
 	}))
 	defer ts.Close()
 	c := New(ts.URL, "u", "p")
-	if _, err := c.OpenSession("0xmodel", OpenSessionRequest{SessionDuration: 600, Failover: true}); err != nil {
+	if _, err := c.OpenSession("0xmodel", OpenSessionRequest{SessionDuration: 600, OmitProvider: "0xabc"}); err != nil {
 		t.Fatal(err)
 	}
 	if v, ok := body["directPayment"]; !ok || v != false {
 		t.Fatalf("directPayment must be present and false: %v", body)
+	}
+	// Uplink owns failover: the router's in-prompt failover is always off.
+	if v, ok := body["failover"]; !ok || v != false {
+		t.Fatalf("failover must be present and false: %v", body)
+	}
+	if body["omitProvider"] != "0xabc" {
+		t.Fatalf("omitProvider not sent: %v", body)
 	}
 }
 

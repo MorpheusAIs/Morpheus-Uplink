@@ -60,6 +60,26 @@ print(client.chat.completions.create(
 
 </details>
 
+<details>
+<summary><strong>Errors and provider failover</strong></summary>
+
+- When the model's provider fails (for example its backend is out of
+  credit, rate limited or down), Uplink moves to another provider for that
+  model and answers the same request; the client sees a normal reply.
+  This happens at most once per request, and only when another provider
+  serves the model.
+- Otherwise the error comes back with its real status (for example `400`
+  for a bad parameter, `402` or `429` from the provider when no other
+  provider is available), in the OpenAI error shape (`error.message`,
+  `error.type`, `error.code`). `502` means Uplink could not reach its
+  router.
+- Streaming: if the provider fails after part of the answer was sent, the
+  stream ends with one `data: {"error":{...,"type":"provider_error"}}`
+  event. Send the request again; the next one goes to another provider.
+- See [Provider failover](06-developers.md#provider-failover).
+
+</details>
+
 
 ---
 

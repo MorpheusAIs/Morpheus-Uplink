@@ -16,6 +16,10 @@
 #                closing expired only; a slow close does not block opens;
 #                a model id that differs only by case is reused, never closed;
 #                then docker stop closes the sessions before exit, timed.
+#  failover      a client 400 is relayed (no close, no open); a 402 on
+#                provider A closes A and opens on B (omitProvider, router
+#                failover off) and the request answers 200; an impaired
+#                400 on B with A cooling keeps the session (no alternate).
 #  2fa           2FA starts off (password-only); turning it on (enroll)
 #                makes login need TOTP or a recovery code; the switch
 #                survives a container restart; reset keeps it on and forces
@@ -320,6 +324,55 @@ dc up -d uplink >/dev/null
 wait_healthy uplink
 login
 echo "OK graceful stop: sessions closed before exit, within the grace period"
+
+echo "== provider failover: client 400 relayed, 402 on A moves to B, impaired 400 with no alternate kept =="
+MC=0x$(printf 'c3%.0s' $(seq 1 32))
+PA=0x$(printf 'a0%.0s' $(seq 1 20)); PB=0x$(printf 'b0%.0s' $(seq 1 20))
+# chat_body MODEL -> response body (code in $E2E_BOOT_DIR/ccode).
+chat_body() {
+  local out
+  out=$(dc exec -T uplink sh -c 'curl -sS -w "\n%{http_code}" -m 60 -K - -X POST \
+    -H "Content-Type: application/json" --data-binary "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+    http://127.0.0.1:8080/v1/chat/completions' _ "$1" <<<"header = \"Authorization: Bearer $APIKEY\"")
+  printf '%s' "$out" | tail -n 1 > "$E2E_BOOT_DIR/ccode"
+  printf '%s' "$out" | sed '$d'
+}
+gamma_open() { sessions | jq -r --arg m "$MC" '[.sessions[] | select((.ModelAgentId | ascii_downcase) == $m and .ClosedAt == 0)] | map(.Id + " " + .Provider) | join(",")'; }
+pfail() { mockctl POST "/e2e/provider-fail?provider=$1&code=$2&msg=$3" >/dev/null; }
+fo_lines() { ulog | grep -o '{.*' | jq -cR 'fromjson? | select(.msg == "audit" and .event == "provider_failover")'; }
+[ "$(chat e2e-gamma)" = 200 ] || fail "chat e2e-gamma before failover"
+before=$(gamma_open)
+case "$before" in *" $PA") ;; *) fail "want one open e2e-gamma session on provider A, got: $before" ;; esac
+SG=${before%% *}
+o4=$(opens); c4=$(stats | jq -r .session_closes)
+pfail "$PA" 400 "max_tokens%20is%20too%20large"
+b=$(chat_body e2e-gamma)
+[ "$(cat "$E2E_BOOT_DIR/ccode")" = 400 ] || fail "client 400: got $(cat "$E2E_BOOT_DIR/ccode") $b"
+printf '%s' "$b" | jq -e '.error.message == "max_tokens is too large"' >/dev/null || fail "client 400 body: $b"
+[ "$(opens)" = "$o4" ] && [ "$(stats | jq -r .session_closes)" = "$c4" ] || fail "a client 400 opened or closed a session"
+echo "OK client 400 relayed with its status; no close, no open"
+pfail "$PA" 402 "Insufficient%20balance"
+b=$(chat_body e2e-gamma)
+[ "$(cat "$E2E_BOOT_DIR/ccode")" = 200 ] || fail "402 on A: got $(cat "$E2E_BOOT_DIR/ccode") $b"
+[ "$(sess_field "$SG" ClosedAt)" != 0 ] || fail "failed session on A was not closed"
+after=$(gamma_open)
+case "$after" in *" $PB") ;; *) fail "want the e2e-gamma session on provider B, got: $after" ;; esac
+[ "$(opens)" = $((o4 + 1)) ] || fail "want exactly one new open, got $(( $(opens) - o4 ))"
+mockctl GET /e2e/opens | jq -e --arg a "$PA" '.opens | last | .omitProvider == $a and .failover == false and .provider != $a' >/dev/null \
+  || fail "failover open: $(mockctl GET /e2e/opens | jq -c '.opens | last')"
+fo_lines | jq -e -s 'map(select(.result == "retried_ok" and .status == "402")) | length == 1' >/dev/null || fail "no provider_failover retried_ok audit: $(fo_lines)"
+echo "OK 402 on A: closed A, opened on B with omitProvider=A and failover:false, answered 200, audited"
+o5=$(opens); c5=$(stats | jq -r .session_closes)
+pfail "$PB" 400 "Rate%20limit%20exceeded"
+b=$(chat_body e2e-gamma)
+[ "$(cat "$E2E_BOOT_DIR/ccode")" = 400 ] || fail "impaired 400 on B with A cooling: got $(cat "$E2E_BOOT_DIR/ccode") $b"
+[ "$(opens)" = "$o5" ] && [ "$(stats | jq -r .session_closes)" = "$c5" ] || fail "no-alternate case opened or closed a session"
+[ "$(gamma_open)" = "$after" ] || fail "no-alternate case changed the pooled session"
+fo_lines | jq -e -s 'map(select(.result == "no_alternate")) | length == 1' >/dev/null || fail "no provider_failover no_alternate audit: $(fo_lines)"
+pfail "$PA" 0 x; pfail "$PB" 0 x
+[ "$(chat e2e-gamma)" = 200 ] || fail "chat e2e-gamma after clearing faults"
+[ "$(stats | jq -r .failover_true_opens)" = 0 ] || fail "an open asked the router for failover"
+echo "OK impaired 400 on B, A cooling: no alternate, session kept, original status relayed; no open ever sent failover:true"
 
 echo "== admin 2FA: revoke-all and logout force a fresh second factor =="
 # totp SECRET [STEP_OFFSET] -> 6-digit code (RFC 6238, SHA-1, 30 s).

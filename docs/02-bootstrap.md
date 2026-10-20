@@ -86,7 +86,8 @@ WEB_PUBLIC_URL=https://your-vm-name.vm.scrtlabs.com
 > at the six secrets, so SecretVM has no `${VAR:-default}` overrides.
 
 - **Uplink** (`uplink_bake_env`): `SESSION_DURATION_SECONDS=600`,
-  `SESSION_FAILOVER=true`, `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
+  `SESSION_FAILOVER=true`, `UPLINK_PROVIDER_COOLDOWN_SECONDS=600`,
+  `ACTIVE_MODELS_URL` / `GATEWAY_BIDS_URL`,
   `HOUSEKEEPING=true`, and master key admin access fixed off
   (`MASTER_KEY_ADMIN=false`). Wiring defaults (`UPLINK_LISTEN`, `ROUTER_URL`,
   `DATA_DIR`, `USAGE_PRUNE_DAYS`,
@@ -170,7 +171,7 @@ Product rule: **form stays six**; tunables are not Encrypted Secrets. SecretVM k
 | Bucket | Where | Vars |
 |--------|-------|------|
 | **Minimum to run** | Operator fillables everywhere | `WALLET_PRIVATE_KEY`, `ETH_NODE_ADDRESS`, `COOKIE_CONTENT`, `ADMIN_PASSWORD`, `API_KEY_SEED`, `WEB_PUBLIC_URL` |
-| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT` |
+| **Uplink tunable / additional** | Uplink process only (`uplink_bake_env` / `internal/config`) | `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`, `UPLINK_PROVIDER_COOLDOWN_SECONDS`, `HOUSEKEEPING`; wiring defaults `UPLINK_LISTEN`, `ROUTER_URL`, `DATA_DIR`, `USAGE_PRUNE_DAYS`, `CLOSE_SESSIONS_ON_EXIT` |
 | **Router tunable / additional** | proxy-router only (`router_network_env`; godotenv -- process env wins) | `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`, `LOG_LEVEL_APP` / `TCP` / `ETH_RPC`, `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`, `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS` |
 
 Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not** Uplink operator knobs. Never put router `PROXY_*` / `LOG_LEVEL_*` into Uplink bake docs.

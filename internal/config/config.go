@@ -31,7 +31,12 @@ type Config struct {
 	GatewayBidsURL string
 	// Session behavior.
 	SessionDurationSec int
-	SessionFailover    bool
+	// SessionFailover turns on Uplink's provider failover on prompt errors
+	// (the router's own failover is always off).
+	SessionFailover bool
+	// ProviderCooldownSec: per model+provider memory after a provider
+	// failure (0 = none across requests).
+	ProviderCooldownSec int
 	// SESSION_DIRECT_PAYMENT (true) is no longer honoured (sessions are always
 	// staking-mode); set so main can warn.
 	DirectPaymentIgnored bool
@@ -76,6 +81,7 @@ func FromEnv() (*Config, error) {
 		GatewayBidsURL:       getenv("GATEWAY_BIDS_URL", "https://active.mor.org/gateway_bids.json"),
 		SessionDurationSec:   getenvInt("SESSION_DURATION_SECONDS", 600),
 		SessionFailover:      getenvBool("SESSION_FAILOVER", true),
+		ProviderCooldownSec:  getenvInt("UPLINK_PROVIDER_COOLDOWN_SECONDS", 600),
 		DirectPaymentIgnored: getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit:  getenvBool("CLOSE_SESSIONS_ON_EXIT", true),
 		DiamondAddress:       getenv("DIAMOND_CONTRACT_ADDRESS", "0x6aBE1d282f72B474E54527D93b979A4f64d3030a"),

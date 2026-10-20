@@ -104,7 +104,7 @@ func newTestServerWith(t *testing.T, edit func(*config.Config)) (*httptest.Serve
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec, true), rc, nil)
+	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	u, err := url.Parse(ts.URL)
