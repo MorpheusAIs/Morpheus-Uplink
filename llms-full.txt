@@ -398,6 +398,10 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
   `active_models.json` / ALL.
+- **Admin 2FA** (TOTP) issues 10 single-use recovery codes, shown once.
+  The Security tab shows how many are left and can regenerate them or reset
+  2FA (password plus a code; this signs out every session).
+  [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 - **`/node/*` router passthrough** is admin-gated and refuses routes that
   send or approve funds, open sessions, create providers, models or bids,
@@ -773,6 +777,14 @@ One topic at a time. You do not need every section on day one.
   the page never reveals whether 2FA is enrolled; lockout and audit apply to
   both steps.
 - Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
+- Status, top to bottom: a status line (health or the reason it is not
+  healthy, open sessions, versions), the four MOR numbers below, Connect a
+  client, Add MOR (opens by itself when the wallet is low) and Support
+  (collapsed). Hover or focus an &#9432; for help.
+- Security: enrolling 2FA shows 10 recovery codes once; save them. Each
+  works once in place of the 6-digit code. Regenerate them or reset 2FA from
+  the same tab (password plus a code). Reset signs out every session; enroll
+  again on the next login.
 
 ---
 
@@ -1021,6 +1033,39 @@ code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
 is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
 token only when `MASTER_KEY_ADMIN=true` (default off).
 
+### Admin 2FA and recovery codes
+
+- **TOTP** (RFC 6238, 30 s, one step of clock skew). The last accepted step
+  is stored, so a code works once; replays get 401 (`bad_totp` or
+  `totp_reuse` in the audit, never the code).
+- **Recovery codes**: enrolling issues 10, shown once (copy, `.txt`
+  download). Format `xxxx-xxxx-xxxx` from `a-z2-7` (12 symbols, 60 bits,
+  `crypto/rand`). Input is case- and dash-insensitive. Stored next to the
+  TOTP secret in `uplink-state.json` (same file, same mode) as
+  HMAC-SHA256(pepper, salt || code) with a 16-byte salt per code; the pepper
+  is derived from `API_KEY_SEED` with HKDF. Rationale in
+  `internal/adminauth/recovery.go`. Matching is constant-time over every
+  stored code and consumes the match inside one store update, so a code
+  works once even under concurrent logins. Recovery logins share the login
+  lockout and rate limit.
+- **Endpoints** (CSRF and session rules as for other admin POSTs):
+  `GET /admin/2fa/status` (`enrolled`, `required`, `recoveryRemaining`),
+  `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
+  (returns the codes), `POST /admin/2fa/recovery/regen`,
+  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
+  remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
+  code.
+- **Reset** wipes the TOTP secret and all recovery codes, revokes every
+  admin session (this one too) and clears the cookie. With
+  `ADMIN_2FA_REQUIRED=true` the next login can only enroll again, which
+  issues new codes.
+- **Audit**: `2fa_enroll`, `recovery_codes_issued` (count),
+  `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
+  `2fa_reset` (sessions revoked), `2fa_remove`. Codes and secrets are never
+  logged.
+- Logout and **Revoke all sessions** end the server-side session; there is
+  no remembered device, so the next login asks for a fresh code.
+
 ### Soft revoke (tombstone)
 
 `DELETE /admin/keys/{id}` **soft-disables** ephemeral keys: sets `revokedAt`
@@ -1167,8 +1212,9 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 - Uplink calls proxy-router over the internal network with the router's
   `COOKIE_CONTENT` (or `ROUTER_AUTH`). The router port is never published.
-- `/node/*` is an admin-gated passthrough to the router API (Swagger and
-  read-only inspection). Before forwarding, the path is %-decoded once and
+- `/node/*` is an admin-gated passthrough for read-only router inspection
+  by scripts. The GUI does not link it, and the SecretVM edge (Traefik)
+  does not route `/node` publicly. Before forwarding, the path is %-decoded once and
   normalized; encoded `/`, `\\`, `.` or `%`, dot segments and empty segments
   are refused. It is then matched case-insensitively on segment boundaries.
   Refused for every method, with a `node_passthrough_block` audit event

@@ -21,6 +21,39 @@ code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
 is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
 token only when `MASTER_KEY_ADMIN=true` (default off).
 
+### Admin 2FA and recovery codes
+
+- **TOTP** (RFC 6238, 30 s, one step of clock skew). The last accepted step
+  is stored, so a code works once; replays get 401 (`bad_totp` or
+  `totp_reuse` in the audit, never the code).
+- **Recovery codes**: enrolling issues 10, shown once (copy, `.txt`
+  download). Format `xxxx-xxxx-xxxx` from `a-z2-7` (12 symbols, 60 bits,
+  `crypto/rand`). Input is case- and dash-insensitive. Stored next to the
+  TOTP secret in `uplink-state.json` (same file, same mode) as
+  HMAC-SHA256(pepper, salt || code) with a 16-byte salt per code; the pepper
+  is derived from `API_KEY_SEED` with HKDF. Rationale in
+  `internal/adminauth/recovery.go`. Matching is constant-time over every
+  stored code and consumes the match inside one store update, so a code
+  works once even under concurrent logins. Recovery logins share the login
+  lockout and rate limit.
+- **Endpoints** (CSRF and session rules as for other admin POSTs):
+  `GET /admin/2fa/status` (`enrolled`, `required`, `recoveryRemaining`),
+  `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
+  (returns the codes), `POST /admin/2fa/recovery/regen`,
+  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
+  remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
+  code.
+- **Reset** wipes the TOTP secret and all recovery codes, revokes every
+  admin session (this one too) and clears the cookie. With
+  `ADMIN_2FA_REQUIRED=true` the next login can only enroll again, which
+  issues new codes.
+- **Audit**: `2fa_enroll`, `recovery_codes_issued` (count),
+  `recovery_code_used` (remaining count), `recovery_codes_regenerated`,
+  `2fa_reset` (sessions revoked), `2fa_remove`. Codes and secrets are never
+  logged.
+- Logout and **Revoke all sessions** end the server-side session; there is
+  no remembered device, so the next login asks for a fresh code.
+
 ### Soft revoke (tombstone)
 
 `DELETE /admin/keys/{id}` **soft-disables** ephemeral keys: sets `revokedAt`
@@ -167,8 +200,9 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 - Uplink calls proxy-router over the internal network with the router's
   `COOKIE_CONTENT` (or `ROUTER_AUTH`). The router port is never published.
-- `/node/*` is an admin-gated passthrough to the router API (Swagger and
-  read-only inspection). Before forwarding, the path is %-decoded once and
+- `/node/*` is an admin-gated passthrough for read-only router inspection
+  by scripts. The GUI does not link it, and the SecretVM edge (Traefik)
+  does not route `/node` publicly. Before forwarding, the path is %-decoded once and
   normalized; encoded `/`, `\\`, `.` or `%`, dot segments and empty segments
   are refused. It is then matched case-insensitively on segment boundaries.
   Refused for every method, with a `node_passthrough_block` audit event

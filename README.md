@@ -145,6 +145,10 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
   `active_models.json` / ALL.
+- **Admin 2FA** (TOTP) issues 10 single-use recovery codes, shown once.
+  The Security tab shows how many are left and can regenerate them or reset
+  2FA (password plus a code; this signs out every session).
+  [Details](docs/06-developers.md#admin-2fa-and-recovery-codes)
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 - **`/node/*` router passthrough** is admin-gated and refuses routes that
   send or approve funds, open sessions, create providers, models or bids,

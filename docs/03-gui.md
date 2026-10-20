@@ -16,6 +16,14 @@ One topic at a time. You do not need every section on day one.
   the page never reveals whether 2FA is enrolled; lockout and audit apply to
   both steps.
 - Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
+- Status, top to bottom: a status line (health or the reason it is not
+  healthy, open sessions, versions), the four MOR numbers below, Connect a
+  client, Add MOR (opens by itself when the wallet is low) and Support
+  (collapsed). Hover or focus an &#9432; for help.
+- Security: enrolling 2FA shows 10 recovery codes once; save them. Each
+  works once in place of the 6-digit code. Regenerate them or reset 2FA from
+  the same tab (password plus a code). Reset signs out every session; enroll
+  again on the next login.
 
 ---
 
