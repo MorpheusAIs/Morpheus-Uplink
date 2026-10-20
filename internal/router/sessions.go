@@ -16,6 +16,8 @@ import (
 type Session struct {
 	ID           string
 	ModelAgentID string
+	Provider     string // lowercase hex address
+	BidID        string
 	Stake        *big.Int
 	OpenedAt     int64
 	EndsAt       int64
@@ -25,6 +27,8 @@ type Session struct {
 type sessionDTO struct {
 	Id           string          `json:"Id"`
 	ModelAgentId string          `json:"ModelAgentId"`
+	Provider     string          `json:"Provider"`
+	BidID        string          `json:"BidID"`
 	Stake        json.RawMessage `json:"Stake"`
 	OpenedAt     json.RawMessage `json:"OpenedAt"`
 	EndsAt       json.RawMessage `json:"EndsAt"`
@@ -64,6 +68,8 @@ func (d sessionDTO) toSession() (Session, error) {
 	return Session{
 		ID:           d.Id,
 		ModelAgentID: d.ModelAgentId,
+		Provider:     strings.ToLower(strings.TrimSpace(d.Provider)),
+		BidID:        d.BidID,
 		Stake:        stake,
 		OpenedAt:     opened.Int64(),
 		EndsAt:       ends.Int64(),

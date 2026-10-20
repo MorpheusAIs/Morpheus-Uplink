@@ -1,6 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -77,5 +81,30 @@ func TestRefuseWeakAdminPassword(t *testing.T) {
 	t.Setenv("COOKIE_CONTENT", "admin:test-admin-pass-ok")
 	if _, err := FromEnv(); err == nil {
 		t.Fatal("expected refuse when ADMIN_PASSWORD equals COOKIE_CONTENT password")
+	}
+}
+
+func TestProviderCooldownFallback(t *testing.T) {
+	for v, want := range map[string]int{"": 600, "0": 0, "45": 45, "-5": 600, "ten": 600} {
+		setRequired(t)
+		t.Setenv("ROUTER_AUTH", "admin:secret")
+		t.Setenv("UPLINK_PROVIDER_COOLDOWN_SECONDS", v)
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		c, err := FromEnv()
+		log.SetOutput(os.Stderr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.ProviderCooldownSec != want {
+			t.Errorf("%q: got %d, want %d", v, c.ProviderCooldownSec, want)
+		}
+		warned := strings.Contains(buf.String(), "UPLINK_PROVIDER_COOLDOWN_SECONDS")
+		if bad := v == "-5" || v == "ten"; warned != bad {
+			t.Errorf("%q: warned=%v", v, warned)
+		}
+		if strings.Contains(buf.String(), "ten") || strings.Contains(buf.String(), "-5") {
+			t.Errorf("%q: warning carries the value: %s", v, buf.String())
+		}
 	}
 }

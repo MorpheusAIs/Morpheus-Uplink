@@ -8,11 +8,16 @@ Test controls (no auth, test-only): GET /e2e/stats, POST /e2e/fund?mor=N,
 POST /e2e/fail?path=P&code=N (inject errors), POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
 previous process), GET /e2e/sessions (every session with its open/close
 times and prompt count), GET /e2e/catalog (gateway model catalog),
-POST /e2e/catalog-mode?m=normal|empty|braces, POST /e2e/slow-close?sec=N.
-Sessions: list (/blockchain/sessions/user), open, close, detail, and
-POST /v1/chat/completions with a session_id header (open sessions only).
-Any request asking for direct payment is refused and counted
-(stats.direct_payment_requests).
+POST /e2e/catalog-mode?m=normal|empty|braces, POST /e2e/slow-close?sec=N,
+POST /e2e/provider-fail?provider=P&code=N&msg=M (that provider answers
+prompts with a provider model error; code=0 clears), GET /e2e/opens (every
+open request: model, bid, omitProvider, failover, provider picked).
+Every model has two providers (PROVIDERS, best rated first). Sessions:
+list (/blockchain/sessions/user), open by model (omitProvider honoured),
+open by bid, rated bids, close, detail, and POST /v1/chat/completions with
+a session_id header (open sessions only). Any request asking for direct
+payment is refused and counted (stats.direct_payment_requests); an open
+asking for router failover is counted (stats.failover_true_opens).
 
 Env: MOCK_MOR (initial balance), MOCK_MODE=fail (balance 500), MOCK_BODY
 (raw balance body), MOCK_WALLET (address).
@@ -34,8 +39,10 @@ S = {
     "mor": os.environ.get("MOCK_MOR", "0"),
     "stats": {"unauthorized": 0, "unauthorized_by_pw": {},
               "direct_payment_requests": 0,
-              "session_opens": 0, "session_closes": 0},
+              "session_opens": 0, "session_closes": 0, "failover_true_opens": 0},
     "fail": {},        # path -> code
+    "pfail": {},       # provider -> (code, message)
+    "opens": [],
     "sessions": {},
     "catalog_mode": "normal",
     "slow_close": 0,
@@ -50,9 +57,17 @@ CATALOG = [
 ]
 
 
-def new_session(model, ends_at, opened_by):
+PROVIDERS = ["0x" + "a0" * 20, "0x" + "b0" * 20]
+
+
+def bid_id(model, provider):
+    return "0x" + hashlib.sha256((model.lower() + provider).encode()).hexdigest()
+
+
+def new_session(model, ends_at, opened_by, provider=PROVIDERS[0]):
     sid = "0x" + uuid.uuid4().hex + uuid.uuid4().hex
     S["sessions"][sid] = {"Id": sid, "ModelAgentId": model, "Stake": "1000",
+                          "Provider": provider, "BidID": bid_id(model, provider),
                           "OpenedAt": int(time.time()), "EndsAt": int(ends_at),
                           "ClosedAt": 0, "OpenedBy": opened_by, "Prompts": 0,
                           "ClosedAtMono": 0}
@@ -143,13 +158,36 @@ class H(BaseHTTPRequestHandler):
             if path == "/blockchain/sessions/user":
                 off = int(q.get("offset", ["0"])[0]); lim = int(q.get("limit", ["100"])[0])
                 rows = sorted(S["sessions"].values(), key=lambda x: x["OpenedAt"], reverse=True)
-                keys = ("Id", "ModelAgentId", "Stake", "OpenedAt", "EndsAt", "ClosedAt")
+                keys = ("Id", "ModelAgentId", "Provider", "BidID", "Stake", "OpenedAt", "EndsAt", "ClosedAt")
                 return self._json(200, {"sessions": [{k: r[k] for k in keys} for r in rows[off:off + lim]]})
-            if path.startswith("/blockchain/models/") and path.endswith("/session") and method == "POST":
-                model = path[len("/blockchain/models/"):-len("/session")]
+            if path.startswith("/blockchain/models/") and path.endswith("/bids/rated") and method == "GET":
+                model = path[len("/blockchain/models/"):-len("/bids/rated")]
+                return self._json(200, {"bids": [
+                    {"ID": bid_id(model, p), "Bid": {"Id": bid_id(model, p), "Provider": p, "ModelAgentId": model},
+                     "Score": 10 - i} for i, p in enumerate(PROVIDERS)]})
+            if method == "POST" and path.endswith("/session") and (
+                    path.startswith("/blockchain/models/") or path.startswith("/blockchain/bids/")):
+                by_bid = path.startswith("/blockchain/bids/")
+                ref = path.split("/")[3]
+                omit = str(body.get("omitProvider") or "").lower()
+                if body.get("failover") not in (False, None, "false"):
+                    S["stats"]["failover_true_opens"] += 1
+                pick = model = None
+                if by_bid:
+                    for m in [c["Id"] for c in CATALOG] + [r["ModelAgentId"] for r in S["sessions"].values()]:
+                        for p in PROVIDERS:
+                            if bid_id(m, p) == ref:
+                                pick, model = p, m
+                else:
+                    model = ref
+                    pick = next((p for p in PROVIDERS if p != omit), None)
+                S["opens"].append({"model": model, "bid": ref if by_bid else "", "omitProvider": omit,
+                                   "failover": body.get("failover"), "provider": pick})
+                if pick is None:
+                    return self._json(500, {"error": "no provider accepting session"})
                 dur = int(body.get("sessionDuration") or 600)
                 S["stats"]["session_opens"] += 1
-                return self._json(200, {"sessionID": new_session(model, time.time() + dur, "uplink")})
+                return self._json(200, {"sessionID": new_session(model, time.time() + dur, "uplink", pick)})
             if path.startswith("/blockchain/sessions/") and path.endswith("/close") and method == "POST":
                 r = S["sessions"].get(path.split("/")[3])
                 if r is None:
@@ -163,13 +201,16 @@ class H(BaseHTTPRequestHandler):
                 r = S["sessions"].get(path.split("/")[3])
                 if r is None:
                     return self._json(404, {"error": "session not found"})
-                keys = ("Id", "ModelAgentId", "Stake", "OpenedAt", "EndsAt", "ClosedAt")
+                keys = ("Id", "ModelAgentId", "Provider", "BidID", "Stake", "OpenedAt", "EndsAt", "ClosedAt")
                 return self._json(200, {"session": {k: r[k] for k in keys}})
             if path == "/v1/chat/completions" and method == "POST":
                 r = S["sessions"].get(self.headers.get("session_id", ""))
                 if r is None or r["ClosedAt"] or r["EndsAt"] <= time.time():
                     return self._json(400, {"error": "session not found"})
                 r["Prompts"] += 1
+                if r["Provider"] in S["pfail"]:
+                    code, msg = S["pfail"][r["Provider"]]
+                    return self._json(code, {"providerModelError": {"error": {"message": msg}}, "statusCode": code})
                 return self._json(200, {"id": "chatcmpl-e2e", "object": "chat.completion",
                                         "model": body.get("model", ""),
                                         "choices": [{"index": 0, "finish_reason": "stop",
@@ -189,6 +230,8 @@ class H(BaseHTTPRequestHandler):
         if path == "/e2e/catalog":
             mode = S["catalog_mode"]
             return self._json(200, {} if mode == "braces" else {"models": [] if mode == "empty" else CATALOG})
+        if path == "/e2e/opens":
+            return self._json(200, {"opens": S["opens"]})
         if path == "/e2e/bids":
             return self._json(200, {})
         self._body()
@@ -199,6 +242,12 @@ class H(BaseHTTPRequestHandler):
             S["catalog_mode"] = q.get("m", ["normal"])[0]
         elif path == "/e2e/slow-close":
             S["slow_close"] = int(q.get("sec", ["0"])[0])
+        elif path == "/e2e/provider-fail":
+            p, code = q.get("provider", [""])[0].lower(), int(q.get("code", ["0"])[0])
+            if code:
+                S["pfail"][p] = (code, q.get("msg", ["provider error"])[0])
+            else:
+                S["pfail"].pop(p, None)
         elif path == "/e2e/fund":
             S["mor"] = q.get("mor", ["0"])[0]
         elif path == "/e2e/fail":
@@ -210,7 +259,7 @@ class H(BaseHTTPRequestHandler):
         elif path == "/e2e/reset-stats":
             S["stats"] = {"unauthorized": 0, "unauthorized_by_pw": {},
                           "direct_payment_requests": 0,
-                          "session_opens": 0, "session_closes": 0}
+                          "session_opens": 0, "session_closes": 0, "failover_true_opens": 0}
         return self._json(200, {"ok": True})
 
     def do_GET(self):

@@ -63,7 +63,7 @@ func TestUplinkNeverSendsDirectPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	pl := pool.New(rc, 600, true)
+	pl := pool.New(rc, 600)
 	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pl, rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

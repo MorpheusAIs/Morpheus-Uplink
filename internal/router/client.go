@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -206,19 +207,25 @@ func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, er
 // OpenSessionRequest is the body for opening a session. There is no
 // direct-payment field on purpose: Uplink always opens staking-mode sessions
 // (stake locked, returned to the wallet) and always sends
-// "directPayment": false explicitly.
+// "directPayment": false explicitly. There is no failover field either:
+// Uplink runs provider failover itself (internal/pool), so the router's
+// in-prompt failover, which would close and reopen behind the pool, is
+// always off ("failover": false).
 type OpenSessionRequest struct {
-	SessionDuration int  `json:"sessionDuration"`
-	Failover        bool `json:"failover"`
+	SessionDuration int `json:"sessionDuration"`
+	// OmitProvider, when set, excludes that provider address from the
+	// router's bid selection (one address; the router takes no list).
+	OmitProvider string `json:"omitProvider,omitempty"`
 }
 
-// MarshalJSON pins directPayment to false.
+// MarshalJSON pins directPayment and failover to false.
 func (r OpenSessionRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		SessionDuration int  `json:"sessionDuration"`
-		Failover        bool `json:"failover"`
-		DirectPayment   bool `json:"directPayment"`
-	}{r.SessionDuration, r.Failover, false})
+		SessionDuration int    `json:"sessionDuration"`
+		Failover        bool   `json:"failover"`
+		DirectPayment   bool   `json:"directPayment"`
+		OmitProvider    string `json:"omitProvider,omitempty"`
+	}{r.SessionDuration, false, false, strings.TrimSpace(r.OmitProvider)})
 }
 
 // ErrDirectPayment is returned instead of sending any router request whose
@@ -288,6 +295,70 @@ func (c *Client) OpenSession(modelID string, req OpenSessionRequest) (string, er
 	return res.SessionID, nil
 }
 
+// OpenSessionByBid opens a session on one specific bid (and so one specific
+// provider). Used when more than one provider has to be excluded, which the
+// router's single omitProvider cannot express. Same staking-only body.
+func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
+	bidID = strings.TrimSpace(bidID)
+	if bidID == "" {
+		return "", fmt.Errorf("empty bid id")
+	}
+	body := struct {
+		SessionDuration int  `json:"sessionDuration"`
+		DirectPayment   bool `json:"directPayment"`
+		Failover        bool `json:"failover"`
+	}{durationSec, false, false}
+	var res struct {
+		SessionID string `json:"sessionID"`
+	}
+	if err := c.doJSON(http.MethodPost, "/blockchain/bids/"+url.PathEscape(bidID)+"/session", body, &res); err != nil {
+		return "", err
+	}
+	if res.SessionID == "" {
+		return "", fmt.Errorf("open session for bid %s: empty sessionID in response", bidID)
+	}
+	return res.SessionID, nil
+}
+
+// RatedBid is one row of GET /blockchain/models/{id}/bids/rated.
+type RatedBid struct {
+	ID       string
+	Provider string // lowercase hex address
+	Score    float64
+}
+
+// RatedBids lists the model's active bids with the router's score, best
+// first (stable on ties, in router order).
+func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
+	var res struct {
+		Bids []struct {
+			ID  string `json:"ID"`
+			Bid struct {
+				Id       string `json:"Id"`
+				Provider string `json:"Provider"`
+			} `json:"Bid"`
+			Score float64 `json:"Score"`
+		} `json:"bids"`
+	}
+	if err := c.doJSON(http.MethodGet, "/blockchain/models/"+url.PathEscape(modelID)+"/bids/rated", nil, &res); err != nil {
+		return nil, err
+	}
+	out := make([]RatedBid, 0, len(res.Bids))
+	for _, b := range res.Bids {
+		id := b.ID
+		if id == "" {
+			id = b.Bid.Id
+		}
+		prov := strings.ToLower(strings.TrimSpace(b.Bid.Provider))
+		if id == "" || prov == "" {
+			continue
+		}
+		out = append(out, RatedBid{ID: id, Provider: prov, Score: b.Score})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
+}
+
 func (c *Client) CloseSession(sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -322,7 +393,17 @@ type ForwardResult struct {
 	// that carried a usage object.
 	PromptTokens     int64
 	CompletionTokens int64
+	// MidStreamProviderError is set when a provider model error arrived
+	// after part of an SSE answer was already sent. The error line was
+	// replaced by an SSE error event and the stream ended; the caller
+	// retires the session for later requests (no retry of this one).
+	MidStreamProviderError bool
+	MidStreamStatus        int
 }
+
+// maxErrorBody bounds the router error body kept for classification and
+// relayed to the client.
+const maxErrorBody = 64 << 10
 
 // Forward proxies an inference call (chat completions, embeddings, audio)
 // to the router with the session_id header, streaming the response to w.
@@ -356,9 +437,10 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 		c.noteAuth(resp.StatusCode, "")
 	}
 	if probeOnly && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
-		// Drain a little for the error message, then let the caller retry.
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return res, fmt.Errorf("router status %d: %s", resp.StatusCode, string(raw))
+		// Nothing is written to w: the caller classifies the typed error and
+		// fails over, retries or relays the status and body itself.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return res, &StatusError{Method: http.MethodPost, Path: path, Code: resp.StatusCode, Body: string(raw)}
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -367,7 +449,9 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 	streaming := isEventStream(contentType)
 	if streaming {
 		w.WriteHeader(resp.StatusCode)
-		res.PromptTokens, res.CompletionTokens = flushCopy(w, resp.Body)
+		st := flushCopy(w, resp.Body)
+		res.PromptTokens, res.CompletionTokens = st.promptTokens, st.completionTokens
+		res.MidStreamProviderError, res.MidStreamStatus = st.providerError, st.providerStatus
 		return res, nil
 	}
 
@@ -395,55 +479,133 @@ func isEventStream(contentType string) bool {
 	return len(contentType) >= 17 && contentType[:17] == "text/event-stream"
 }
 
-// flushCopy copies src to w, flushing after every chunk so SSE tokens reach
-// the client immediately. It watches data: lines as they pass and returns
-// the token counts from the last chunk that carries a usage object. The
-// proxy-router sends that chunk before [DONE] on every stream.
-func flushCopy(w http.ResponseWriter, src io.Reader) (promptTokens, completionTokens int64) {
+// streamResult is what flushCopy saw while relaying an SSE stream.
+type streamResult struct {
+	promptTokens, completionTokens int64
+	providerError                  bool // a provider model error replaced the rest of the stream
+	providerStatus                 int
+}
+
+// flushCopy copies an SSE stream to w line by line, flushing after each
+// read so tokens reach the client immediately. It watches data: lines for
+// the usage object (the proxy-router sends that chunk before [DONE]).
+//
+// A provider model error that arrives after the first chunk cannot be
+// failed over (part of the answer is already with the client). The router
+// appends it as a bare JSON object ({"providerModelError":...}), which SSE
+// clients would ignore; flushCopy writes an OpenAI-shaped SSE error event
+// in its place and ends the stream.
+func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
+	var out streamResult
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
 	var pending []byte
-	discardUntilNL := false
+	passthrough := false // inside an oversized line: relay, do not parse
+	write := func(b []byte) bool {
+		if len(b) == 0 {
+			return true
+		}
+		_, err := w.Write(b)
+		return err == nil
+	}
+	flush := func() {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	// handle relays one complete line (with its newline). It returns false
+	// when the stream must stop (client gone, or provider error replaced).
+	handle := func(line []byte) bool {
+		if status, ok := sseProviderError(line); ok {
+			out.providerError, out.providerStatus = true, status
+			_ = write(sseErrorEvent(status))
+			return false
+		}
+		if p, c, ok := sseUsage(line); ok {
+			out.promptTokens, out.completionTokens = p, c
+		}
+		return write(line)
+	}
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			pending = append(pending, buf[:n]...)
-			for {
-				nl := bytes.IndexByte(pending, '\n')
-				if nl < 0 {
-					break
-				}
-				line := pending[:nl]
-				pending = pending[nl+1:]
-				if discardUntilNL {
-					discardUntilNL = false
+			chunk := buf[:n]
+			for len(chunk) > 0 {
+				nl := bytes.IndexByte(chunk, '\n')
+				if passthrough {
+					end := len(chunk)
+					if nl >= 0 {
+						end = nl + 1
+						passthrough = false
+					}
+					if !write(chunk[:end]) {
+						return out
+					}
+					chunk = chunk[end:]
 					continue
 				}
-				if p, c, ok := sseUsage(line); ok {
-					promptTokens, completionTokens = p, c
+				if nl < 0 {
+					pending = append(pending, chunk...)
+					chunk = nil
+					if len(pending) > maxSSELine {
+						// Relay an oversized line unparsed instead of
+						// buffering without bound.
+						if !write(pending) {
+							return out
+						}
+						pending = pending[:0]
+						passthrough = true
+					}
+					break
+				}
+				line := append(pending, chunk[:nl+1]...)
+				pending = nil
+				chunk = chunk[nl+1:]
+				if !handle(line) {
+					flush()
+					return out
 				}
 			}
-			if len(pending) > maxSSELine {
-				// Drop an oversized line instead of buffering without bound.
-				pending = pending[:0]
-				discardUntilNL = true
-			}
+			flush()
 		}
 		if err != nil {
-			if !discardUntilNL {
-				if p, c, ok := sseUsage(pending); ok {
-					promptTokens, completionTokens = p, c
-				}
+			if len(pending) > 0 && !passthrough {
+				_ = handle(pending)
 			}
-			return
+			flush()
+			return out
 		}
 	}
+}
+
+// sseProviderError reports a bare provider model error line (not a data:
+// event) in a stream, with the status it carries (502 when it has none).
+func sseProviderError(line []byte) (int, bool) {
+	t := bytes.TrimSpace(line)
+	if len(t) == 0 || t[0] != '{' || !bytes.Contains(t, []byte(`"providerModelError"`)) {
+		return 0, false
+	}
+	var body struct {
+		StatusCode int `json:"statusCode"`
+	}
+	// Decode only the first JSON value: the router appends the object with
+	// no newline, so anything after it would share the line.
+	_ = json.NewDecoder(bytes.NewReader(t)).Decode(&body)
+	if body.StatusCode < 400 || body.StatusCode > 599 {
+		body.StatusCode = http.StatusBadGateway
+	}
+	return body.StatusCode, true
+}
+
+// sseErrorEvent is the OpenAI-shaped error event that ends a stream whose
+// provider failed after the first chunk.
+func sseErrorEvent(status int) []byte {
+	ev, _ := json.Marshal(map[string]any{"error": map[string]any{
+		"message": "the provider failed during the response; send the request again",
+		"type":    "provider_error",
+		"code":    status,
+	}})
+	return append(append([]byte("data: "), ev...), '\n', '\n')
 }
 
 const maxSSELine = 1 << 20

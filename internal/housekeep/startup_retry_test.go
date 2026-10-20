@@ -43,7 +43,7 @@ func TestStartupScanRetriesUntilRouterReady(t *testing.T) {
 	_ = ln.Close()
 
 	rc := router.New("http://"+addr, "uplink", "pass")
-	pl := pool.New(rc, 600, true)
+	pl := pool.New(rc, 600)
 	runner, err := New(Config{
 		Enabled:           true,
 		Router:            rc,
@@ -104,7 +104,7 @@ func TestStartupScanRetryIsBounded(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 	rc := router.New("http://"+addr, "uplink", "pass")
-	pl := pool.New(rc, 600, true)
+	pl := pool.New(rc, 600)
 	runner, _ := New(Config{
 		Enabled:           true,
 		Router:            rc,

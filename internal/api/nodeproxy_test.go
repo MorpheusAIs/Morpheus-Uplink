@@ -61,7 +61,7 @@ func nodeTestServer(t *testing.T) (*httptest.Server, *Server, *config.Config, *u
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, 600, true), rc, nil)
+	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, 600), rc, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	u, _ := url.Parse(ts.URL)

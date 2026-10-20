@@ -62,3 +62,16 @@ func TestCSRFSafeMethodsSkip(t *testing.T) {
 		}
 	}
 }
+
+func TestWebPublicOrigin(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://Uplink.example/": "https://uplink.example",
+		"https://b.example:8443":  "https://b.example:8443",
+		"":                        "",
+		"not a url":               "",
+	} {
+		if got := webPublicOrigin(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+}

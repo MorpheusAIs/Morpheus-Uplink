@@ -36,7 +36,7 @@ func TestBalanceDropSingleNeutralEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, "u", "p")
-	srv := NewServer(cfg, st, catalog.New("http://127.0.0.1:9"), pool.New(rc, 600, true), rc, nil)
+	srv := NewServer(cfg, st, catalog.New("http://127.0.0.1:9"), pool.New(rc, 600), rc, nil)
 	srv.CheckOutflow()
 	srv.CheckOutflow()
 	var mor, eth []AuditEvent

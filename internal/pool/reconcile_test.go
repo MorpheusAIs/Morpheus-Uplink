@@ -166,7 +166,7 @@ func TestStartupReconcileAdoptsAndClosesThenNoDoubleOpen(t *testing.T) {
 		row("0xx-live", modelX, now.Add(time.Hour)),
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{OnReconcile: func(r ReconcileResult) { got = r }})
@@ -200,7 +200,7 @@ func TestGateBlocksOpenUntilReconcileDone(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{row("0xa-long", modelA, now.Add(2*time.Hour))}}
 	f.listFail.Store(2)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	done := make(chan EnsureResult, 1)
 	go func() {
@@ -223,7 +223,7 @@ func TestListFailureRefusesOpenUntilStateKnown(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}}
 	f.listFail.Store(1 << 20)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	var gaveUp atomic.Bool
 	ctx, cancel := context.WithCancel(context.Background())
@@ -265,7 +265,7 @@ func TestCloseFailureCountedAndRetrySafe(t *testing.T) {
 	}))
 	bad := httptest.NewServer(mux)
 	t.Cleanup(bad.Close)
-	p := New(router.New(bad.URL, "u", "p"), 600, true)
+	p := New(router.New(bad.URL, "u", "p"), 600)
 	r, err := p.reconcileOnce(configuredAB)
 	if err != nil || r.Failed != 1 || r.Closed != 0 {
 		t.Fatalf("%+v %v", r, err)
@@ -298,7 +298,7 @@ func liveRows(now time.Time, models ...string) []map[string]any {
 func runReconcile(t *testing.T, f *fakeRouter, configured ConfiguredModels) (ReconcileResult, *Pool) {
 	t.Helper()
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configured, ReconcileConfig{OnReconcile: func(r ReconcileResult) { got = r }})
@@ -353,7 +353,7 @@ func TestRescanKeysByLowercaseModel(t *testing.T) {
 	upper := "0xAAAA000000000000000000000000000000000000000000000000000000000000"
 	f := &fakeRouter{closed: map[string]int{}, sessions: liveRows(time.Now(), upper)}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestRescanKeysByLowercaseModel(t *testing.T) {
 func TestRescanAuditsExpiredClose(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{row("0xexp-rescan-0000", modelA, time.Now().Add(-time.Minute))}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	var evs []ReconcileEvent
 	p.SetOnRescanEvent(func(ev ReconcileEvent) { evs = append(evs, ev) })
 	if err := p.RehydrateForce(); err != nil {
@@ -416,7 +416,7 @@ func TestShutdownCloseAllWithinTimesOut(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	t.Cleanup(func() { close(hang) }) // runs before ts.Close
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestReconcileCloseCapDefersExcess(t *testing.T) {
 	}
 	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	var got ReconcileResult
 	var caps []ReconcileEvent
@@ -510,7 +510,7 @@ func TestReconcilePartialListFailureClosesNothing(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
 	f.failPage.Store(100)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -539,7 +539,7 @@ func TestReconcileUnverifiableRowClosesNothing(t *testing.T) {
 		{"Id": "", "ModelAgentId": modelA, "Stake": "1", "EndsAt": now.Add(time.Hour).Unix(), "ClosedAt": 0},
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	if _, err := p.reconcileOnce(configuredAB); err == nil {
 		t.Fatal("want error for a row without an id")
 	}
@@ -568,7 +568,7 @@ func TestReconcileGateReleasedBeforeSlowCloses(t *testing.T) {
 			close(release)
 		}
 	})
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	done := make(chan struct{})
 	go func() {
@@ -603,7 +603,7 @@ func TestLateRecoveryClosesExpiredOnly(t *testing.T) {
 	}}
 	f.listFail.Store(3)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{
@@ -623,7 +623,7 @@ func TestReconcileAuditsEveryAdoptAndClose(t *testing.T) {
 		row("0xb-past-session-id-0000", modelB, now.Add(-time.Minute)),
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600, true)
+	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
 	var evs []ReconcileEvent
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{OnEvent: func(ev ReconcileEvent) { evs = append(evs, ev) }})

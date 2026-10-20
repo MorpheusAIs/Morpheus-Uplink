@@ -194,6 +194,7 @@ env-overridable default (`${VAR:-default}`): leave it unset for the
 default, or set it in `.env` or the shell. Overridable in all three:
 
 - Uplink: `SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`,
+  `UPLINK_PROVIDER_COOLDOWN_SECONDS`,
   `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `HOUSEKEEPING`,
   `UPLINK_RESET_2FA` (default `false`).
 - Router: `PROXY_STORE_CHAT_CONTEXT`, `PROXY_FORWARD_CHAT_CONTEXT`,
@@ -244,7 +245,8 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
-| `SESSION_FAILOVER` | `true` | Provider failover at open |
+| `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
+| `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed) |
 | `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
@@ -412,6 +414,65 @@ before any request may open a session:
 
 Session ids in Uplink's other log lines are shortened to the first 10
 characters as well.
+
+### Provider failover
+
+Uplink keeps one session per model, and a session is tied to one
+provider. When that provider fails a prompt, Uplink moves the model to
+another provider and sends the request once more. The router's own
+in-prompt failover is always off (every open sends `failover:false`), so
+the pool stays in charge of which session is open. `SESSION_FAILOVER=false`
+turns Uplink's failover off: errors are relayed and the session is kept.
+
+- *Fails over* (the provider is at fault): a provider model error with
+  status 402, 401, 403 or 404 (for example the provider's backend is out
+  of credit or rejects its own key); any 429; any 5xx; and a provider
+  model error with 400, 413 or 422 whose text says the provider is
+  impaired (rate limit, too many requests, capacity, overloaded, model or
+  service unavailable, or `"statusCode":429` / `503` in the body).
+- *Relayed with the router's real status* (not a blanket 502), no
+  failover, no cool-down: other 4xx (the request itself is wrong, for
+  example a bad parameter), TEE attestation or verification failures, and
+  `request cancelled while waiting in queue`. A provider model error is
+  returned in the OpenAI error shape (`error.message`, `error.type`,
+  `error.code`) with the provider's body kept under `providerModelError`.
+  A 401/403 from the router itself (Uplink's router credential) stays a
+  502, since it is not the client's key.
+- *Not a provider fault:* Uplink cannot reach its own router (502), or the
+  router rejects the session id (the existing reopen on a dead session).
+- *Guardrail:* before closing anything, Uplink lists the model's rated
+  bids and counts distinct providers outside the failed one and those in
+  cool-down. With none, it keeps the session (stakes lock while a session
+  is open, so a close and reopen onto no other provider only ties up
+  liquidity) and relays the original error (`no_alternate`).
+- *Order:* under the model's open lock, Uplink closes the failed session
+  first (synchronously, up to 30 s) and then opens on another provider:
+  with one excluded provider, by model with the router's `omitProvider`;
+  with more, by bid over the rated bids (best score first, at most 3
+  tries, one per provider). A failed close is logged and the session is
+  retired: Rehydrate never adopts it back.
+- *Once:* one failover and one retry per request. A provider failure on the
+  retry puts that provider in cool-down too and is relayed. Concurrent
+  failures on one session do one close and one open; the others retry on
+  the replacement.
+- *Cool-down* (`UPLINK_PROVIDER_COOLDOWN_SECONDS`, default 600): per model
+  and provider, in memory (a restart forgets it). New opens and Rehydrate
+  avoid cooling providers; if every provider of the model is cooling, a
+  normal open is made. `0` keeps no memory across requests; the immediate
+  retry still avoids the provider that just failed.
+- *Streaming:* an error before the first chunk arrives as a non-2xx and
+  fails over like any other request. After part of the answer was sent,
+  the answer cannot be restarted: the provider's error line is replaced by
+  one `data: {"error":{"message":...,"type":"provider_error","code":N}}`
+  event and the stream ends. The provider goes into cool-down and the
+  session is retired (only when another provider exists), so the next
+  request opens elsewhere (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
+- *Audit:* a `provider_failover` event (Security alerts) with the model,
+  the first 10 characters of the session id, the failed provider's short
+  address, the status class (`402`, `429`, `5xx`, ...), and the outcome:
+  `retried_ok`, `retry_failed`, `no_alternate`, `reopen_failed`,
+  `close_failed` (an extra event when the close did not land), or
+  `stream_retired`. No request or response bodies, no keys.
 
 ## CI/CD and versioning
 

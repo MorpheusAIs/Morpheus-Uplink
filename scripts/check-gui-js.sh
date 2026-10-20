@@ -129,6 +129,7 @@ function extract(name) {
 }
 const FULL = 'sk-p' + 'a'.repeat(40) + 'd04f';
 const MASKED = 'sk-p\u2026d04f';
+const WALLET = '0x' + 'ab12'.repeat(10);
 let sent = [], reveals = 0, clip = [];
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || { value: '', textContent: '', classList: { add() {}, remove() {} } }) };
@@ -151,10 +152,10 @@ global.fetch = async (url, opts = {}) => {
 };
 eval([
   "let realKeys = {}; const KEY_PLACEHOLDER = 'YOUR_API_KEY'; let selectedKeyId = 'prompt'; let selectedModel = 'm'; let curlDirty = false; const MIN_SESSION_DURATION = 600;",
-  "let pgKeys = [{ id: 'prompt', secret: '" + MASKED + "' }];",
+  "let pgKeys = [{ id: 'prompt', secret: '" + MASKED + "' }]; let secrets = { wallet: '' };",
   ...['isMaskedKey', 'usableKey', 'rememberKeys', 'fullKey', 'selectedKeySecret', 'buildCurl', 'updateCurlPreview',
-      'parseCurlCommand', 'postChatCompletion', 'runCurlCommand', 'runPlayground', 'copySecret', 'connectKeySecret', 'copyConnectKey'].map(extract),
-  'global.T = { rememberKeys, buildCurl, runPlayground, runCurlCommand, copySecret, copyConnectKey, get realKeys() { return realKeys; } };',
+      'parseCurlCommand', 'postChatCompletion', 'runCurlCommand', 'runPlayground', 'copyText', 'copySecret', 'copyWallet', 'connectKeySecret', 'copyConnectKey'].map(extract),
+  'global.T = { rememberKeys, buildCurl, runPlayground, runCurlCommand, copySecret, copyWallet, copyConnectKey, get realKeys() { return realKeys; }, secrets };',
 ].join('\n'));
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 (async () => {
@@ -177,7 +178,12 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
   await T.copySecret('prompt'); await T.copyConnectKey();
   if (clip.length !== 2 || clip.some((c) => c !== FULL)) fail('clipboard got ' + JSON.stringify(clip));
   if (reveals !== 1) fail('reveal not cached: ' + reveals);
-  console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key');
+  // Wallet copy: the full address (the page shows it shortened), not via a key reveal.
+  T.secrets.wallet = WALLET;
+  await T.copyWallet(null);
+  if (clip[2] !== WALLET) fail('wallet copy got ' + JSON.stringify(clip[2]));
+  if (reveals !== 1) fail('wallet copy fetched a key reveal');
+  console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key; wallet copy copies the full address');
 })().catch((e) => fail(e.stack || e));
 NODE
 
@@ -505,3 +511,40 @@ els.alertFilter.value = '  '; T.filterAlerts();
 if (hidden().join() !== 'false,false,false,false' || !els.alertsNoMatch.classList.contains('hidden')) fail('empty filter shows all');
 console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter');
 NODE
+
+# Status warns when the page origin is not WEB_PUBLIC_URL (text only).
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function fn(name) {
+  const m = new RegExp('^function\\s+' + name + '\\s*\\(', 'm').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  return src.slice(m.index, src.indexOf('\n}', m.index) + 2);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const ui = /const UI_COPY = \{[\s\S]*?\n\};/.exec(src);
+if (!ui) fail('UI_COPY not found');
+const el = { textContent: '', classList: { _h: true, toggle(c, on) { this._h = on; } } };
+global.document = { getElementById: (id) => (id === 'originWarn' ? el : null) };
+global.location = { origin: 'https://new-host.example' };
+eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['originWarning', 'renderOriginWarn'].map(fn).join('\n')
+  + '\nObject.assign(global, { originWarning, renderOriginWarn });');
+if (originWarning({ webPublicUrl: 'https://new-host.example' }, 'https://New-Host.example/') !== '') fail('matching origin must not warn');
+if (originWarning({}, 'https://x.example') !== '') fail('no warning without the status field');
+const w = originWarning({ webPublicUrl: 'https://old-host.example' }, 'https://new-host.example');
+if (!w.includes('open at https://new-host.example') || !w.includes('WEB_PUBLIC_URL is https://old-host.example')) fail('mismatch warning: ' + w);
+renderOriginWarn({ webPublicUrl: 'https://old-host.example' });
+if (el.classList._h || !el.textContent.includes('old-host.example')) fail('Status warning not shown');
+renderOriginWarn({ webPublicUrl: 'https://new-host.example' });
+if (!el.classList._h || el.textContent) fail('Status warning not cleared');
+if (html.indexOf('id="originWarn"') < 0 || html.indexOf('id="originWarn"') > html.indexOf('id="connectClient"')) fail('originWarn must be on the Status overview');
+console.log('OK: Status warns when the page origin is not WEB_PUBLIC_URL');
+NODE
+
+# API Keys has no reveal button; copy and Export all fetch the full keys.
+if grep -qE 'Reveal full keys|Masked by default|refreshKeys\(true' "$HTML"; then
+  echo "FAIL: API Keys still has the reveal button or its note" >&2; exit 1
+fi
+grep -qF "await api('/admin/keys?reveal=1')" "$HTML" || { echo "FAIL: Export all must fetch full keys" >&2; exit 1; }
+echo "OK: no reveal button; copy and Export all fetch the full keys on demand"

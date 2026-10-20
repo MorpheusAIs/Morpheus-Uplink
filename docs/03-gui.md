@@ -44,7 +44,8 @@ One topic at a time. You do not need every section on day one.
   restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
 - **Security alerts** (below 2FA): the last 50 audit events (logins
-  and lockouts, 2FA and key changes, boot session checks, balance drops),
+  and lockouts, 2FA and key changes, boot session checks, provider
+  failovers, balance drops),
   newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
   (bold) | details. The filter box above the list hides rows that do not
   contain the typed text (case-insensitive). The list is kept in memory and

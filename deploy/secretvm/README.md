@@ -8,6 +8,7 @@ so the compose has no other. Tunables change via compose/code, not
 Encrypted Secrets:
 
 - **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
+  UPLINK_PROVIDER_COOLDOWN_SECONDS,
   ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
   CLOSE_SESSIONS_ON_EXIT), and master key admin access fixed off
