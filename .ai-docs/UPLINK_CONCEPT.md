@@ -154,7 +154,8 @@ gateway mode"), at which point Uplink shrinks to just GUI + metering, or disappe
    passthrough normalizes the path (one %-decode; encoded separators, dot and empty
    segments refused), matches case-insensitively and refuses, for every method with
    an audit event: `/blockchain/send/*`, `/blockchain/approve`, `/wallet*`, `/auth*`,
-   `/ipfs*` and the session-open routes (`/blockchain/sessions`,
+   router file-access routes (`/ipfs*`, `/v1/audio/transcriptions`,
+   `/docker/build*`, `/docker/container/start`) and the session-open routes (`/blockchain/sessions`,
    `/blockchain/{bids,models}/{id}/session`). Only the normalized path is forwarded;
    router redirects are not followed. Only 443 is public. A consumer node needs
    **no inbound :3333**.

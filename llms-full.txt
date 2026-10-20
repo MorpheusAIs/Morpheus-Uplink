@@ -204,8 +204,8 @@ an API key.
 - Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
   routes that send or approve funds, change the wallet, open sessions, change
-  router users or permissions, or use IPFS. Protect admin access like the
-  wallet.
+  router users or permissions, or access router files. Protect admin access
+  like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
 
@@ -400,7 +400,7 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 - **`/node/*` router passthrough** is admin-gated and refuses routes that
   send or approve funds, change the wallet, open sessions, change router users
-  or permissions, or use IPFS (403, audited). [Details](docs/06-developers.md#router-access-and-restart-safety)
+  or permissions, or access router files (403, audited). [Details](docs/06-developers.md#router-access-and-restart-safety)
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
 Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.
@@ -1149,7 +1149,9 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
   are refused. It is then matched case-insensitively on segment boundaries.
   Refused for every method, with a `node_passthrough_block` audit event
   (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
-  `/wallet*`, `/auth*`, `/ipfs*`, and the session-open routes
+  `/wallet*`, `/auth*`, router file-access routes (`/ipfs*`,
+  `/v1/audio/transcriptions`, `/docker/build*`, `/docker/container/start`),
+  and the session-open routes
   `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
   `/blockchain/models/{id}/session`. The router receives exactly the
   normalized path; method-override headers, `_method` query parameters and

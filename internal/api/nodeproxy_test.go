@@ -2,6 +2,8 @@ package api
 
 import (
 	"bufio"
+	"bytes"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +134,8 @@ var nodeBlockedPaths = []string{
 	"/wallet", "/wallet/privateKey", "/wallet/mnemonic", "/wallet/derivationPath",
 	"/auth/users", "/auth/users/request", "/auth/users/confirm", "/auth/users/agent1/txs",
 	"/auth/allowance/requests", "/auth/allowance/confirm", "/auth/allowance/revoke", "/auth/cookie/path", "/auth",
+	"/v1/audio/transcriptions", "/V1/Audio/Transcriptions/", "/v1/audio/tr%61nscriptions",
+	"/docker/build", "/docker/build/stream", "/Docker/Container/Start/",
 	"/ipfs/add", "/ipfs/pin", "/ipfs/unpin", "/ipfs/download/stream/QmX", "/ipfs/download/QmX", "/ipfs/version",
 	"/blockchain/sessions", "/blockchain/bids/0xabc/session", "/blockchain/models/0xabc/session",
 	// case, trailing slash, encoded letters
@@ -200,6 +204,40 @@ func TestNodeMalformedEscapeRejected(t *testing.T) {
 	}
 	if up.count() != 0 {
 		t.Fatal("malformed path reached the router")
+	}
+}
+
+// A multipart audio transcription carrying file_path and s3_presigned_url
+// is refused before anything is forwarded.
+func TestNodeAudioTranscriptionMultipartBlocked(t *testing.T) {
+	ts, srv, cfg, up := nodeTestServer(t)
+	ac := adminClient(t, ts, cfg)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("model", "whisper")
+	_ = mw.WriteField("file_path", "/data/sample.wav")
+	_ = mw.WriteField("s3_presigned_url", "https://bucket.example/sample.wav")
+	_ = mw.Close()
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/node/v1/audio/transcriptions", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	withCSRF(req, cfg)
+	resp, err := ac.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("multipart transcription: %d, want 403", resp.StatusCode)
+	}
+	ev := blockAudits(srv)
+	if len(ev) != 1 || !strings.Contains(ev[0].Message, "POST /node/v1/audio/transcriptions (blocked)") {
+		t.Fatalf("audit: %+v", ev)
+	}
+	if strings.Contains(ev[0].Message, "sample.wav") {
+		t.Fatalf("audit carries a form field: %q", ev[0].Message)
+	}
+	if up.count() != 0 {
+		t.Fatal("transcription request reached the router")
 	}
 }
 

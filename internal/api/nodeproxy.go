@@ -46,10 +46,14 @@ import (
 //	                     internal/authapi/controller_http.go:57 POST /auth/allowance/revoke (agent_requests)
 //	                     internal/authapi/controller_http.go:59 GET /auth/users/:username/txs (agent_requests)
 //	                     internal/authapi/controller_http.go:60 GET /auth/cookie/path (no auth)
-//	/ipfs, /ipfs/*       internal/proxyapi/controller_http.go:105-111 (ipfs_*). With full access
-//	                     ipfs/add reads any absolute router path (controller_http.go:808,
-//	                     ipfs_paths.go) and download/stream returns it, so with a Kubo
-//	                     endpoint configured it could read router process files.
+//	/ipfs, /ipfs/*       internal/proxyapi/controller_http.go:105-111 (ipfs_*); router
+//	                     file-access routes are denied.
+//	/v1/audio/transcriptions  internal/proxyapi/controller_http.go:100 (audio_transcription);
+//	                     router file-access route, denied.
+//	/docker/build, /docker/build/*  internal/proxyapi/controller_http.go:114-115 (docker_build);
+//	                     router file-access route, denied.
+//	/docker/container/start  internal/proxyapi/controller_http.go:116 (docker_manage);
+//	                     host volume mounts, denied.
 //	/blockchain/sessions             (exact) controller.go:96 POST open session
 //	/blockchain/bids/{id}/session    (exact) controller.go:97 POST open session by bid
 //	/blockchain/models/{id}/session  (exact) controller.go:98 POST open session by model
@@ -74,6 +78,9 @@ var nodeDenyRules = []struct {
 	{[]string{"wallet"}, false},
 	{[]string{"auth"}, false},
 	{[]string{"ipfs"}, false},
+	{[]string{"v1", "audio", "transcriptions"}, false},
+	{[]string{"docker", "build"}, false},
+	{[]string{"docker", "container", "start"}, false},
 	{[]string{"blockchain", "sessions"}, true},
 	{[]string{"blockchain", "bids", "*", "session"}, true},
 	{[]string{"blockchain", "models", "*", "session"}, true},

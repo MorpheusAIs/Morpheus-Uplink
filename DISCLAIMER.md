@@ -31,8 +31,8 @@ an API key.
 - Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
   routes that send or approve funds, change the wallet, open sessions, change
-  router users or permissions, or use IPFS. Protect admin access like the
-  wallet.
+  router users or permissions, or access router files. Protect admin access
+  like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
 
