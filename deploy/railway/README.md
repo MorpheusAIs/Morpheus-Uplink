@@ -44,8 +44,12 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. 2FA is required by default (`ADMIN_2FA_REQUIRED=true`, as
-on SecretVM and generic): the first login opens only the Security tab until
+Railway Secrets. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
+variable on uplink.** Railway does not evaluate the compose default, so if
+the variable is unset 2FA is off, with no warning. A value that is not true
+or false (for example the literal `${ADMIN_2FA_REQUIRED:-true}` text) fails
+closed: 2FA stays required and Uplink warns at startup and on the Security
+tab. With it set, the first login opens only the Security tab until
 you enroll (scan the QR code, confirm a code, save the 10 recovery codes).
 Keep `DATA_DIR` on a persistent Railway volume, or each redeploy asks for a
 new enrollment. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA

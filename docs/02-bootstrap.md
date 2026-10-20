@@ -150,9 +150,11 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 Tunables are compose defaults; set one as a Railway Variable to override
 (Uplink vs router ownership stays separate; see SecretVM block above).
 Railway does not run compose, so `${VAR:-default}` is not evaluated there:
-set plain values. 2FA is required by default on Railway too
-(`ADMIN_2FA_REQUIRED=true`): enroll on the first login, and keep `DATA_DIR`
-on a persistent volume. Full checklist:
+set plain values. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
+variable**: unset means 2FA is off, with no warning. A value that is not
+true or false (such as the literal `${ADMIN_2FA_REQUIRED:-true}` text)
+fails closed (2FA required, with a warning). Then enroll on the first login,
+and keep `DATA_DIR` on a persistent volume. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>

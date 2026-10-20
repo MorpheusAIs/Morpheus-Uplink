@@ -31,7 +31,8 @@
 #   D  security defaults (SECURITY_DEFAULTS, FALSE_WHEREVER below): each
 #      pinned variable has exactly the pinned value wherever the compose or
 #      its env example gives one (${VAR:-x} default or literal, quoted or
-#      with "export"), and is assigned at most once per file.
+#      with "export"), and is assigned at most once per file; Railway's env
+#      example sets ADMIN_2FA_REQUIRED actively (ENV_MUST_SET).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/scripts/deploy-assets.sh"
@@ -74,6 +75,9 @@ SECURITY_DEFAULTS = {
     "railway":  {"ADMIN_2FA_REQUIRED": "true", "MASTER_KEY_ADMIN": "false"},
     "local":    {"ADMIN_2FA_REQUIRED": ABSENT, "MASTER_KEY_ADMIN": ABSENT},
 }
+# Must be set (not commented) in the env example: hosts that do not run
+# compose (Railway) never see the ${VAR:-default}, and unset means off.
+ENV_MUST_SET = {"railway": ("ADMIN_2FA_REQUIRED",)}
 # False wherever they appear, in every template and env example.
 FALSE_WHEREVER = ("UPLINK_RESET_2FA", "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT")
 
@@ -214,6 +218,10 @@ def check(image, digest, root, out):
         pins = dict(SECURITY_DEFAULTS.get(name, {}))
         for var in FALSE_WHEREVER:
             pins.setdefault(var, "false")
+        active_keys = env_keys(envtext)[0]
+        for var in ENV_MUST_SET.get(name, ()):
+            if var not in active_keys:
+                bad.append("D(%s): %s must be set (not commented) in %s" % (name, var, env))
         for var, want in sorted(pins.items()):
             got, count = compose_values(compose, var)
             evals = env_values(envtext, var)
@@ -311,6 +319,7 @@ PY
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '^(\s+- MASTER_KEY_ADMIN=.*)$' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-master-key-twice 'D\(generic\): MASTER_KEY_ADMIN is assigned 2 times in deploy/generic/docker-compose.yml'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+)(ADMIN_2FA_REQUIRED=true)$' '\1\2\n\1\2'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-2fa-twice 'D\(secretvm\): ADMIN_2FA_REQUIRED is assigned 2 times in deploy/secretvm/docker-compose.yml'
   copy_root; edit "$tmp/root/deploy/railway/env.example" '^(# MASTER_KEY_ADMIN=false)$' '\1\nexport MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-master-key-twice 'D\(railway\): MASTER_KEY_ADMIN is assigned 2 times in deploy/railway/env.example'
+  copy_root; edit "$tmp/root/deploy/railway/env.example" '^(ADMIN_2FA_REQUIRED=true)$' '# \1'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail railway-env-2fa-commented 'D\(railway\): ADMIN_2FA_REQUIRED must be set \(not commented\)'
   echo "OK: deploy-assets self-tests ($n failure modes rejected)"
 }
 

@@ -668,9 +668,11 @@ six as **Railway Secrets** / vars (same surface as SecretVM / generic):
 Tunables are compose defaults; set one as a Railway Variable to override
 (Uplink vs router ownership stays separate; see SecretVM block above).
 Railway does not run compose, so `${VAR:-default}` is not evaluated there:
-set plain values. 2FA is required by default on Railway too
-(`ADMIN_2FA_REQUIRED=true`): enroll on the first login, and keep `DATA_DIR`
-on a persistent volume. Full checklist:
+set plain values. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
+variable**: unset means 2FA is off, with no warning. A value that is not
+true or false (such as the literal `${ADMIN_2FA_REQUIRED:-true}` text)
+fails closed (2FA required, with a warning). Then enroll on the first login,
+and keep `DATA_DIR` on a persistent volume. Full checklist:
 [deploy/railway/README.md](../deploy/railway/README.md).
 
 </details>
@@ -1079,6 +1081,14 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
 
 ### Admin 2FA and recovery codes
 
+- **`ADMIN_2FA_REQUIRED` parsing** (`internal/config`): unset, empty or blank
+  means false (the code default, used by local dev and the bare binary); a
+  boolean (`true`/`false`/`1`/`0`, surrounding space ignored) is that value;
+  anything else, such as a literal `${ADMIN_2FA_REQUIRED:-true}` left by a
+  host that does not interpolate, **fails closed** to true. A malformed
+  `MASTER_KEY_ADMIN` stays false. Either case logs one warning naming the
+  variable (never its value) and shows it on the Security tab
+  (`configWarn` in `/admin/2fa/status` and `/admin/status`).
 - **TOTP** (RFC 6238, 30 s, one step of clock skew). The last accepted step
   is stored, so a code works once; replays get 401 (`bad_totp` or
   `totp_reuse` in the audit, never the code).
@@ -1234,7 +1244,8 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
 - Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true`; on
-  Railway keep `DATA_DIR` on a persistent volume) and
+  Railway set it as a service variable, since Railway does not evaluate the
+  compose default, and keep `DATA_DIR` on a persistent volume) and
   `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
   admin access on weakens admin security.
 
@@ -1767,8 +1778,12 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are env-overridable compose defaults (`${VAR:-default}`), not
-Railway Secrets. 2FA is required by default (`ADMIN_2FA_REQUIRED=true`, as
-on SecretVM and generic): the first login opens only the Security tab until
+Railway Secrets. **Set `ADMIN_2FA_REQUIRED=true` as a Railway service
+variable on uplink.** Railway does not evaluate the compose default, so if
+the variable is unset 2FA is off, with no warning. A value that is not true
+or false (for example the literal `${ADMIN_2FA_REQUIRED:-true}` text) fails
+closed: 2FA stays required and Uplink warns at startup and on the Security
+tab. With it set, the first login opens only the Security tab until
 you enroll (scan the QR code, confirm a code, save the 10 recovery codes).
 Keep `DATA_DIR` on a persistent Railway volume, or each redeploy asks for a
 new enrollment. `MASTER_KEY_ADMIN=true` weakens admin security. 2FA

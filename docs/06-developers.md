@@ -23,6 +23,14 @@ token only when `MASTER_KEY_ADMIN=true` (default off).
 
 ### Admin 2FA and recovery codes
 
+- **`ADMIN_2FA_REQUIRED` parsing** (`internal/config`): unset, empty or blank
+  means false (the code default, used by local dev and the bare binary); a
+  boolean (`true`/`false`/`1`/`0`, surrounding space ignored) is that value;
+  anything else, such as a literal `${ADMIN_2FA_REQUIRED:-true}` left by a
+  host that does not interpolate, **fails closed** to true. A malformed
+  `MASTER_KEY_ADMIN` stays false. Either case logs one warning naming the
+  variable (never its value) and shows it on the Security tab
+  (`configWarn` in `/admin/2fa/status` and `/admin/status`).
 - **TOTP** (RFC 6238, 30 s, one step of clock skew). The last accepted step
   is stored, so a code works once; replays get 401 (`bad_totp` or
   `totp_reuse` in the audit, never the code).
@@ -178,7 +186,8 @@ default, or set it in `.env` or the shell. Overridable in all three:
   `ETH_NODE_CHAIN_ID`, `ETH_NODE_USE_SUBSCRIPTIONS`, `BLOCKSCOUT_API_URL`,
   `DIAMOND_CONTRACT_ADDRESS`, `MOR_TOKEN_ADDRESS`.
 - Generic and Railway only: `ADMIN_2FA_REQUIRED` (default `true`; on
-  Railway keep `DATA_DIR` on a persistent volume) and
+  Railway set it as a service variable, since Railway does not evaluate the
+  compose default, and keep `DATA_DIR` on a persistent volume) and
   `MASTER_KEY_ADMIN` (default `false`). Turning 2FA off or the master key
   admin access on weakens admin security.
 
