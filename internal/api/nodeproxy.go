@@ -15,37 +15,23 @@ import (
 
 // /node/* is an admin-gated passthrough to the proxy-router API (Swagger,
 // read-only inspection). Uplink calls the router as its admin user, so
-// routes that move funds, change the wallet, or change router users or
-// permissions are refused here (403 + audit) before anything is forwarded.
+// routes that move funds, change the wallet, router users, permissions or
+// config, or access router files are refused here (403 + audit) before
+// anything is forwarded.
 //
 // Route table: proxy-router v7.15.0 (commit 0cb8eb83), registered flat on a
 // gin.New() engine (internal/handlers/httphandlers/http.go:60-87; no groups
 // or prefixes; controllers in internal/apibus/controller.go:19). gin v1.10
 // defaults: case-sensitive match, RedirectTrailingSlash on,
 // RedirectFixedPath off, no method-override middleware and no _method
-// handling anywhere in the router source.
+// handling anywhere in the router source. The router registers no PUT or
+// PATCH on any route.
 //
-// Blocked (every method, matched case-insensitively on segment boundaries):
+// Blocked for every method (matched case-insensitively on segment boundaries):
 //
 //	/blockchain/send/*   internal/blockchainapi/controller.go:61 POST send/eth (send_eth)
 //	                     internal/blockchainapi/controller.go:62 POST send/mor (send_mor)
 //	/blockchain/approve  internal/blockchainapi/controller.go:60 POST (approve)
-//	/wallet, /wallet/*   internal/walletapi/controller.go:29 GET (get_wallet; same path as DELETE)
-//	                     internal/walletapi/controller.go:30 POST /wallet/privateKey (set_wallet)
-//	                     internal/walletapi/controller.go:31 POST /wallet/mnemonic (set_wallet)
-//	                     internal/walletapi/controller.go:32 POST /wallet/derivationPath (set_wallet)
-//	                     internal/walletapi/controller.go:33 DELETE /wallet (remove_wallet)
-//	/auth, /auth/*       internal/authapi/controller_http.go:47 POST /auth/users (add_user)
-//	                     internal/authapi/controller_http.go:48 DELETE /auth/users (remove_user)
-//	                     internal/authapi/controller_http.go:50 POST /auth/users/request (no auth)
-//	                     internal/authapi/controller_http.go:51 POST /auth/users/confirm (agent_requests)
-//	                     internal/authapi/controller_http.go:52 GET /auth/users (agent_requests)
-//	                     internal/authapi/controller_http.go:54 POST /auth/allowance/requests (request_allowance)
-//	                     internal/authapi/controller_http.go:55 POST /auth/allowance/confirm (agent_requests)
-//	                     internal/authapi/controller_http.go:56 GET /auth/allowance/requests (agent_requests)
-//	                     internal/authapi/controller_http.go:57 POST /auth/allowance/revoke (agent_requests)
-//	                     internal/authapi/controller_http.go:59 GET /auth/users/:username/txs (agent_requests)
-//	                     internal/authapi/controller_http.go:60 GET /auth/cookie/path (no auth)
 //	/ipfs, /ipfs/*       internal/proxyapi/controller_http.go:105-111 (ipfs_*); router
 //	                     file-access routes are denied.
 //	/v1/audio/transcriptions  internal/proxyapi/controller_http.go:100 (audio_transcription);
@@ -59,31 +45,65 @@ import (
 //	/blockchain/models/{id}/session  (exact) controller.go:98 POST open session by model
 //	                     The body field directPayment selects paying the provider from
 //	                     the stake (controller.go:700, 760-762, 888-890); Uplink opens
-//	                     its own sessions with directPayment pinned false.
+//	                     its own sessions with directPayment pinned false. The open
+//	                     path also raises the MOR allowance (service.go:458).
 //
-// Allowed endpoints do not dispatch to a blocked action from the body or
-// query: there is no generic tx/call or batch route. The only body-selected
-// fund movement is directPayment on the open-session routes above (blocked).
-// GET /blockchain/models/{id}/session/estimate (controller.go:99) takes a
-// directPayment query flag but only estimates. POST /v1/agents/tools
+// Blocked for every method except GET and HEAD (reads pass through):
+//
+//	/wallet, /wallet/*   walletapi/controller.go:30-32 POST privateKey, mnemonic,
+//	                     derivationPath (set_wallet); :33 DELETE /wallet (remove_wallet).
+//	                     Read: :29 GET /wallet returns address, kind and derivation
+//	                     path only (controller.go:45-70, structs.go:17-26).
+//	/auth, /auth/*       authapi/controller_http.go:47 POST /auth/users (add_user), :48
+//	                     DELETE /auth/users (remove_user), :50 POST /auth/users/request,
+//	                     :51 POST /auth/users/confirm, :54 POST /auth/allowance/requests,
+//	                     :55 POST /auth/allowance/confirm, :57 POST /auth/allowance/revoke.
+//	                     Reads: :52 GET /auth/users (username, perms, confirmed,
+//	                     allowances; :168-186), :56 GET /auth/allowance/requests
+//	                     (:292-309), :59 GET /auth/users/:username/txs (tx hashes;
+//	                     :352-371), :60 GET /auth/cookie/path (a file path, not its
+//	                     content; :381-410). None returns a password or changes state.
+//	/config, /config/*   system/controller.go:81 POST /config/models/reload, :85 POST
+//	                     /config/ethNode, :86 DELETE /config/ethNode (system_config).
+//	                     Read: :82 GET /config (sanitized; :196-221).
+//	/blockchain/providers  (exact) controller.go:68 POST create_provider:
+//	                       service.go:581-593 raises the MOR allowance, then stakes
+//	/blockchain/models     (exact) controller.go:76 POST create_model:
+//	                       service.go:618-630 raises the MOR allowance, then stakes
+//	/blockchain/bids       (exact) controller.go:80 POST create_bid:
+//	                       service.go:726-743 raises the MOR allowance for the bid
+//	                       fee, which is not returned (Marketplace.sol:86-87)
+//
+// Every caller of the approve / increase-allowance / transfer paths
+// (service.go:458, 593, 630, 743, 1088, 1166, 1187) is behind a blocked
+// route above. Allowed endpoints do not dispatch to a blocked action from
+// the body or query: there is no generic tx/call or batch route. The only
+// body-selected fund movement is directPayment on the open-session routes
+// (blocked). GET /blockchain/models/{id}/session/estimate (controller.go:99)
+// takes a directPayment query flag but only estimates. POST /v1/agents/tools
 // (controller_http.go:95, 415-431) forwards a tool call to an agent, and
 // /proxy/sessions/initiate (controller_http.go:89, 164-172) is the provider
 // handshake; neither signs a transfer.
 var nodeDenyRules = []struct {
 	pattern []string // lowercase segments; "*" matches one segment
 	exact   bool     // true: whole path; false: prefix on segment boundary
+	readsOK bool     // true: GET and HEAD pass, every other method is blocked
 }{
-	{[]string{"blockchain", "send"}, false},
-	{[]string{"blockchain", "approve"}, false},
-	{[]string{"wallet"}, false},
-	{[]string{"auth"}, false},
-	{[]string{"ipfs"}, false},
-	{[]string{"v1", "audio", "transcriptions"}, false},
-	{[]string{"docker", "build"}, false},
-	{[]string{"docker", "container", "start"}, false},
-	{[]string{"blockchain", "sessions"}, true},
-	{[]string{"blockchain", "bids", "*", "session"}, true},
-	{[]string{"blockchain", "models", "*", "session"}, true},
+	{[]string{"blockchain", "send"}, false, false},
+	{[]string{"blockchain", "approve"}, false, false},
+	{[]string{"wallet"}, false, true},
+	{[]string{"auth"}, false, true},
+	{[]string{"config"}, false, true},
+	{[]string{"ipfs"}, false, false},
+	{[]string{"v1", "audio", "transcriptions"}, false, false},
+	{[]string{"docker", "build"}, false, false},
+	{[]string{"docker", "container", "start"}, false, false},
+	{[]string{"blockchain", "sessions"}, true, false},
+	{[]string{"blockchain", "bids", "*", "session"}, true, false},
+	{[]string{"blockchain", "models", "*", "session"}, true, false},
+	{[]string{"blockchain", "providers"}, true, true},
+	{[]string{"blockchain", "models"}, true, true},
+	{[]string{"blockchain", "bids"}, true, true},
 }
 
 var errNodePathAmbiguous = errors.New("ambiguous path")
@@ -160,9 +180,12 @@ func normalizeNodePath(raw string) (string, error) {
 
 // nodePathBlocked reports whether the normalized path hits a deny rule
 // (case-insensitive, segment boundaries).
-func nodePathBlocked(p string) bool {
+func nodePathBlocked(p, method string) bool {
 	segs := strings.Split(strings.ToLower(strings.TrimPrefix(p, "/")), "/")
 	for _, rule := range nodeDenyRules {
+		if rule.readsOK && (method == http.MethodGet || method == http.MethodHead) {
+			continue
+		}
 		if len(segs) < len(rule.pattern) || (rule.exact && len(segs) != len(rule.pattern)) {
 			continue
 		}
@@ -241,7 +264,7 @@ func (s *Server) nodeProxy() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := strings.TrimPrefix(rawRequestPath(r), "/node")
 		np, err := normalizeNodePath(raw)
-		if err != nil || nodePathBlocked(np) {
+		if err != nil || nodePathBlocked(np, r.Method) {
 			shown, reason := np, "blocked"
 			if err != nil {
 				shown, reason = auditSafePath(raw), "ambiguous"

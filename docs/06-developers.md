@@ -162,11 +162,13 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
   are refused. It is then matched case-insensitively on segment boundaries.
   Refused for every method, with a `node_passthrough_block` audit event
   (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
-  `/wallet*`, `/auth*`, router file-access routes (`/ipfs*`,
+  router file-access routes (`/ipfs*`,
   `/v1/audio/transcriptions`, `/docker/build*`, `/docker/container/start`),
   and the session-open routes
   `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
-  `/blockchain/models/{id}/session`. The router receives exactly the
+  `/blockchain/models/{id}/session`. Refused for every method except GET and
+  HEAD (reads pass through): `/wallet*`, `/auth*`, `/config*`,
+  `/blockchain/providers`, `/blockchain/models`, `/blockchain/bids`. The router receives exactly the
   normalized path; method-override headers, `_method` query parameters and
   the admin cookie are stripped. Router redirects are not followed (502).
   The route list with router source refs is in `internal/api/nodeproxy.go`.

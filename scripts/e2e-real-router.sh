@@ -10,7 +10,9 @@
 #    /admin/status (routerAuth ok, wallet from the router)
 #  - /node/* passthrough: /node/healthcheck and the Swagger spec pass
 #    (basePath rewritten); /node/blockchain/send/eth and spelling variants
-#    (plus wallet/privateKey and audio/transcriptions) get 403 for every method, are audited, and never reach the router
+#    (plus audio/transcriptions) get 403 for every method; writes to bids,
+#    config/ethNode, config/models/reload, wallet and auth get 403; GET
+#    /node/wallet passes through, are audited, and never reach the router
 #    (checked in the router's own request log)
 #  - boot reconcile on an empty session list: ok, nothing adopted or closed
 #  - docker stop: Uplink is PID 1, exits 0 within the 45 s grace
@@ -117,18 +119,33 @@ echo "OK /node/healthcheck 200 and Swagger spec (basePath /node) pass through; r
 n=0
 for p in /node/blockchain/send/eth /node/BLOCKCHAIN/Send/ETH/ /node/blockchain/s%65nd/eth \
          /node/blockchain/%2e%2e/blockchain/send/eth /node/healthcheck/../blockchain/send/eth \
-         /node/blockchain%2fsend/eth /node/blockchain//send/eth /node/blockchain/send/mor /node/wallet/privateKey \
+         /node/blockchain%2fsend/eth /node/blockchain//send/eth /node/blockchain/send/mor \
          /node/v1/audio/transcriptions /node/V1/Audio/Transcriptions/; do
   for m in GET POST PUT PATCH DELETE; do
     c=$(node_req "$m" "$p"); n=$((n + 1))
     [ "$c" = 403 ] || fail "$m $p: $c, want 403"
   done
 done
+# Write-blocked routes: every non-read method is refused.
+for p in /node/blockchain/bids /node/Blockchain/BIDS/ /node/config/ethNode /node/Config/EthNode/ \
+         /node/config/models/reload /node/wallet/privateKey /node/wallet /node/auth/users; do
+  for m in POST PUT PATCH DELETE; do
+    c=$(node_req "$m" "$p"); n=$((n + 1))
+    [ "$c" = 403 ] || fail "$m $p: $c, want 403"
+  done
+done
 sleep 1
-if rlog | grep -iE 'HTTP-REQ\] [A-Z]+ [^ ]*(send|wallet/privatekey|audio)'; then fail "a blocked request reached the router"; fi
+if rlog | grep -iE 'HTTP-REQ\] ([A-Z]+ [^ ]*(send|wallet/privatekey|audio|config/ethnode|config/models)|(POST|PUT|PATCH|DELETE) /(blockchain/bids|wallet|auth)\b)'; then
+  fail "a blocked request reached the router"
+fi
 blocks=$(dc logs --no-color uplink | grep -c '"event":"node_passthrough_block"' || true)
 [ "$blocks" -ge "$n" ] || fail "audit: $blocks node_passthrough_block events, want >= $n"
 echo "OK /node deny list: $n blocked requests -> 403, audited, none in the router request log"
+w=$(dc exec -T uplink curl -sS -f -H "Cookie: $SESSION" http://127.0.0.1:8080/node/wallet)
+st_addr=$(status_json | jq -r .walletAddress)
+[ "$(printf '%s' "$w" | jq -r .address | tr 'A-F' 'a-f')" = "$(printf '%s' "$st_addr" | tr 'A-F' 'a-f')" ] || fail "GET /node/wallet: unexpected body"
+printf '%s' "$w" | jq -e 'keys - ["address","kind","derivationPath"] == []' >/dev/null || fail "GET /node/wallet returned extra fields"
+echo "OK GET /node/wallet passes through (200 from the router; address only)"
 
 rec_lines() { dc logs --no-color uplink | grep -o '{.*' | jq -cR 'fromjson? | select(.msg == "audit" and (.event // "" | startswith("session_reconcile")))'; }
 summary() { rec_lines | jq -s -c '[.[] | select(.event == "session_reconcile" and .result != "deferred")] | last // empty'; }

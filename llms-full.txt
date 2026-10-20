@@ -83,8 +83,8 @@ There is no separate docs host or MCP for Uplink.
 7. **Do not expose the proxy-router admin port publicly.** Only the TLS
    front (Uplink on `:443` / local `:8080`) should be public. Router `:8082`
    stays on the compose network; `/node/*` is the admin-gated passthrough,
-   with a block list for routes that move funds or change the wallet, users or
-   permissions (see `internal/api/nodeproxy.go`).
+   with a block list for routes that move funds or change the wallet, users,
+   permissions or config (see `internal/api/nodeproxy.go`).
    Consumer nodes need **no inbound `:3333`** — they dial out to providers.
 
 8. **Deploy from GitHub Release assets, not `git clone`, for production.**  
@@ -203,8 +203,9 @@ an API key.
   wallet. Treat every inference key as authority to lock this wallet's MOR.
 - Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
-  routes that send or approve funds, change the wallet, open sessions, change
-  router users or permissions, or access router files. Protect admin access
+  routes that send or approve funds, open sessions, create providers, models
+  or bids, change the wallet, router users, permissions or config, or access
+  router files. Protect admin access
   like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
@@ -399,8 +400,9 @@ Images: `ghcr.io/morpheusais/uplink` ([v1.0.13 / latest release](https://github.
   `active_models.json` / ALL.
 - **Only expose the gateway** (HTTPS). The router admin port stays private.
 - **`/node/*` router passthrough** is admin-gated and refuses routes that
-  send or approve funds, change the wallet, open sessions, change router users
-  or permissions, or access router files (403, audited). [Details](docs/06-developers.md#router-access-and-restart-safety)
+  send or approve funds, open sessions, create providers, models or bids,
+  change the wallet, router users, permissions or config, or access router
+  files (403, audited). Wallet, user and config reads pass through. [Details](docs/06-developers.md#router-access-and-restart-safety)
 
 Operator chapters (wallet → GUI → clients → updates): **[docs/README.md](docs/README.md)**.  
 Building / CI / env / layout: **[docs/06-developers.md](docs/06-developers.md)**.
@@ -1149,11 +1151,13 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
   are refused. It is then matched case-insensitively on segment boundaries.
   Refused for every method, with a `node_passthrough_block` audit event
   (method and path only): `/blockchain/send/*`, `/blockchain/approve`,
-  `/wallet*`, `/auth*`, router file-access routes (`/ipfs*`,
+  router file-access routes (`/ipfs*`,
   `/v1/audio/transcriptions`, `/docker/build*`, `/docker/container/start`),
   and the session-open routes
   `/blockchain/sessions`, `/blockchain/bids/{id}/session`,
-  `/blockchain/models/{id}/session`. The router receives exactly the
+  `/blockchain/models/{id}/session`. Refused for every method except GET and
+  HEAD (reads pass through): `/wallet*`, `/auth*`, `/config*`,
+  `/blockchain/providers`, `/blockchain/models`, `/blockchain/bids`. The router receives exactly the
   normalized path; method-override headers, `_method` query parameters and
   the admin cookie are stripped. Router redirects are not followed (502).
   The route list with router source refs is in `internal/api/nodeproxy.go`.

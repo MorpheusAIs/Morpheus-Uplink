@@ -77,8 +77,8 @@ There is no separate docs host or MCP for Uplink.
 7. **Do not expose the proxy-router admin port publicly.** Only the TLS
    front (Uplink on `:443` / local `:8080`) should be public. Router `:8082`
    stays on the compose network; `/node/*` is the admin-gated passthrough,
-   with a block list for routes that move funds or change the wallet, users or
-   permissions (see `internal/api/nodeproxy.go`).
+   with a block list for routes that move funds or change the wallet, users,
+   permissions or config (see `internal/api/nodeproxy.go`).
    Consumer nodes need **no inbound `:3333`** — they dial out to providers.
 
 8. **Deploy from GitHub Release assets, not `git clone`, for production.**  

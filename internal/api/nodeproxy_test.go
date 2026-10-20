@@ -131,16 +131,13 @@ var nodeMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 var nodeBlockedPaths = []string{
 	"/blockchain/send/eth", "/blockchain/send/mor", "/blockchain/send", "/blockchain/send/anything/else",
 	"/blockchain/approve",
-	"/wallet", "/wallet/privateKey", "/wallet/mnemonic", "/wallet/derivationPath",
-	"/auth/users", "/auth/users/request", "/auth/users/confirm", "/auth/users/agent1/txs",
-	"/auth/allowance/requests", "/auth/allowance/confirm", "/auth/allowance/revoke", "/auth/cookie/path", "/auth",
 	"/v1/audio/transcriptions", "/V1/Audio/Transcriptions/", "/v1/audio/tr%61nscriptions",
 	"/docker/build", "/docker/build/stream", "/Docker/Container/Start/",
 	"/ipfs/add", "/ipfs/pin", "/ipfs/unpin", "/ipfs/download/stream/QmX", "/ipfs/download/QmX", "/ipfs/version",
 	"/blockchain/sessions", "/blockchain/bids/0xabc/session", "/blockchain/models/0xabc/session",
 	// case, trailing slash, encoded letters
-	"/BLOCKCHAIN/SEND/ETH", "/Blockchain/Send/Mor", "/blockchain/send/eth/", "/WALLET/", "/Auth/Users/",
-	"/blockchain/s%65nd/eth", "/blockchain/%73end/mor", "/w%61llet/privateKey", "/blockchain/appr%6Fve",
+	"/BLOCKCHAIN/SEND/ETH", "/Blockchain/Send/Mor", "/blockchain/send/eth/",
+	"/blockchain/s%65nd/eth", "/blockchain/%73end/mor", "/blockchain/appr%6Fve",
 	"/blockchain/Sessions/", "/blockchain/MODELS/0xabc/Session",
 	// ambiguous: encoded separators, encoded dots, double encoding, dot segments, empty segments
 	"/blockchain%2fsend/eth", "/blockchain%2Fsend%2Feth", "/blockchain%5csend/eth", "/blockchain\\send/eth",
@@ -150,6 +147,58 @@ var nodeBlockedPaths = []string{
 	"/blockchain/send/eth%00", "/blockchain/send/eth%0a",
 	// ambiguous even for allowed routes (never decoded twice)
 	"/healthcheck%2f", "/blockchain/providers/./", "/blockchain/%2e%2e/providers",
+}
+
+// Write-blocked routes: every method except GET/HEAD is refused; reads pass.
+var nodeWriteBlockedPaths = []string{
+	"/wallet", "/wallet/privateKey", "/wallet/mnemonic", "/wallet/derivationPath",
+	"/auth", "/auth/users", "/auth/users/request", "/auth/users/confirm", "/auth/users/agent1/txs",
+	"/auth/allowance/requests", "/auth/allowance/confirm", "/auth/allowance/revoke", "/auth/cookie/path",
+	"/config", "/config/ethNode", "/config/models/reload",
+	"/blockchain/providers", "/blockchain/models", "/blockchain/bids",
+	// case, trailing slash, encoded letters
+	"/WALLET/", "/Wallet/PrivateKey", "/w%61llet/privateKey", "/Auth/Users/", "/%61uth/allowance/confirm",
+	"/Config/EthNode/", "/c%6Fnfig/ethNode", "/CONFIG/models/reload",
+	"/BLOCKCHAIN/Providers/", "/blockchain/m%6Fdels", "/Blockchain/BIDS",
+}
+
+var nodeWriteMethods = []string{"POST", "PUT", "PATCH", "DELETE"}
+
+func TestNodeWriteBlockedReadsPass(t *testing.T) {
+	ts, srv, cfg, up := nodeTestServer(t)
+	ac := adminClient(t, ts, cfg)
+	n := 0
+	for _, p := range nodeWriteBlockedPaths {
+		for _, m := range nodeWriteMethods {
+			before := up.count()
+			if code := rawDo(t, ts, ac, cfg, m, "/node"+p, nil); code != http.StatusForbidden {
+				t.Errorf("%s /node%s: %d, want 403", m, p, code)
+			}
+			n++
+			if got := len(blockAudits(srv)); got != n {
+				t.Fatalf("%s /node%s: %d block audit events, want %d", m, p, got, n)
+			}
+			if up.count() != before {
+				t.Fatalf("%s /node%s reached the router", m, p)
+			}
+		}
+		for _, m := range []string{"GET", "HEAD"} {
+			before := up.count()
+			if code := rawDo(t, ts, ac, cfg, m, "/node"+p, nil); code != http.StatusOK {
+				t.Errorf("%s /node%s: %d, want 200 (read passes)", m, p, code)
+			}
+			if up.count() != before+1 || up.last().Method != m {
+				t.Fatalf("%s /node%s was not forwarded", m, p)
+			}
+			want, _ := normalizeNodePath(p)
+			if got := up.last().URL.Path; got != want {
+				t.Fatalf("%s /node%s: router saw %q, want %q", m, p, got, want)
+			}
+		}
+	}
+	if got := len(blockAudits(srv)); got != n {
+		t.Fatalf("reads wrote block audits: %d, want %d", got, n)
+	}
 }
 
 func TestNodeBlockedPathsAllMethods(t *testing.T) {

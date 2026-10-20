@@ -30,8 +30,9 @@ an API key.
   wallet. Treat every inference key as authority to lock this wallet's MOR.
 - Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
-  routes that send or approve funds, change the wallet, open sessions, change
-  router users or permissions, or access router files. Protect admin access
+  routes that send or approve funds, open sessions, create providers, models
+  or bids, change the wallet, router users, permissions or config, or access
+  router files. Protect admin access
   like the wallet.
 - You must terminate **TLS** yourself (SecretVM / Caddy / etc.). Do not expose
   Uplink or the router admin port without HTTPS and strong secrets.
