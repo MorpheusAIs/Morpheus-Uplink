@@ -177,7 +177,7 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 })().catch((e) => fail(e.stack || e));
 NODE
 
-# Status page: tiles, reclaim placement, unlock time, low-wallet rule,
+# Status page: tiles, reclaim placement, unlock time, no low-wallet warning,
 # health reason, model labels, centralized copy, no Swagger link, and the
 # login recovery toggle.
 TZ=America/New_York node - "$OUT" "$HTML" <<'NODE'

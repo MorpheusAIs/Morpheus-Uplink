@@ -1,19 +1,11 @@
 """Stateful proxy-router stand-in for the mock-router e2e (no chain, no wallet).
 
-Implements the subset Uplink uses (plus the upstream /auth endpoints),
-with real credential checks: Basic auth must match the admin cookie
-(COOKIE_CONTENT) or a confirmed agent user's CURRENT password. Anything else
-gets 401 "invalid username or password", like the real router.
-
-Admin-only: /auth/users (GET, DELETE), /auth/users/confirm,
-/auth/allowance/requests, /auth/allowance/confirm. /auth/users/request is
-unauthenticated (as upstream). Everything else needs any valid user.
+Implements the subset Uplink uses, with a real credential check: Basic auth
+must match the router cookie (COOKIE_CONTENT). Anything else gets 401
+"invalid username or password", like the real router.
 
 Test controls (no auth, test-only): GET /e2e/stats, POST /e2e/fund?mor=N,
-POST /e2e/forget-users, POST /e2e/fail?path=P&code=N (inject errors),
-POST /e2e/readback-skew?on=1 (make GET /auth/users report a wrong value),
-POST /e2e/consume?wei=N (simulate session holds lowering the allowance),
-POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
+POST /e2e/fail?path=P&code=N (inject errors), POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
 previous process), GET /e2e/sessions (every session with its open/close
 times and prompt count), GET /e2e/catalog (gateway model catalog),
 POST /e2e/catalog-mode?m=normal|empty|braces, POST /e2e/slow-close?sec=N.
@@ -23,8 +15,7 @@ Any request asking for direct payment is refused and counted
 (stats.direct_payment_requests).
 
 Env: MOCK_MOR (initial balance), MOCK_MODE=fail (balance 500), MOCK_BODY
-(raw balance body), MOCK_WALLET (address), MOCK_STATE (json file to persist
-users across restarts; absent = forget on restart).
+(raw balance body), MOCK_WALLET (address).
 """
 import base64
 import hashlib
@@ -39,24 +30,16 @@ from urllib.parse import parse_qs, urlparse
 
 ADMIN = os.environ.get("COOKIE_CONTENT", "admin:mockpass")
 LOCK = threading.Lock()
-STATE_FILE = os.environ.get("MOCK_STATE", "")
 S = {
     "mor": os.environ.get("MOCK_MOR", "0"),
-    "users": {},       # name -> {"password", "perms", "allowances", "confirmed"}
-    "pending": {},     # name -> request
-    "allow_req": {},   # "name:token" -> allowance
-    "stats": {"unauthorized": 0, "unauthorized_by_pw": {}, "ok_by_pw": {},
-              "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0,
+    "stats": {"unauthorized": 0, "unauthorized_by_pw": {},
+              "direct_payment_requests": 0,
               "session_opens": 0, "session_closes": 0},
     "fail": {},        # path -> code
     "sessions": {},
     "catalog_mode": "normal",
-    "slow_close": 0,    # id -> session row (in memory; survives uplink restarts)
-    "skew": False,
+    "slow_close": 0,
 }
-if STATE_FILE and os.path.exists(STATE_FILE):
-    with open(STATE_FILE) as f:
-        S["users"] = json.load(f).get("users", {})
 
 
 CATALOG = [
@@ -74,14 +57,6 @@ def new_session(model, ends_at, opened_by):
                           "ClosedAt": 0, "OpenedBy": opened_by, "Prompts": 0,
                           "ClosedAtMono": 0}
     return sid
-
-
-def persist():
-    if STATE_FILE:
-        tmp = STATE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"users": S["users"]}, f)
-        os.replace(tmp, STATE_FILE)
 
 
 def pw_tag(pw):
@@ -120,10 +95,6 @@ class H(BaseHTTPRequestHandler):
             return None
         if user + ":" + pw == ADMIN:
             return "admin"
-        u = S["users"].get(user)
-        if u and u.get("confirmed") and u["password"] == pw:
-            S["stats"]["ok_by_pw"][pw_tag(pw)] = S["stats"]["ok_by_pw"].get(pw_tag(pw), 0) + 1
-            return user
         S["stats"]["unauthorized"] += 1
         tag = pw_tag(pw)
         S["stats"]["unauthorized_by_pw"][tag] = S["stats"]["unauthorized_by_pw"].get(tag, 0) + 1
@@ -151,53 +122,9 @@ class H(BaseHTTPRequestHandler):
                     and v not in (False, None, "false") for k, v in body.items()):
                 S["stats"]["direct_payment_requests"] += 1
                 return self._json(400, {"error": "direct payment refused by e2e mock"})
-            if path == "/auth/users/request" and method == "POST":
-                S["pending"][body.get("username", "")] = body
-                return self._json(200, {"result": True})
             who = self._who()
             if who is None:
                 return self._deny()
-            admin_only = path in ("/auth/users", "/auth/users/confirm",
-                                  "/auth/allowance/requests", "/auth/allowance/confirm")
-            if admin_only and who != "admin":
-                return self._json(403, {"error": "forbidden"})
-            if path == "/auth/users" and method == "GET":
-                agents = []
-                for name, x in S["users"].items():
-                    al = dict(x.get("allowances", {}))
-                    if S["skew"]:
-                        al = {k: str(int(v) + 1) for k, v in al.items()}
-                    agents.append({"username": name, "perms": x.get("perms", []),
-                                   "isConfirmed": x.get("confirmed", False), "allowances": al})
-                return self._json(200, {"agents": agents})
-            if path == "/auth/users" and method == "DELETE":
-                S["users"].pop(body.get("username", ""), None)
-                persist()
-                return self._json(200, {"result": True})
-            if path == "/auth/users/confirm":
-                req = S["pending"].pop(body.get("username", ""), None)
-                if not req:
-                    return self._json(400, {"error": "no request"})
-                S["users"][req["username"]] = {
-                    "password": req["password"], "perms": req.get("perms", []),
-                    "allowances": {k: str(v) for k, v in (req.get("allowances") or {}).items()},
-                    "confirmed": True}
-                S["stats"]["user_confirms"] += 1
-                persist()
-                return self._json(200, {"result": True})
-            if path == "/auth/allowance/requests":
-                S["allow_req"][body.get("username", "") + ":" + body.get("token", "")] = str(body.get("allowance", ""))
-                return self._json(200, {"result": True})
-            if path == "/auth/allowance/confirm":
-                key = body.get("username", "") + ":" + body.get("token", "")
-                val = S["allow_req"].pop(key, None)
-                usr = S["users"].get(body.get("username", ""))
-                if val is None or usr is None:
-                    return self._json(500, {"error": "no request"})
-                usr.setdefault("allowances", {})[body.get("token", "")] = val
-                S["stats"]["allowance_confirms"] += 1
-                persist()
-                return self._json(200, {"result": True})
             if path == "/blockchain/balance":
                 if os.environ.get("MOCK_MODE") == "fail":
                     return self._json(500, {"error": "rpc"})
@@ -256,8 +183,6 @@ class H(BaseHTTPRequestHandler):
         if path == "/e2e/stats":
             out = dict(S["stats"])
             out["mor"] = S["mor"]
-            out["users"] = {n: {"pw": pw_tag(x["password"]), "allowances": x.get("allowances", {})}
-                            for n, x in S["users"].items()}
             return self._json(200, out)
         if path == "/e2e/sessions":
             return self._json(200, {"now": time.time(), "sessions": list(S["sessions"].values())})
@@ -276,26 +201,15 @@ class H(BaseHTTPRequestHandler):
             S["slow_close"] = int(q.get("sec", ["0"])[0])
         elif path == "/e2e/fund":
             S["mor"] = q.get("mor", ["0"])[0]
-        elif path == "/e2e/consume":
-            # Simulate session holds: lower every user's allowance by wei.
-            n = int(q.get("wei", ["0"])[0])
-            for x in S["users"].values():
-                for t, v in list(x.get("allowances", {}).items()):
-                    x["allowances"][t] = str(max(0, int(v) - n))
-        elif path == "/e2e/forget-users":
-            S["users"].clear()
-            persist()
         elif path == "/e2e/fail":
             p, code = q.get("path", [""])[0], int(q.get("code", ["0"])[0])
             if code:
                 S["fail"][p] = code
             else:
                 S["fail"].pop(p, None)
-        elif path == "/e2e/readback-skew":
-            S["skew"] = q.get("on", ["0"])[0] == "1"
         elif path == "/e2e/reset-stats":
-            S["stats"] = {"unauthorized": 0, "unauthorized_by_pw": {}, "ok_by_pw": {},
-                          "allowance_confirms": 0, "user_confirms": 0, "direct_payment_requests": 0,
+            S["stats"] = {"unauthorized": 0, "unauthorized_by_pw": {},
+                          "direct_payment_requests": 0,
                           "session_opens": 0, "session_closes": 0}
         return self._json(200, {"ok": True})
 
