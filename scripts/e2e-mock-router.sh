@@ -180,7 +180,11 @@ last_sum() { rec_lines | jq -s -c '[.[] | select(.event == "session_reconcile" a
 # kill_restart: SIGKILL uplink, start it again, wait for the next reconcile summary.
 kill_restart() {
   local n0; n0=$(nsum)
-  docker kill -s KILL "$(cid uplink)" >/dev/null
+  local id; id=$(cid uplink)
+  docker kill -s KILL "$id" >/dev/null
+  # Wait until Docker reports it stopped, or "up -d" may still see it
+  # running and not start it again.
+  docker wait "$id" >/dev/null
   [ "${1:-}" = "--before-start" ] && "$2"
   dc up -d uplink >/dev/null
   wait_healthy uplink >/dev/null
