@@ -1,14 +1,19 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/absgrafx/morpheus-uplink/internal/config"
+	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
@@ -215,6 +220,53 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.settingsView())
 }
 
+// requireConsoleSession guards the operator settings: cookie session only.
+// Any Authorization header (the master Bearer with MASTER_KEY_ADMIN=true
+// included) gets 403 before any key compare. Then the cookie session, the
+// CSRF check (a GET that a browser marks cross-site or same-site is
+// refused too) and the 2FA enrolment gate, as on requireAdmin.
+func (s *Server) requireConsoleSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(r.Header.Values("Authorization")) > 0 {
+			if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && keymaker.Equal(token, s.masterKey) {
+				ip := s.lockout.ClientIP(r)
+				s.auditAggregated("admin_key_use", ip, ip, "blocked", "settings_refused")
+			}
+			http.Error(w, "settings need an admin session", http.StatusForbidden)
+			return
+		}
+		raw, sess, ok := s.cookieSession(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !s.checkCSRF(r) || !sameOriginFetch(r, s.cfg.WebPublicURL) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if auth := s.store.GetAuthState(); auth.On() && !auth.Enrolled {
+			http.Error(w, "2fa enrollment required", http.StatusForbidden)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), adminAuthKey{}, adminAuth{session: sess, raw: raw})))
+	}
+}
+
+// sameOriginFetch refuses a request a browser marked as coming from
+// another site, or whose Origin is not WEB_PUBLIC_URL (checkCSRF lets any
+// GET through; non-browser clients send neither header).
+func sameOriginFetch(r *http.Request, webPublic string) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return false
+	}
+	if o := r.Header.Get("Origin"); o != "" && (webPublic == "" || !originsMatch(o, webPublic)) {
+		return false
+	}
+	return true
+}
+
 // handleSettingsSet: {"name":"forwardIdle","value":240} or
 // {"name":"forwardIdle","reset":true} (drop the persisted value).
 func (s *Server) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +279,10 @@ func (s *Server) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid body", http.StatusBadRequest) // trailing data
 		return
 	}
 	d, ok := settingByName(req.Name)

@@ -108,12 +108,21 @@ func TestS6PrecedenceMatrix(t *testing.T) {
 	}
 }
 
+// admin calls a console route on the admin cookie session (logged in
+// once per env), with the same-origin headers a browser sends.
 func (e *failoverEnv) admin(t *testing.T, method, path, body string) (int, string) {
 	t.Helper()
+	if e.console == nil {
+		code, c, _ := login(t, e.ts, e.srv.cfg.AdminPassword, "")
+		if code != http.StatusOK {
+			t.Fatalf("console login %d", code)
+		}
+		e.console = c
+	}
 	req, _ := http.NewRequest(method, e.ts.URL+path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+e.key)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	withCSRF(req, e.srv.cfg)
+	resp, err := e.console.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,5 +355,88 @@ func TestS6IgnoredPersistedValueAuditedOps(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no setting_ignored event")
+	}
+}
+
+// Josh S-1: the operator settings are cookie-only. Any Authorization
+// header (the master Bearer with MASTER_KEY_ADMIN=true included) is 403;
+// a cross-site request is 403; the cookie session is 200.
+func TestS6SettingsCookieOnly(t *testing.T) {
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, func(c *config.Config) { c.MasterKeyAdmin = true })
+	do := func(method, body string, hdr map[string]string, c *http.Client) int {
+		t.Helper()
+		req, _ := http.NewRequest(method, e.ts.URL+"/admin/settings", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		if c == nil {
+			c = http.DefaultClient
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	set := `{"name":"forwardIdle","value":240}`
+	same := map[string]string{"Origin": e.srv.cfg.WebPublicURL, "Sec-Fetch-Site": "same-origin"}
+	for _, method := range []string{"GET", "POST"} {
+		bearer := map[string]string{"Authorization": "Bearer " + e.key, "Origin": e.srv.cfg.WebPublicURL, "Sec-Fetch-Site": "same-origin"}
+		if code := do(method, set, bearer, nil); code != 403 {
+			t.Errorf("%s master Bearer: %d, want 403", method, code)
+		}
+	}
+	if e.srv.forwardIdle() != 180 {
+		t.Fatal("Bearer changed a setting")
+	}
+	e.admin(t, "GET", "/admin/settings", "") // logs the console in
+	// The cookie with any Authorization header is still refused.
+	withBearer := map[string]string{"Authorization": "Bearer x", "Origin": e.srv.cfg.WebPublicURL, "Sec-Fetch-Site": "same-origin"}
+	if code := do("POST", set, withBearer, e.console); code != 403 {
+		t.Errorf("cookie + Authorization: %d", code)
+	}
+	cross := map[string]string{"Origin": "https://elsewhere.example", "Sec-Fetch-Site": "cross-site"}
+	for _, method := range []string{"GET", "POST"} {
+		if code := do(method, set, cross, e.console); code != 403 {
+			t.Errorf("%s cross-site: %d, want 403", method, code)
+		}
+	}
+	if code := do("POST", set, map[string]string{"Sec-Fetch-Site": "same-origin"}, e.console); code != 403 {
+		t.Errorf("POST without Origin: %d", code)
+	}
+	if e.srv.forwardIdle() != 180 {
+		t.Fatal("refused request changed a setting")
+	}
+	if code := do("GET", "", same, e.console); code != 200 {
+		t.Errorf("cookie GET: %d", code)
+	}
+	if code := do("POST", set, same, e.console); code != 200 || e.srv.forwardIdle() != 240 {
+		t.Errorf("cookie POST: %d forwardIdle %d", code, e.srv.forwardIdle())
+	}
+	if code := do("GET", "", nil, nil); code != 401 {
+		t.Errorf("no session: %d", code)
+	}
+}
+
+// Josh N-2: the settings body is one JSON object; trailing data is 400.
+func TestS6SettingsRejectsTrailingJSON(t *testing.T) {
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, nil)
+	for _, body := range []string{
+		`{"name":"forwardIdle","value":240}{"name":"forwardIdle","value":300}`,
+		`{"name":"forwardIdle","value":240} x`,
+	} {
+		if code, _ := e.admin(t, "POST", "/admin/settings", body); code != 400 {
+			t.Errorf("%s: %d, want 400", body, code)
+		}
+	}
+	if e.srv.forwardIdle() != 180 {
+		t.Fatalf("trailing body applied: %d", e.srv.forwardIdle())
+	}
+	if code, _ := e.admin(t, "POST", "/admin/settings", `{"name":"forwardIdle","value":240}`+"\n"); code != 200 {
+		t.Fatalf("trailing newline: %d", code)
 	}
 }

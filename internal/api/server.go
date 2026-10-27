@@ -131,8 +131,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/models", s.requireAdmin(s.handleAdminModels))
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
-	mux.HandleFunc("GET /admin/settings", s.requireAdmin(s.handleSettingsGet))
-	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.handleSettingsSet))
+	mux.HandleFunc("GET /admin/settings", s.requireConsoleSession(s.handleSettingsGet))
+	mux.HandleFunc("POST /admin/settings", s.requireConsoleSession(s.handleSettingsSet))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))

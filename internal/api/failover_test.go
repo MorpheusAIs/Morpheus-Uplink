@@ -287,6 +287,8 @@ type failoverEnv struct {
 	srv *Server
 	m   *fakeMarket
 	key string
+	// console is a logged-in admin cookie session (settingsAdmin).
+	console *http.Client
 }
 
 func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *failoverEnv {
@@ -308,7 +310,11 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	pl := pool.New(rc, cfg.SessionDurationSec)
 	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
 	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pl, rc, nil)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	if cfg.WebPublicURL == "" {
+		cfg.WebPublicURL = "http://" + ts.Listener.Addr().String() // for the console's CSRF check
+	}
+	ts.Start()
 	t.Cleanup(ts.Close)
 	return &failoverEnv{ts: ts, srv: srv, m: m, key: keymaker.MasterKey(cfg.APIKeySeed)}
 }

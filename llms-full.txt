@@ -1898,8 +1898,11 @@ timers and session handling. Source: `internal/api/longjob.go`,
 ### Operator settings
 
 Five values can be changed in the console (**Security → Settings**) or
-with `GET` / `POST /admin/settings` (admin session; source
-`internal/api/settings.go`):
+with `GET` / `POST /admin/settings` (source `internal/api/settings.go`).
+Both need the admin cookie session: any `Authorization` header, the
+master key Bearer with `MASTER_KEY_ADMIN=true` included, is `403`; a
+request from another site is `403` (CSRF check; a `GET` marked
+cross-site too); the 2FA enrolment gate applies as on other admin routes.
 
 | Name | Env | Range | Default |
 |---|---|---|---|
@@ -1913,8 +1916,8 @@ with `GET` / `POST /admin/settings` (admin session; source
   valid value is shown as "set by environment (ENV)" and cannot be changed
   (`409`); remove the env var and restart to manage it in the console.
 - *Saving.* `POST {"name":"forwardIdle","value":240}` or
-  `{"name":"forwardIdle","reset":true}` (body ≤ 1 KiB, unknown fields →
-  `400`). Values are checked against the ranges above, and the default may
+  `{"name":"forwardIdle","reset":true}` (one JSON object, body ≤ 1 KiB;
+  unknown fields or trailing data → `400`). Values are checked against the ranges above, and the default may
   not exceed the max (`400`). The max always wins: at boot a default above
   the max (from env or saved) is clamped down to it with a warning, and
   every session open is capped at the max. A saved value ignored at boot
