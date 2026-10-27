@@ -114,7 +114,7 @@ func TestRequireSessionPollDoesNotExtendIdle(t *testing.T) {
 
 	makeReq := func(poll bool) *http.Request {
 		rr := httptest.NewRecorder()
-		adminauth.SetSessionCookie(rr, raw, true, adminauth.SessionAbsolute)
+		adminauth.SetSessionCookie(rr, raw, true)
 		req := httptest.NewRequest(http.MethodGet, "/admin/2fa/status", nil)
 		for _, c := range rr.Result().Cookies() {
 			req.AddCookie(c)

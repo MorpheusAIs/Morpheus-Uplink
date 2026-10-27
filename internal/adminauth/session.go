@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	// Defaults when the store is built without explicit lengths
-	// (ADMIN_SESSION_IDLE / ADMIN_SESSION_ABSOLUTE, see config).
+	// Fixed admin session lengths. Compile-time constants: the same for
+	// every 2FA state, with no env var or setting to change them.
 	SessionAbsolute = 12 * time.Hour
 	SessionIdle     = 4 * time.Hour
 	MaxSessions     = 10
@@ -41,11 +41,9 @@ func (s *Session) Fresh(now time.Time, maxAge time.Duration) bool {
 }
 
 type SessionStore struct {
-	mu       sync.Mutex
-	byHash   map[string]*Session // hash -> session
-	now      func() time.Time    // injectable clock (tests); nil = time.Now
-	idle     time.Duration
-	absolute time.Duration
+	mu     sync.Mutex
+	byHash map[string]*Session // hash -> session
+	now    func() time.Time    // injectable clock (tests); nil = time.Now
 }
 
 func (s *SessionStore) clock() time.Time {
@@ -67,28 +65,13 @@ func (s *SessionStore) clockLocked() time.Time {
 }
 
 func NewSessionStore() *SessionStore {
-	return NewSessionStoreWith(SessionIdle, SessionAbsolute)
+	return &SessionStore{byHash: map[string]*Session{}}
 }
 
-// NewSessionStoreWith builds a store with the given idle and absolute
-// lengths. A non-positive value uses the default; idle never exceeds
-// absolute. The lengths do not depend on the 2FA state.
-func NewSessionStoreWith(idle, absolute time.Duration) *SessionStore {
-	if absolute <= 0 {
-		absolute = SessionAbsolute
-	}
-	if idle <= 0 {
-		idle = SessionIdle
-	}
-	if idle > absolute {
-		idle = absolute
-	}
-	return &SessionStore{byHash: map[string]*Session{}, idle: idle, absolute: absolute}
-}
-
-// Idle and Absolute are the effective session lengths.
-func (s *SessionStore) Idle() time.Duration     { return s.idle }
-func (s *SessionStore) Absolute() time.Duration { return s.absolute }
+// Idle and Absolute are the fixed session lengths (SessionIdle,
+// SessionAbsolute).
+func (s *SessionStore) Idle() time.Duration     { return SessionIdle }
+func (s *SessionStore) Absolute() time.Duration { return SessionAbsolute }
 
 // Now is the store's clock (UTC), for age checks made outside the store.
 func (s *SessionStore) Now() time.Time { return s.clock() }
@@ -142,11 +125,11 @@ func (s *SessionStore) Lookup(rawToken string, extendIdle bool) (*Session, bool)
 		return nil, false
 	}
 	now := s.clockLocked()
-	if now.Sub(sess.CreatedAt) > s.absolute {
+	if now.Sub(sess.CreatedAt) > SessionAbsolute {
 		delete(s.byHash, hash)
 		return nil, false
 	}
-	if now.Sub(sess.LastSeen) > s.idle {
+	if now.Sub(sess.LastSeen) > SessionIdle {
 		delete(s.byHash, hash)
 		return nil, false
 	}
@@ -245,19 +228,16 @@ func CookieName(devHTTP bool) string {
 	return CookieHost
 }
 
-// SetSessionCookie sets the admin cookie; MaxAge is the absolute session
-// length. Flags: HttpOnly, SameSite=Strict, Secure unless devHTTP.
-func SetSessionCookie(w http.ResponseWriter, rawToken string, devHTTP bool, absolute time.Duration) {
-	if absolute <= 0 {
-		absolute = SessionAbsolute
-	}
+// SetSessionCookie sets the admin cookie; MaxAge is SessionAbsolute.
+// Flags: HttpOnly, SameSite=Strict, Secure unless devHTTP.
+func SetSessionCookie(w http.ResponseWriter, rawToken string, devHTTP bool) {
 	c := &http.Cookie{
 		Name:     CookieName(devHTTP),
 		Value:    rawToken,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(absolute.Seconds()),
+		MaxAge:   int(SessionAbsolute.Seconds()),
 	}
 	if !devHTTP {
 		c.Secure = true

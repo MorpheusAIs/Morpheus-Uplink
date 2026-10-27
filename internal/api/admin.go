@@ -542,17 +542,13 @@ func fileSizeBestEffort(path string) int64 {
 	return fi.Size()
 }
 
-// adminSessionStatus reports the effective admin session lengths
-// (ADMIN_SESSION_IDLE / ADMIN_SESSION_ABSOLUTE, env only). The "2FA is off"
-// warning is informational: session validity does not depend on 2FA.
+// adminSessionStatus reports the admin session lengths (fixed constants,
+// not configurable). The "2FA is off" warning is informational: session
+// validity does not depend on 2FA.
 func (s *Server) adminSessionStatus(twoFactorOn bool) map[string]any {
 	warnings := []string{}
 	if !twoFactorOn {
 		warnings = append(warnings, "2FA is off")
-	}
-	configWarn := s.cfg.AdminSessionWarnings
-	if configWarn == nil {
-		configWarn = []string{}
 	}
 	return map[string]any{
 		"idle":            s.sessions.Idle().String(),
@@ -561,6 +557,5 @@ func (s *Server) adminSessionStatus(twoFactorOn bool) map[string]any {
 		"absoluteSec":     int(s.sessions.Absolute().Seconds()),
 		"stepUpMaxAgeSec": int(StepUpMaxAge.Seconds()),
 		"warnings":        warnings,
-		"configWarn":      configWarn,
 	}
 }

@@ -7,55 +7,34 @@ import (
 	"time"
 )
 
-func newClockedStoreWith(idle, absolute time.Duration) (*SessionStore, *fakeClock) {
-	clk := &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
-	s := NewSessionStoreWith(idle, absolute)
-	s.SetClock(clk.Now)
-	return s, clk
-}
-
-// Defaults are idle 4h and absolute 12h; zero or negative values fall back
-// to them, and idle is capped at absolute.
-func TestSessionStoreLengths(t *testing.T) {
-	cases := []struct {
-		idle, abs         time.Duration
-		wantIdle, wantAbs time.Duration
-	}{
-		{0, 0, 4 * time.Hour, 12 * time.Hour},
-		{-time.Second, -time.Second, 4 * time.Hour, 12 * time.Hour},
-		{2 * time.Hour, 6 * time.Hour, 2 * time.Hour, 6 * time.Hour},
-		{10 * time.Hour, 8 * time.Hour, 8 * time.Hour, 8 * time.Hour},
-	}
-	for _, c := range cases {
-		s := NewSessionStoreWith(c.idle, c.abs)
-		if s.Idle() != c.wantIdle || s.Absolute() != c.wantAbs {
-			t.Errorf("NewSessionStoreWith(%v, %v) = %v/%v, want %v/%v", c.idle, c.abs, s.Idle(), s.Absolute(), c.wantIdle, c.wantAbs)
-		}
-	}
-	if s := NewSessionStore(); s.Idle() != SessionIdle || s.Absolute() != SessionAbsolute {
-		t.Fatalf("NewSessionStore: %v/%v", s.Idle(), s.Absolute())
-	}
+// S1 test 4: the session lengths are the fixed constants idle 4h and
+// absolute 12h.
+func TestSessionLengthsAreFixedConstants(t *testing.T) {
 	if SessionIdle != 4*time.Hour || SessionAbsolute != 12*time.Hour {
-		t.Fatalf("defaults: idle %v absolute %v", SessionIdle, SessionAbsolute)
+		t.Fatalf("constants: idle %v absolute %v, want 4h / 12h", SessionIdle, SessionAbsolute)
+	}
+	s := NewSessionStore()
+	if s.Idle() != SessionIdle || s.Absolute() != SessionAbsolute {
+		t.Fatalf("store: %v / %v", s.Idle(), s.Absolute())
 	}
 }
 
-// A configured idle expires at idle + 1 s and not before; a configured
-// absolute ends the session whatever the activity.
-func TestSessionStoreConfiguredExpiry(t *testing.T) {
-	s, clk := newClockedStoreWith(2*time.Hour, 6*time.Hour)
+// Idle expires at 4h + 1 s and not before; absolute ends the session at
+// 12h whatever the activity.
+func TestSessionStoreFixedExpiry(t *testing.T) {
+	s, clk := newClockedStore()
 	raw, _ := s.Create("127.0.0.1")
-	clk.Advance(2 * time.Hour)
+	clk.Advance(4 * time.Hour)
 	if _, ok := s.Lookup(raw, false); !ok {
-		t.Fatal("expired at exactly idle")
+		t.Fatal("expired at exactly 4h idle")
 	}
 	clk.Advance(time.Second)
 	if _, ok := s.Lookup(raw, false); ok {
-		t.Fatal("alive past idle + 1s")
+		t.Fatal("alive past 4h + 1s idle")
 	}
 
 	raw, _ = s.Create("127.0.0.1")
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 12; i++ {
 		clk.Advance(time.Hour)
 		if _, ok := s.Lookup(raw, true); !ok {
 			t.Fatalf("interactive session ended early at %dh", i+1)
@@ -63,13 +42,13 @@ func TestSessionStoreConfiguredExpiry(t *testing.T) {
 	}
 	clk.Advance(time.Second)
 	if _, ok := s.Lookup(raw, true); ok {
-		t.Fatal("session alive past absolute")
+		t.Fatal("session alive past 12h absolute")
 	}
 }
 
 // StampStepUp sets StepUpAt; Fresh uses it, else CreatedAt.
 func TestStampStepUpAndFresh(t *testing.T) {
-	s, clk := newClockedStoreWith(0, 0)
+	s, clk := newClockedStore()
 	raw, _ := s.Create("127.0.0.1")
 	sess, _ := s.Lookup(raw, false)
 	if !sess.StepUpAt.IsZero() || !sess.Fresh(clk.Now(), 30*time.Minute) {
@@ -102,7 +81,7 @@ func TestStampStepUpAndFresh(t *testing.T) {
 
 // ObserveIP reports each change once and does not end the session.
 func TestObserveIP(t *testing.T) {
-	s, _ := newClockedStoreWith(0, 0)
+	s, _ := newClockedStore()
 	raw, _ := s.Create("192.0.2.1")
 	if _, changed := s.ObserveIP(raw, "192.0.2.1"); changed {
 		t.Fatal("same address reported as a change")
@@ -121,7 +100,7 @@ func TestObserveIP(t *testing.T) {
 
 // RevokeAllExcept keeps one session.
 func TestRevokeAllExcept(t *testing.T) {
-	s, _ := newClockedStoreWith(0, 0)
+	s, _ := newClockedStore()
 	keep, _ := s.Create("127.0.0.1")
 	other, _ := s.Create("127.0.0.1")
 	if n := s.RevokeAllExcept(keep); n != 1 {
@@ -135,20 +114,14 @@ func TestRevokeAllExcept(t *testing.T) {
 	}
 }
 
-// Cookie MaxAge follows the absolute length; flags are unchanged.
+// Cookie MaxAge is the 12h absolute constant; flags are unchanged.
 func TestSetSessionCookieMaxAge(t *testing.T) {
 	for _, dev := range []bool{true, false} {
-		for _, abs := range []time.Duration{6 * time.Hour, 12 * time.Hour, 0} {
-			rec := httptest.NewRecorder()
-			SetSessionCookie(rec, "tok", dev, abs)
-			c := (&http.Response{Header: rec.Header()}).Cookies()[0]
-			want := int(abs.Seconds())
-			if abs == 0 {
-				want = int(SessionAbsolute.Seconds())
-			}
-			if c.MaxAge != want || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.Secure == dev || c.Name != CookieName(dev) {
-				t.Fatalf("dev=%v abs=%v cookie %+v", dev, abs, c)
-			}
+		rec := httptest.NewRecorder()
+		SetSessionCookie(rec, "tok", dev)
+		c := (&http.Response{Header: rec.Header()}).Cookies()[0]
+		if c.MaxAge != 12*3600 || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.Secure == dev || c.Name != CookieName(dev) {
+			t.Fatalf("dev=%v cookie %+v", dev, c)
 		}
 	}
 }

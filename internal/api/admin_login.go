@@ -69,7 +69,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session create failed", http.StatusInternalServerError)
 		return
 	}
-	adminauth.SetSessionCookie(w, raw, s.cfg.DevHTTP, s.sessions.Absolute())
+	adminauth.SetSessionCookie(w, raw, s.cfg.DevHTTP)
 	s.auditEvent("login", ip, "ok", "")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                true,

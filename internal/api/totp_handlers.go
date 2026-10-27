@@ -195,7 +195,7 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 	// every other admin session and re-issue the caller's.
 	n := s.sessions.RevokeAll()
 	if raw, err := s.sessions.Create(ip); err == nil {
-		adminauth.SetSessionCookie(w, raw, s.cfg.DevHTTP, s.sessions.Absolute())
+		adminauth.SetSessionCookie(w, raw, s.cfg.DevHTTP)
 	} else {
 		adminauth.ClearSessionCookie(w, s.cfg.DevHTTP)
 	}

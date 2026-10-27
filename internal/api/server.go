@@ -60,7 +60,7 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		housekeep: hk,
 		masterKey: keymaker.MasterKey(cfg.APIKeySeed),
 		promptKey: keymaker.PromptKey(cfg.APIKeySeed),
-		sessions:  adminauth.NewSessionStoreWith(cfg.AdminSessionIdle, cfg.AdminSessionAbsolute),
+		sessions:  adminauth.NewSessionStore(),
 		lockout:   lo,
 		audit:     NewAuditLog(500),
 		outflow:   &OutflowAlert{},

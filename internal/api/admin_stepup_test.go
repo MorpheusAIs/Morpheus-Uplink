@@ -239,48 +239,70 @@ func TestS1AbsoluteIndependentOfTwoFactor(t *testing.T) {
 	}
 }
 
-// S1 test 4 (server side; parsing is TestParseAdminSession): idle 10h with
-// absolute 8h runs with idle 8h, and Status shows the effective values.
-func TestS1ConfiguredLengthsOnStatus(t *testing.T) {
-	ts, _, cfg, clk := s1Server(t, func(c *config.Config) {
-		c.AdminSessionIdle, c.AdminSessionAbsolute, _ = config.ParseAdminSession("10h", "8h")
-	})
-	ac := adminClient(t, ts, cfg)
-	st := adminSessionStatus(t, ac, ts, cfg)
-	if st["idle"] != "8h0m0s" || st["absolute"] != "8h0m0s" {
-		t.Fatalf("status: %#v", st)
+// S1 test 4: idle 4h and absolute 12h are fixed; setting ADMIN_SESSION_*
+// env vars has no effect on Status, expiry or the cookie.
+func TestS1SessionEnvVarsHaveNoEffect(t *testing.T) {
+	t.Setenv("ADMIN_SESSION_IDLE", "1m")
+	t.Setenv("ADMIN_SESSION_ABSOLUTE", "1h")
+	t.Setenv("ADMIN_SESSION_TIMEOUT", "1m")
+	ts, _, cfg, clk := s1Server(t, nil)
+	code, ac, resp := login(t, ts, cfg.AdminPassword, "")
+	if code != http.StatusOK {
+		t.Fatalf("login: %d", code)
 	}
-	clk.Advance(8*time.Hour + time.Second)
+	for _, c := range resp.Cookies() {
+		if c.Name == adminauth.CookieName(true) && c.MaxAge != 12*3600 {
+			t.Fatalf("cookie MaxAge %d, want 43200", c.MaxAge)
+		}
+	}
+	st := adminSessionStatus(t, ac, ts, cfg)
+	if st["idle"] != "4h0m0s" || st["absolute"] != "12h0m0s" {
+		t.Fatalf("status with ADMIN_SESSION_* set: %#v", st)
+	}
+	clk.Advance(2 * time.Hour) // past the env values
+	if code, b := s1Do(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", "", pollHdr); code != http.StatusOK {
+		t.Fatalf("session ended by an ADMIN_SESSION_* env var: %d %s", code, b)
+	}
+	clk.Advance(2*time.Hour + time.Second)
 	if code, _ := s1Do(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", "", pollHdr); code != http.StatusUnauthorized {
-		t.Fatalf("after 8h+1s: %d, want 401", code)
+		t.Fatalf("at 4h+1s idle: %d, want 401", code)
 	}
 }
 
-// S1 test 5: cookie MaxAge equals ABSOLUTE; flags unchanged.
+// S1 test 4 (config side): FromEnv accepts and ignores ADMIN_SESSION_*.
+func TestS1FromEnvIgnoresSessionEnvVars(t *testing.T) {
+	t.Setenv("ADMIN_PASSWORD", "a-long-enough-test-value")
+	t.Setenv("API_KEY_SEED", "test-seed")
+	t.Setenv("ROUTER_AUTH", "admin:router-test-value")
+	t.Setenv("ADMIN_SESSION_IDLE", "banana")
+	t.Setenv("ADMIN_SESSION_ABSOLUTE", "48h")
+	if _, err := config.FromEnv(); err != nil {
+		t.Fatalf("FromEnv with ADMIN_SESSION_* set: %v", err)
+	}
+	if adminauth.NewSessionStore().Idle() != 4*time.Hour || adminauth.NewSessionStore().Absolute() != 12*time.Hour {
+		t.Fatal("session lengths changed")
+	}
+}
+
+// S1 test 5: cookie MaxAge equals the 12h absolute; flags unchanged.
 func TestS1CookieMaxAgeFollowsAbsolute(t *testing.T) {
-	for _, abs := range []time.Duration{0, 6 * time.Hour} {
-		ts, _, cfg, _ := s1Server(t, func(c *config.Config) { c.AdminSessionAbsolute = abs })
-		code, _, resp := login(t, ts, cfg.AdminPassword, "")
-		if code != http.StatusOK {
-			t.Fatalf("login: %d", code)
+	ts, _, cfg, _ := s1Server(t, nil)
+	code, _, resp := login(t, ts, cfg.AdminPassword, "")
+	if code != http.StatusOK {
+		t.Fatalf("login: %d", code)
+	}
+	var found bool
+	for _, c := range resp.Cookies() {
+		if c.Name != adminauth.CookieName(true) {
+			continue
 		}
-		want := int(abs.Seconds())
-		if abs == 0 {
-			want = 12 * 3600
+		found = true
+		if c.MaxAge != 12*3600 || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
+			t.Fatalf("cookie: %+v, want MaxAge 43200", c)
 		}
-		var found bool
-		for _, c := range resp.Cookies() {
-			if c.Name != adminauth.CookieName(true) {
-				continue
-			}
-			found = true
-			if c.MaxAge != want || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
-				t.Fatalf("cookie: %+v, want MaxAge %d", c, want)
-			}
-		}
-		if !found {
-			t.Fatal("no session cookie")
-		}
+	}
+	if !found {
+		t.Fatal("no session cookie")
 	}
 }
 

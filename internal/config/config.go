@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Config struct {
@@ -70,14 +69,6 @@ type Config struct {
 	TrustedProxyCIDRs []string
 	// UPLINK_RESET_2FA: break-glass wipe of 2FA/sessions/lockouts once per marker cycle.
 	Reset2FA bool
-	// ADMIN_SESSION_IDLE / ADMIN_SESSION_ABSOLUTE (env only): effective admin
-	// session lengths after ParseAdminSession. Zero means the package
-	// defaults (4h / 12h), e.g. for a Config built in a test.
-	AdminSessionIdle     time.Duration
-	AdminSessionAbsolute time.Duration
-	// AdminSessionWarnings: what ParseAdminSession changed (logged at boot
-	// and shown in /admin/status).
-	AdminSessionWarnings []string
 }
 
 func FromEnv() (*Config, error) {
@@ -109,7 +100,6 @@ func FromEnv() (*Config, error) {
 
 	// Security switches fall back to their safe value when malformed.
 	c.MasterKeyAdmin = c.securityBool("MASTER_KEY_ADMIN", false)
-	c.loadAdminSession()
 
 	// ROUTER_AUTH mirrors the proxy-router's COOKIE_CONTENT format.
 	// COOKIE_CONTENT is accepted as a fallback so a single secret can feed
