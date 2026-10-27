@@ -51,3 +51,29 @@ func TestS6EnvPinned(t *testing.T) {
 		}
 	}
 }
+
+// MUST-1: SESSION_DURATION_SECONDS is bounded 600..86400 and clamped down
+// to UPLINK_SESSION_DURATION_MAX; the max is never raised.
+func TestDurationEnvBoundedByMax(t *testing.T) {
+	cases := []struct {
+		def, max         string
+		wantDef, wantMax int
+	}{
+		{"7200", "1800", 1800, 1800},
+		{"7200", "", 1800, 1800},
+		{"300", "", 600, 1800},
+		{"banana", "", 600, 1800},
+		{"900", "3600", 900, 3600},
+		{"3600", "3600", 3600, 3600},
+	}
+	for _, c := range cases {
+		setRequired(t)
+		t.Setenv("ROUTER_AUTH", "admin:secret")
+		t.Setenv("SESSION_DURATION_SECONDS", c.def)
+		t.Setenv("UPLINK_SESSION_DURATION_MAX", c.max)
+		cfg, _ := fromEnvQuiet(t)
+		if cfg.SessionDurationSec != c.wantDef || cfg.SessionDurationMax != c.wantMax {
+			t.Errorf("%s/%s: %d/%d want %d/%d", c.def, c.max, cfg.SessionDurationSec, cfg.SessionDurationMax, c.wantDef, c.wantMax)
+		}
+	}
+}

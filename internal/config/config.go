@@ -117,7 +117,7 @@ func FromEnv() (*Config, error) {
 		DataDir:              getenv("DATA_DIR", "./data"),
 		ActiveModelsURL:      getenv("ACTIVE_MODELS_URL", "https://active.mor.org/gateway_models.json"),
 		GatewayBidsURL:       getenv("GATEWAY_BIDS_URL", "https://active.mor.org/gateway_bids.json"),
-		SessionDurationSec:   getenvInt("SESSION_DURATION_SECONDS", 600),
+		SessionDurationSec:   getenvRangeInt("SESSION_DURATION_SECONDS", 600, 600, 86400),
 		SessionFailover:      getenvBool("SESSION_FAILOVER", true),
 		ProviderCooldownSec:  getenvNonNegInt("UPLINK_PROVIDER_COOLDOWN_SECONDS", 600),
 		DirectPaymentIgnored: getenvBool("SESSION_DIRECT_PAYMENT", false),
@@ -150,16 +150,18 @@ func FromEnv() (*Config, error) {
 	// S6: settings set in the environment win over the admin console and
 	// show there as "set by environment". Only a valid value pins.
 	c.EnvPinned = map[string]bool{
-		"SESSION_DURATION_SECONDS":          envIntValid("SESSION_DURATION_SECONDS", -1<<31, 1<<31-1),
+		"SESSION_DURATION_SECONDS":          envIntValid("SESSION_DURATION_SECONDS", 600, 86400),
 		"UPLINK_SESSION_DURATION_MAX":       envIntValid("UPLINK_SESSION_DURATION_MAX", 600, 86400),
 		"UPLINK_SESSION_IDLE_GRACE_SECONDS": envIntValid("UPLINK_SESSION_IDLE_GRACE_SECONDS", 60, 3600),
 		"UPLINK_FORWARD_IDLE_SECONDS":       envIntValid("UPLINK_FORWARD_IDLE_SECONDS", 30, 600),
 		"UPLINK_LOG_LEVEL":                  ParseLogLevel(os.Getenv("UPLINK_LOG_LEVEL")) != "",
 	}
 
-	if c.SessionDurationMax < c.SessionDurationSec {
-		log.Printf("config: UPLINK_SESSION_DURATION_MAX is below SESSION_DURATION_SECONDS; using %d", c.SessionDurationSec)
-		c.SessionDurationMax = c.SessionDurationSec
+	// The cap wins: the default is clamped down to the max, never the
+	// max raised to the default.
+	if c.SessionDurationSec > c.SessionDurationMax {
+		log.Printf("config: SESSION_DURATION_SECONDS is above UPLINK_SESSION_DURATION_MAX; using %d", c.SessionDurationMax)
+		c.SessionDurationSec = c.SessionDurationMax
 	}
 
 	// Security switches fall back to their safe value when malformed.

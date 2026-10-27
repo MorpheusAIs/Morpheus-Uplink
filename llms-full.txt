@@ -1565,11 +1565,11 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 |---|---|---|
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
-| `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
+| `SESSION_DURATION_SECONDS` | `600` | Default session length (stake scales), 600…86400; above `UPLINK_SESSION_DURATION_MAX` it is clamped down to the max |
 | `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
 | `UPLINK_PROVIDER_EXCLUDE` | (empty) | Providers never opened for a model: `<model>=<provider>[,<provider>]…`, entries separated by `;`; model is an id or a catalog name ([Provider failover](#provider-failover)). Bad entries are warned and ignored |
 | `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed) |
-| `UPLINK_SESSION_DURATION_MAX` | `1800` | Longest session a client may ask for with `X-Uplink-Session-Duration`, 600…86400; never below `SESSION_DURATION_SECONDS` ([Long jobs](#long-jobs)) |
+| `UPLINK_SESSION_DURATION_MAX` | `1800` | Longest session a client may ask for with `X-Uplink-Session-Duration`, 600…86400; every open is capped at it, with or without headers; never raised by the default ([Long jobs](#long-jobs)) |
 | `UPLINK_FORWARD_IDLE_SECONDS` | `180` | Default idle timer per inference call (no bytes from upstream), 30…600 |
 | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | `300` | A session with nothing in flight and no use for this long is closed early, 60…3600 |
 | `UPLINK_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error`; also a console setting ([Operator settings](#operator-settings)) |
@@ -1912,7 +1912,11 @@ with `GET` / `POST /admin/settings` (admin session; source
 - *Saving.* `POST {"name":"forwardIdle","value":240}` or
   `{"name":"forwardIdle","reset":true}` (body ≤ 1 KiB, unknown fields →
   `400`). Values are checked against the ranges above, and the default may
-  not exceed the max (`400`). Settings are saved beside the 2FA state in
+  not exceed the max (`400`). The max always wins: at boot a default above
+  the max (from env or saved) is clamped down to it with a warning, and
+  every session open is capped at the max. A saved value ignored at boot
+  (out of range) is logged by name and written to the ops audit stream as
+  `setting_ignored`. Settings are saved beside the 2FA state in
   `uplink-state.json` (temp file + rename, mode 0640) and apply at once:
   new sessions, the next call's idle timer, the next idle sweep and the
   log level, no restart.

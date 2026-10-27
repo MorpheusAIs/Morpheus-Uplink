@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -114,9 +113,12 @@ func levelOf(name string) slog.Level {
 }
 
 // resolveSettings applies env > persisted > default. A persisted value out
-// of bounds (hand-edited file) is ignored with a warning (name only).
-func resolveSettings(cfg *config.Config, st store.Settings) *runtimeSettings {
+// of bounds (hand-edited file) is ignored with a warning (name only); the
+// returned notes are written to the ops audit stream by the caller. The
+// duration cap always wins: a default above the max is clamped down to it.
+func resolveSettings(cfg *config.Config, st store.Settings) (*runtimeSettings, []string) {
 	rs := &runtimeSettings{ints: map[string]int{}, source: map[string]string{}}
+	var notes []string
 	for _, d := range settingDefs {
 		pinned := cfg.EnvPinned[d.env]
 		if d.level {
@@ -127,7 +129,8 @@ func resolveSettings(cfg *config.Config, st store.Settings) *runtimeSettings {
 				rs.level, rs.source[d.name] = l, "persisted"
 			default:
 				if st.LogLevel != "" {
-					log.Printf("settings: persisted %s is invalid; using the default", d.name)
+					slog.Warn("settings: persisted value is invalid; using the default", "setting", d.name)
+					notes = append(notes, d.name+" persisted value invalid; ignored")
 				}
 				rs.level, rs.source[d.name] = "info", "default"
 			}
@@ -141,16 +144,18 @@ func resolveSettings(cfg *config.Config, st store.Settings) *runtimeSettings {
 			rs.ints[d.name], rs.source[d.name] = *p, "persisted"
 		default:
 			if p != nil {
-				log.Printf("settings: persisted %s is out of range; using the default", d.name)
+				slog.Warn("settings: persisted value is out of range; using the default", "setting", d.name)
+				notes = append(notes, d.name+" persisted value out of range; ignored")
 			}
 			rs.ints[d.name], rs.source[d.name] = cfgInt(cfg, d.name, d.def), "default"
 		}
 	}
-	if rs.ints["sessionDurationMax"] < rs.ints["sessionDurationDefault"] {
-		log.Printf("settings: sessionDurationMax is below sessionDurationDefault; using %d", rs.ints["sessionDurationDefault"])
-		rs.ints["sessionDurationMax"] = rs.ints["sessionDurationDefault"]
+	if mx := rs.ints["sessionDurationMax"]; rs.ints["sessionDurationDefault"] > mx {
+		slog.Warn("settings: sessionDurationDefault is above sessionDurationMax; clamped to the max", "max", mx)
+		notes = append(notes, "sessionDurationDefault above sessionDurationMax; clamped to "+strconv.Itoa(mx))
+		rs.ints["sessionDurationDefault"] = mx
 	}
-	return rs
+	return rs, notes
 }
 
 func (rs *runtimeSettings) int(name string) int {

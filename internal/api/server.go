@@ -82,7 +82,11 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 	if st != nil {
 		persisted = st.GetSettings()
 	}
-	s.settings = resolveSettings(cfg, persisted)
+	var notes []string
+	s.settings, notes = resolveSettings(cfg, persisted)
+	for _, n := range notes {
+		s.auditSystem("setting_ignored", "boot", "ignored", n, true)
+	}
 	s.applySettings()
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()

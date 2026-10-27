@@ -266,3 +266,85 @@ func TestS6AdminTimeoutsAbsent(t *testing.T) {
 		t.Fatalf("settings %v", names)
 	}
 }
+
+// MUST-1: the duration cap is never raised. An env default above the env
+// max, or a persisted default above an env-pinned max, is clamped down to
+// the max (with a warning and an ops note); the pool opens at most the max.
+func TestS6DurationCapNeverRaised(t *testing.T) {
+	defer LogLevel.Set(slog.LevelInfo)
+	cases := []struct {
+		name    string
+		env     map[string]string
+		persist func(*store.Settings)
+	}{
+		{"env-over-env", map[string]string{"SESSION_DURATION_SECONDS": "7200", "UPLINK_SESSION_DURATION_MAX": "1800"}, nil},
+		{"persisted-over-env-pin", map[string]string{"UPLINK_SESSION_DURATION_MAX": "1800"}, func(s *store.Settings) { s.SessionDurationDefault = intp(3600) }},
+		{"env-default-over-persisted-max", map[string]string{"SESSION_DURATION_SECONDS": "1800"}, func(s *store.Settings) { s.SessionDurationMax = intp(900) }},
+	}
+	for _, c := range cases {
+		cfg := s6Config(t, c.env)
+		st, err := store.Open(cfg.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.persist != nil {
+			_ = st.UpdateSettings(func(s *store.Settings) error { c.persist(s); return nil })
+		}
+		srv := NewServer(cfg, st, nil, nil, nil, nil)
+		mx := srv.durationMax()
+		if c.name != "env-default-over-persisted-max" && mx != 1800 {
+			t.Errorf("%s: max raised to %d", c.name, mx)
+		}
+		if srv.durationDefault() > mx {
+			t.Errorf("%s: default %d above max %d", c.name, srv.durationDefault(), mx)
+		}
+	}
+}
+
+// MUST-1 (live): a no-header call never opens longer than the max, and the
+// console cannot set a default above the max.
+func TestS6NoHeaderOpenCapped(t *testing.T) {
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, func(c *config.Config) { c.MasterKeyAdmin = true })
+	if code, _ := e.admin(t, "POST", "/admin/settings", `{"name":"sessionDurationDefault","value":3600}`); code != 400 {
+		t.Fatalf("default above max accepted: %d", code)
+	}
+	e.srv.pool.SetDuration(3600) // as if a stale default slipped past
+	k := e.newKey(t, "cap")
+	if r := e.call(t, k, nil, false); r.code != 200 {
+		t.Fatalf("call %d", r.code)
+	}
+	opens, _ := m.snapshot()
+	if len(opens) == 0 {
+		t.Fatal("no open")
+	}
+	for _, o := range opens {
+		if d, _ := o.body["sessionDuration"].(float64); d <= 0 || d > 1800 {
+			t.Fatalf("opened %v s with no header, cap 1800", o.body["sessionDuration"])
+		}
+	}
+}
+
+// Conformance NIT (d): a persisted value ignored at boot also writes an
+// ops-stream event (name only).
+func TestS6IgnoredPersistedValueAuditedOps(t *testing.T) {
+	cfg := s6Config(t, nil)
+	st, err := store.Open(cfg.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.UpdateSettings(func(s *store.Settings) error { s.ForwardIdle = intp(5); return nil })
+	srv := NewServer(cfg, st, nil, nil, nil, nil)
+	found := false
+	for _, ev := range srv.audit.Recent(100) {
+		if ev.Kind == "setting_ignored" {
+			found = true
+			if AuditStreamFor(ev.Kind, ev.Result) != AuditStreamOps || !strings.Contains(ev.Message, "forwardIdle") || strings.Contains(ev.Message, "5") {
+				t.Fatalf("event %+v", ev)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no setting_ignored event")
+	}
+}
