@@ -74,8 +74,8 @@ jobs:
     name: Vet & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
       - name: go mod tidy check
@@ -89,7 +89,7 @@ jobs:
       - run: go test ./...
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           set +e
           out=$(govulncheck ./... 2>&1)
           code=$?
@@ -194,9 +194,9 @@ jobs:
     needs: [test]
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build image (no registry push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: false
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build image (no registry push)
         run: docker build -t uplink:e2e --build-arg VERSION=e2e .
       - name: SecretVM stack with a stateful mock router (session logic)
@@ -230,11 +230,11 @@ jobs:
         run: bash scripts/e2e-mock-router.sh
 
   e2e-real-router:
-    name: E2E smoke (real pinned v7.15.0 router)
+    name: E2E smoke (real pinned v7.17.0 router)
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build image (no registry push)
         run: docker build -t uplink:e2e --build-arg VERSION=e2e .
       - name: Real router + Uplink (throwaway key, no secrets)
@@ -253,7 +253,7 @@ jobs:
       vfull: ${{ steps.gen.outputs.vfull }}
       is_release: ${{ steps.gen.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -328,10 +328,10 @@ jobs:
       VTAG: ${{ needs.generate-tag.outputs.tag_name }}
       IS_RELEASE: ${{ needs.generate-tag.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -357,7 +357,7 @@ jobs:
           bash scripts/deploy-assets.sh check "${IMAGE_NAME}" "${PLACEHOLDER}" "$PRE"
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -385,7 +385,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload deployed compose artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: uplink-deploy-${{ env.VTAG }}
           path: |

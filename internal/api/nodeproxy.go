@@ -19,7 +19,7 @@ import (
 // config, or access router files are refused here (403 + audit) before
 // anything is forwarded.
 //
-// Route table: proxy-router v7.15.0 (commit 0cb8eb83), registered flat on a
+// Route table: proxy-router v7.17.0 (commit cd12b50f), registered flat on a
 // gin.New() engine (internal/handlers/httphandlers/http.go:60-87; no groups
 // or prefixes; controllers in internal/apibus/controller.go:19). gin v1.10
 // defaults: case-sensitive match, RedirectTrailingSlash on,

@@ -125,7 +125,7 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.15.0**
+Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.17.0**
 (Lumerin `main` / #889 caps — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
@@ -142,7 +142,7 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Every image in them is
-  digest-pinned, Uplink and **proxy-router v7.15.0** included (not `:latest`).
+  digest-pinned, Uplink and **proxy-router v7.17.0** included (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to

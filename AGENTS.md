@@ -89,7 +89,7 @@ There is no separate docs host or MCP for Uplink.
    (`deploy/railway/`, reference asset `docker-compose.railway.deployed.yml`).
    Every image in the assets is digest-pinned. Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.15.0 by digest**
+   over forks. Proxy-router (Lumerin) is **pinned to v7.17.0 by digest**
    (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
@@ -102,7 +102,8 @@ There is no separate docs host or MCP for Uplink.
    agents at `active_models.json` / ALL.
 
 10. **Key roles:** Master (`sk-uplink.…`) = inference, plus admin only with
-    `MASTER_KEY_ADMIN=true` (default off); Prompt
+    `MASTER_KEY_ADMIN=true` (default off; never on logout or 2FA
+    status/enroll, which need the admin cookie session); Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
     named, export/import across wipes. Built-ins derive from `API_KEY_SEED`.
 

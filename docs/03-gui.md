@@ -59,7 +59,7 @@ One topic at a time. You do not need every section on day one.
 
 | Kind | Survives a fresh deploy / volume wipe? | Role |
 |------|---------------------------|------|
-| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off) |
+| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off), never on logout or 2FA status/enroll (cookie session only) |
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
 | **Ephemeral** | No — export/import (kept across restarts and redeploys on the same data volume) | Named keys for apps/agents |
 
