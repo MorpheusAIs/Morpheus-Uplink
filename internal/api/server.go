@@ -42,6 +42,7 @@ type Server struct {
 	auditAgg  *auditAggregator // loopable high-value events
 	opsAgg    *auditAggregator // failure/ops events
 	outflow   *OutflowAlert
+	inflight  *inflightLimiter
 
 	walletMu   sync.Mutex
 	lastWallet string // last address the router returned (never blanked)
@@ -66,6 +67,7 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		sessions:  adminauth.NewSessionStore(),
 		lockout:   lo,
 		audit:     NewAuditLog(500),
+		inflight:  newInflightLimiter(cfg.InflightMax),
 		outflow:   &OutflowAlert{},
 	}
 	s.auditFile = openAuditSink(s.audit, cfg.DataDir, time.Duration(auditRetentionDays(cfg))*24*time.Hour)
@@ -86,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/embeddings", s.requireAPIKey(s.handleInference("/v1/embeddings")))
 	mux.HandleFunc("GET /v1/models", s.requireAPIKey(s.handleModels))
 	mux.HandleFunc("GET /v1/usage", s.requireAPIKey(s.handleUsageV1))
+	mux.HandleFunc("POST /v1/sessions/release", s.requireAPIKey(s.handleSessionRelease))
 
 	// Auth (public login; session-gated logout / 2FA enroll).
 	mux.HandleFunc("POST /admin/login", s.handleLogin)
@@ -165,7 +168,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		r.Header.Set("X-Uplink-Key-Id", keyID)
-		next(w, r)
+		next(w, withKeyID(r, keyID))
 	}
 }
 

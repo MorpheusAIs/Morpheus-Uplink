@@ -327,6 +327,14 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
 | `UPLINK_PROVIDER_EXCLUDE` | (empty) | Providers never opened for a model: `<model>=<provider>[,<provider>]…`, entries separated by `;`; model is an id or a catalog name ([Provider failover](#provider-failover)). Bad entries are warned and ignored |
 | `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed) |
+| `UPLINK_SESSION_DURATION_MAX` | `1800` | Longest session a client may ask for with `X-Uplink-Session-Duration`, 600…86400; never below `SESSION_DURATION_SECONDS` ([Long jobs](#long-jobs)) |
+| `UPLINK_FORWARD_IDLE_SECONDS` | `180` | Default idle timer per inference call (no bytes from upstream), 30…600 |
+| `UPLINK_SESSION_IDLE_GRACE_SECONDS` | `300` | A session with nothing in flight and no use for this long is closed early, 60…3600 |
+| `UPLINK_INFLIGHT_MAX` | `32` | In-flight inference requests across all keys, 1…1024 (4 per key, fixed) |
+| `UPLINK_LONG_PER_KEY_MODEL` | `1` | Long sessions one generated key may hold per model, 0…16 |
+| `UPLINK_LONG_PER_KEY` | `2` | Long sessions one generated key may hold in total, 0…64 |
+| `UPLINK_LONG_SESSIONS_MAX` | `3` | Long sessions open at once across all keys, 0…256 |
+| `UPLINK_OPENS_PER_KEY_MODEL_HOUR` | `2` | Long opens (and reopens for remaining life) per key per model per rolling hour, 0…120 |
 | `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
@@ -576,6 +584,69 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   `retried_ok`, `retry_failed`, `no_alternate`, `reopen_failed`,
   `close_failed` (an extra event when the close did not land), or
   `stream_retired`. No request or response bodies, no keys.
+
+### Long jobs
+
+Calls that run for many minutes (agents, long reasoning) get their own
+timers and session handling. Source: `internal/api/longjob.go`,
+`internal/pool/lease.go`, `internal/router/client.go`.
+
+- *Timers per call.* An **idle** timer (no bytes from upstream; default
+  `UPLINK_FORWARD_IDLE_SECONDS`, 180) and a **total** timer (default the
+  session length). Before any answer an expiry is a `504`
+  `{"error":{"type":"timeout","code":504,"message":"upstream idle timeout"}}`
+  (or `total`). Mid-stream the client gets an SSE error event, a chunk with
+  `finish_reason: "uplink_idle_timeout"` (or `uplink_total_timeout`) and
+  `data: [DONE]`. A non-stream body is not idle-cut once headers arrive;
+  the total still applies. These cuts are Uplink's own and never cool a
+  provider. A client hang-up cancels the upstream call.
+- *Admin calls* to the router keep a 60 s timeout on a separate HTTP
+  client; inference has no client-level timeout.
+- *Request headers* (all optional; whole numbers, at most 6 digits, sent
+  once; anything else is a `400` that names the header):
+  - `X-Uplink-Session-Duration`: session length for a new session,
+    600…`UPLINK_SESSION_DURATION_MAX`.
+  - `X-Uplink-Request-Timeout`: total for this call; clamped to
+    30…(max − 120).
+  - `X-Uplink-Idle-Timeout`: idle timer for this call; clamped to 30…600.
+  When any of them is sent the response carries
+  `X-Uplink-Timeouts: idle=<s>;total=<s>` and
+  `X-Uplink-Session-Remaining: <s>`. Without them responses are unchanged.
+- *Reuse by remaining life.* A pooled session is reused only when its
+  remaining life covers the call's total plus 30 s; otherwise a new
+  session opens for max(requested, total + 120) s, capped at the max, and
+  the old one is retired and closed when its last call ends.
+- *Leases.* Every call holds a lease on its session; a session is closed
+  (release, idle sweep, failover, reopen) only when no call is in flight.
+  A failover on a session another call is still using retires it and
+  closes it later.
+- *Idle sweep.* Every 30 s, sessions with nothing in flight and unused for
+  `UPLINK_SESSION_IDLE_GRACE_SECONDS` are closed so unused stake returns.
+- *Long sessions* (longer than `SESSION_DURATION_SECONDS`) are for
+  generated keys only; the master and prompt keys get `429`
+  `long_session_limit`. Limits: per key per model, per key, across all keys,
+  and opens per key per model per hour (envs above). A release does not
+  refund the hourly count; counters start at zero after a restart, and
+  long sessions adopted at boot count toward the global cap.
+- *In-flight caps.* 4 per key and `UPLINK_INFLIGHT_MAX` overall; over
+  either is `429` `too_many_requests`.
+- *Server deadlines.* `IdleTimeout` 120 s for keep-alive connections; the
+  request body must arrive within 60 s; each response write must finish
+  within 60 s (reset before every write, so a slow upstream is not cut, a
+  client that stops reading is).
+- *`POST /v1/sessions/release`* `{"model":"<name or id>"}` (generated
+  keys only; master/prompt → `403` `shared_key`; body ≤ 1 KiB, unknown
+  fields → `400`; unknown model → `404`). Drops this key's hold on the
+  model's session: `{"released":true,"closed":true}` when it was the last
+  holder, `{"released":true,"closed":false,"reason":"shared"}` (or
+  `in_flight`, or `retry` when the close did not land) and
+  `{"released":false,"reason":"not_held"}` otherwise. No ids in any body.
+  Audited as `session_release` in the ops stream.
+- *Status.* Each pooled session in `/admin/status` shows `inFlight`,
+  `holderCount`, `holders` (key ids), `openedAt`, `endsAt`, `opener` and
+  `long`.
+- *Close endpoints.* `POST /admin/pool/close/{id}` and `close-all` answer
+  fixed text on failure; the router's error text is logged only.
 
 ## CI/CD and versioning
 

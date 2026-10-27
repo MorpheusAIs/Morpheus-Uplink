@@ -133,6 +133,12 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
   dedicated wallet: the boot check and the stop act on every session of
   the wallet.
+- A session with no call in flight and no use for 5 minutes
+  (`UPLINK_SESSION_IDLE_GRACE_SECONDS`) is closed early so its unused stake
+  returns. A session is never closed while a call is still running on it;
+  apps can release their hold when done ([Long jobs](04-clients.md#long-jobs-timeouts-session-length-release)).
+  `/admin/status` lists, per pool session, `inFlight`, `holderCount` and
+  `holders` (key ids), `openedAt`, `endsAt`, `opener` and `long`.
 - **Usage** counters are stored on the Uplink data volume: they survive
   restarts and redeploys, and reset on a fresh deploy or when the volume is
   deleted. Funds do not depend on them.

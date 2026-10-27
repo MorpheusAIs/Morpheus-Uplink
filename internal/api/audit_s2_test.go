@@ -258,6 +258,13 @@ func TestS2AuditFlood(t *testing.T) {
 		t.Fatal("reveal")
 	}
 	h := srv.Handler()
+	floodKey, rec, err := keymaker.NewKey("flood")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddKey(rec); err != nil {
+		t.Fatal(err)
+	}
 	const minutes = 5
 	per := s2FloodN / minutes
 	bound := opsAggMaxKeys + 8 // keyed buckets + one "other" per event
@@ -274,7 +281,15 @@ func TestS2AuditFlood(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusTooManyRequests {
 			t.Fatalf("bad Bearer %d: %d", i, rec.Code)
 		}
-		srv.auditAgent("session_release", "k_flood01", "192.0.2.50", "ok", "released")
+		// The real release route, from one valid API key (S5).
+		rreq := httptest.NewRequest(http.MethodPost, "/v1/sessions/release", strings.NewReader(`{"model":"test-model"}`))
+		rreq.RemoteAddr = "192.0.2.50:4000"
+		rreq.Header.Set("Authorization", "Bearer "+floodKey)
+		rrec := httptest.NewRecorder()
+		h.ServeHTTP(rrec, rreq)
+		if rrec.Code != http.StatusOK {
+			t.Fatalf("release %d: %d %s", i, rrec.Code, rrec.Body.String())
+		}
 		if i%997 == 0 {
 			if n := srv.opsAgg.Size(); n > maxSeen {
 				maxSeen = n

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +50,17 @@ type Pool struct {
 	// providers never opened for it. namer maps an id to its name.
 	exclude map[string]map[string]bool
 	namer   func(modelID string) string
+
+	// Leases and long-session limits (lease.go), under mu.
+	sess            map[string]*sessState // session id -> lease state
+	clock           func() time.Time
+	limits          Limits
+	durMax          int
+	opensLog        map[string][]time.Time // key|model -> counted opens
+	pendingGlobal   int
+	pendingKey      map[string]int
+	pendingKeyModel map[string]int
+	testHookLease   func(sessionID string, inflight int)
 
 	onClosed OnSessionClosed
 
@@ -96,6 +108,13 @@ func New(client *router.Client, durationSec int) *Pool {
 		cooling:  map[string]time.Time{},
 		retired:  map[string]time.Time{},
 		cutNext:  map[string]string{},
+
+		sess:            map[string]*sessState{},
+		limits:          DefaultLimits,
+		durMax:          1800,
+		opensLog:        map[string][]time.Time{},
+		pendingKey:      map[string]int{},
+		pendingKeyModel: map[string]int{},
 	}
 }
 
@@ -106,6 +125,7 @@ func (p *Pool) DurationSec() int { return p.duration }
 func (p *Pool) SetOnSessionClosed(fn OnSessionClosed) { p.onClosed = fn }
 
 func (p *Pool) notifyClosed(sessionID string) {
+	p.forget(sessionID)
 	if p.onClosed == nil || sessionID == "" {
 		return
 	}
@@ -162,7 +182,7 @@ func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, er
 	}
 	key := normModel(modelID)
 	p.mu.Lock()
-	if e, ok := p.entries[key]; ok && time.Now().Before(e.expiresAt) {
+	if e, ok := p.entries[key]; ok && p.now().Before(e.expiresAt) {
 		p.mu.Unlock()
 		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
 	}
@@ -214,11 +234,13 @@ func (p *Pool) openLock(key string) *sync.Mutex {
 // store pools a session this pool just opened.
 func (p *Pool) store(key, sessionID, provider string, durationSec int) {
 	p.mu.Lock()
+	now := p.now()
 	p.entries[key] = entry{
 		sessionID: sessionID,
-		expiresAt: time.Now().Add(time.Duration(durationSec)*time.Second - expiryBuffer),
+		expiresAt: now.Add(time.Duration(durationSec)*time.Second - expiryBuffer),
 		provider:  provider,
 	}
+	p.newStateLocked(key, sessionID, now, now.Add(time.Duration(durationSec)*time.Second), "", durationSec > p.duration)
 	p.mu.Unlock()
 }
 
@@ -226,7 +248,7 @@ func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, boo
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[normModel(modelID)]
-	if !ok || !time.Now().Before(e.expiresAt) {
+	if !ok || !p.now().Before(e.expiresAt) {
 		return EnsureResult{}, false
 	}
 	return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, true
@@ -237,13 +259,26 @@ func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, boo
 func (p *Pool) Invalidate(modelID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.entries, normModel(modelID))
+	key := normModel(modelID)
+	if e, ok := p.entries[key]; ok {
+		delete(p.sess, e.sessionID) // the router already dropped it
+	}
+	delete(p.entries, key)
 }
 
+// Snapshot is one pooled session for the admin status. Holders are key
+// ids (admin only, never sent to API keys).
 type Snapshot struct {
-	ModelID   string    `json:"modelId"`
-	SessionID string    `json:"sessionId"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	ModelID     string    `json:"modelId"`
+	SessionID   string    `json:"sessionId"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	InFlight    int       `json:"inFlight"`
+	HolderCount int       `json:"holderCount"`
+	Holders     []string  `json:"holders"`
+	OpenedAt    time.Time `json:"openedAt"`
+	EndsAt      time.Time `json:"endsAt"`
+	Opener      string    `json:"opener,omitempty"`
+	Long        bool      `json:"long"`
 }
 
 func (p *Pool) Snapshot() []Snapshot {
@@ -251,7 +286,15 @@ func (p *Pool) Snapshot() []Snapshot {
 	defer p.mu.Unlock()
 	out := make([]Snapshot, 0, len(p.entries))
 	for modelID, e := range p.entries {
-		out = append(out, Snapshot{ModelID: modelID, SessionID: e.sessionID, ExpiresAt: e.expiresAt})
+		sn := Snapshot{ModelID: modelID, SessionID: e.sessionID, ExpiresAt: e.expiresAt, Holders: []string{}}
+		if st := p.sess[e.sessionID]; st != nil {
+			sn.InFlight, sn.HolderCount, sn.OpenedAt, sn.EndsAt, sn.Opener, sn.Long = st.inflight, len(st.holders), st.openedAt, st.endsAt, st.opener, st.long
+			for k := range st.holders {
+				sn.Holders = append(sn.Holders, k)
+			}
+			sort.Strings(sn.Holders)
+		}
+		out = append(out, sn)
 	}
 	return out
 }
@@ -328,7 +371,7 @@ func (p *Pool) rehydrate(force bool) error {
 		return err
 	}
 
-	now := time.Now()
+	now := p.now()
 	nowUnix := now.Unix()
 	best := map[string]router.Session{} // model -> farthest-ending usable
 	display := make([]ChainSession, 0, len(open))
@@ -383,11 +426,19 @@ func (p *Pool) rehydrate(force bool) error {
 			// Keep a fresher local open.
 			continue
 		}
+		if st := p.sess[s.ID]; st != nil && (st.retired || st.closing) {
+			continue // retired by a reopen, release or sweep: never handed out again
+		}
 		p.entries[modelID] = entry{
 			sessionID: s.ID,
 			expiresAt: usableUntil,
 			stake:     s.Stake,
 			provider:  s.Provider,
+		}
+		if p.sess[s.ID] == nil {
+			// Adopted: opener unknown; a long one counts toward the global cap.
+			opened := time.Unix(s.OpenedAt, 0)
+			p.newStateLocked(modelID, s.ID, opened, ends, "", s.OpenedAt > 0 && s.EndsAt-s.OpenedAt > int64(p.duration))
 		}
 		adopted++
 	}
@@ -467,7 +518,7 @@ func (p *Pool) CloseAll() CloseAllResult {
 		res.Attempted++
 		if err := p.client.CloseSession(sessionID); err != nil {
 			res.Failed++
-			msg := label + ": " + err.Error()
+			msg := label + ": close failed" // fixed text; the router's text is logged only
 			if len(res.Errors) < 5 {
 				res.Errors = append(res.Errors, msg)
 			}
@@ -534,7 +585,7 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 			if err != nil {
 				res.Failed++
 				if len(res.Errors) < 5 {
-					res.Errors = append(res.Errors, t.label+": "+err.Error())
+					res.Errors = append(res.Errors, t.label+": close failed")
 				}
 				log.Printf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
 				continue

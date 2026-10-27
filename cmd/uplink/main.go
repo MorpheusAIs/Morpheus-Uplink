@@ -53,6 +53,13 @@ func main() {
 	pl := pool.New(rc, cfg.SessionDurationSec)
 	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
 	pl.SetProviderExclude(cfg.ProviderExclude, cat.NameByID)
+	pl.SetDurationMax(cfg.SessionDurationMax)
+	pl.SetLimits(pool.Limits{
+		PerKeyModel:  cfg.LongPerKeyModel,
+		PerKey:       cfg.LongPerKey,
+		Global:       cfg.LongSessionsMax,
+		OpensPerHour: cfg.OpensPerKeyModelHour,
+	})
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {
@@ -117,6 +124,22 @@ func main() {
 	defer hkCancel()
 	go hk.Start(hkCtx)
 
+	// Idle sweep: close pooled sessions nobody used for the grace period
+	// (never with a request in flight), and retry failed closes.
+	go func() {
+		grace := time.Duration(cfg.SessionIdleGraceSec) * time.Second
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-hkCtx.Done():
+				return
+			case <-t.C:
+				pl.SweepIdle(grace)
+			}
+		}
+	}()
+
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()
@@ -151,11 +174,7 @@ func main() {
 		}
 	}()
 
-	httpServer := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	httpServer := api.NewHTTPServer(cfg.Listen, srv.Handler())
 
 	go func() {
 		log.Printf("uplink %s listening on %s (router: %s)", version, cfg.Listen, cfg.RouterURL)

@@ -344,6 +344,7 @@ type FailoverResult struct {
 	FailedProvider string
 	Provider       string // provider of SessionID when known
 	CloseFailed    bool   // the failed session's close did not land (it stays retired)
+	CloseDeferred  bool   // still in flight on another request: closes when that ends
 	DurationSec    int
 }
 
@@ -369,7 +370,7 @@ func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) 
 	p.mu.Lock()
 	cur, pooled := p.entries[key]
 	p.mu.Unlock()
-	if pooled && cur.sessionID != failedID && time.Now().Before(cur.expiresAt) {
+	if pooled && cur.sessionID != failedID && p.now().Before(cur.expiresAt) {
 		res.SessionID, res.Replaced, res.Provider = cur.sessionID, true, cur.provider
 		return res, nil
 	}
@@ -414,17 +415,19 @@ func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) 
 
 	// 4. Retire and close the failed session synchronously (bounded), so
 	// our own close and open never race on the wallet nonce.
+	// A session another request is still streaming on is retired, not
+	// closed: it closes when its last lease ends [C9].
 	p.retire(failedID, endsAt)
-	p.mu.Lock()
-	if e, ok := p.entries[key]; ok && e.sessionID == failedID {
-		delete(p.entries, key)
-	}
-	p.mu.Unlock()
-	if err := p.closeBounded(failedID); err != nil {
-		res.CloseFailed = true
-		log.Printf("pool: failover %s: close session %s: %v (retired; not re-adopted)", modelID, short(failedID), err)
+	if p.retireForFailover(key, failedID) {
+		if err := p.closeBounded(failedID); err != nil {
+			res.CloseFailed = true
+			p.failoverCloseFailed(failedID)
+			log.Printf("pool: failover %s: close session %s: %v (retired; not re-adopted)", modelID, short(failedID), err)
+		} else {
+			p.notifyClosed(failedID)
+		}
 	} else {
-		p.notifyClosed(failedID)
+		res.CloseDeferred = true
 	}
 	if !reopen {
 		// A mid-stream cut: the next open walks the bids without it.

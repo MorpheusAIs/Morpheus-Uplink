@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -508,7 +509,8 @@ func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.pool.CloseSession(id); err != nil {
 		s.auditAdmin(r, "pool_close", "pool_close failed session="+pool.ShortID(id))
-		http.Error(w, "close session: "+err.Error(), http.StatusBadGateway)
+		log.Printf("api: pool close %s: %v", pool.ShortID(id), err)
+		http.Error(w, "close session failed", http.StatusBadGateway) // fixed text: router text stays in the log
 		return
 	}
 	s.auditAdmin(r, "pool_close", "pool_close session="+pool.ShortID(id))

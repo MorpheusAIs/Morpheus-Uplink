@@ -79,6 +79,27 @@ type Config struct {
 	// is a registration id or a catalog name; providers are 0x addresses.
 	// Validated at boot: a bad entry is warned and ignored.
 	ProviderExclude map[string][]string
+
+	// Long-job core (S5).
+	// SessionDurationMax caps X-Uplink-Session-Duration and every open
+	// (UPLINK_SESSION_DURATION_MAX, 600…86400, default 1800).
+	SessionDurationMax int
+	// ForwardIdleSec is the default first-byte/idle timer of an inference
+	// call (UPLINK_FORWARD_IDLE_SECONDS, 30…600, default 180).
+	ForwardIdleSec int
+	// SessionIdleGraceSec: the idle sweep closes a pooled session with
+	// nothing in flight this long after its last use
+	// (UPLINK_SESSION_IDLE_GRACE_SECONDS, 60…3600, default 300).
+	SessionIdleGraceSec int
+	// InflightMax caps in-flight inference requests in total
+	// (UPLINK_INFLIGHT_MAX, 1…1024, default 32). Per key the cap is 4.
+	InflightMax int
+	// Long-session limits (a long session is opened for longer than
+	// SESSION_DURATION_SECONDS).
+	LongPerKeyModel      int // UPLINK_LONG_PER_KEY_MODEL (0…16, default 1)
+	LongPerKey           int // UPLINK_LONG_PER_KEY (0…64, default 2)
+	LongSessionsMax      int // UPLINK_LONG_SESSIONS_MAX (0…256, default 3)
+	OpensPerKeyModelHour int // UPLINK_OPENS_PER_KEY_MODEL_HOUR (0…120, default 2)
 }
 
 func FromEnv() (*Config, error) {
@@ -108,6 +129,20 @@ func FromEnv() (*Config, error) {
 		Reset2FA:             getenvBool("UPLINK_RESET_2FA", false),
 		AuditRetentionDays:   getenvRangeInt("AUDIT_RETENTION_DAYS", 90, 1, 3650),
 		ProviderExclude:      ParseProviderExclude(os.Getenv("UPLINK_PROVIDER_EXCLUDE")),
+
+		SessionDurationMax:   getenvRangeInt("UPLINK_SESSION_DURATION_MAX", 1800, 600, 86400),
+		ForwardIdleSec:       getenvRangeInt("UPLINK_FORWARD_IDLE_SECONDS", 180, 30, 600),
+		SessionIdleGraceSec:  getenvRangeInt("UPLINK_SESSION_IDLE_GRACE_SECONDS", 300, 60, 3600),
+		InflightMax:          getenvRangeInt("UPLINK_INFLIGHT_MAX", 32, 1, 1024),
+		LongPerKeyModel:      getenvRangeInt("UPLINK_LONG_PER_KEY_MODEL", 1, 0, 16),
+		LongPerKey:           getenvRangeInt("UPLINK_LONG_PER_KEY", 2, 0, 64),
+		LongSessionsMax:      getenvRangeInt("UPLINK_LONG_SESSIONS_MAX", 3, 0, 256),
+		OpensPerKeyModelHour: getenvRangeInt("UPLINK_OPENS_PER_KEY_MODEL_HOUR", 2, 0, 120),
+	}
+
+	if c.SessionDurationMax < c.SessionDurationSec {
+		log.Printf("config: UPLINK_SESSION_DURATION_MAX is below SESSION_DURATION_SECONDS; using %d", c.SessionDurationSec)
+		c.SessionDurationMax = c.SessionDurationSec
 	}
 
 	// Security switches fall back to their safe value when malformed.

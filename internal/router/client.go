@@ -19,8 +19,12 @@ import (
 
 type Client struct {
 	BaseURL string
-	// HTTP is long-timeout because chat completions can stream for minutes.
+	// HTTP carries the admin calls (sessions, bids, balance, health): a
+	// fixed 60 s timeout, independent of any inference call.
 	HTTP *http.Client
+	// ForwardHTTP carries inference calls. It has no Client.Timeout: each
+	// call is bounded by its own idle and total timers (ForwardOptions).
+	ForwardHTTP *http.Client
 
 	mu   sync.Mutex
 	user string
@@ -33,13 +37,18 @@ type Client struct {
 	now           func() time.Time
 }
 
+// AdminTimeout bounds every non-inference router call.
+const AdminTimeout = 60 * time.Second
+
 func New(baseURL, user, pass string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		user:    user,
 		pass:    pass,
-		HTTP:    &http.Client{Timeout: 10 * time.Minute},
-		now:     time.Now,
+		HTTP:    &http.Client{Timeout: AdminTimeout},
+		// No Client.Timeout: bounded per call by ForwardOptions.
+		ForwardHTTP: &http.Client{},
+		now:         time.Now,
 	}
 }
 
@@ -403,6 +412,9 @@ type ForwardResult struct {
 	// Cut says why a stream ended early (CutNone for a complete stream or
 	// a buffered body). Only CutUpstream is a provider fault.
 	Cut Cut
+	// TimeoutKind names the Uplink timer ("idle" or "total") behind a
+	// CutUplinkTimeout; the stream then ended with sseTimeoutTail.
+	TimeoutKind string
 }
 
 // Cut is the reason a relayed stream ended before its end marker.
@@ -470,9 +482,121 @@ const maxErrorBody = 64 << 10
 // ctx is the request's context: when it ends (client gone, or one of
 // Uplink's timers) the upstream request is cancelled too.
 func (c *Client) Forward(ctx context.Context, w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool) (*ForwardResult, error) {
+	return c.ForwardWith(ctx, w, path, sessionID, header, body, probeOnly, ForwardOptions{})
+}
+
+// ForwardOptions bound one inference call. Zero values switch a timer off.
+type ForwardOptions struct {
+	// Idle is the first-byte and between-reads timer, reset on every read.
+	// For a non-stream call it applies only until the response headers;
+	// after that Total governs (a buffered body has no bytes until the end).
+	Idle time.Duration
+	// Total bounds the whole call.
+	Total time.Duration
+	// Stream is the request's "stream" field.
+	Stream bool
+}
+
+// TimeoutError is an Uplink timer that ended a call before anything was
+// written to the client (the caller answers 504).
+type TimeoutError struct{ Kind string } // "idle" or "total"
+
+func (e *TimeoutError) Error() string { return "upstream " + e.Kind + " timeout" }
+
+// callTimers runs the idle and total timers of one call. Both are
+// time.AfterFunc timers, stopped when the call ends, so no goroutine
+// outlives the request.
+type callTimers struct {
+	idle, total *time.Timer
+	idleDur     time.Duration
+	mu          sync.Mutex
+	idleOff     bool
+}
+
+func startTimers(cancel context.CancelCauseFunc, o ForwardOptions) *callTimers {
+	t := &callTimers{idleDur: o.Idle}
+	if o.Total > 0 {
+		t.total = time.AfterFunc(o.Total, func() { cancel(ErrTotalTimeout) })
+	}
+	if o.Idle > 0 {
+		t.idle = time.AfterFunc(o.Idle, func() { cancel(ErrIdleTimeout) })
+	}
+	return t
+}
+
+// touch resets the idle timer (a read made progress).
+func (t *callTimers) touch() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.idle != nil && !t.idleOff {
+		t.idle.Reset(t.idleDur)
+	}
+}
+
+// idleStop switches the idle timer off (non-stream body after headers).
+func (t *callTimers) idleStop() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.idleOff = true
+	if t.idle != nil {
+		t.idle.Stop()
+	}
+}
+
+func (t *callTimers) stop() {
+	t.idleStop()
+	if t.total != nil {
+		t.total.Stop()
+	}
+}
+
+// timedReader resets the idle timer on every read that returns bytes.
+type timedReader struct {
+	r io.Reader
+	t *callTimers
+}
+
+func (tr timedReader) Read(b []byte) (int, error) {
+	n, err := tr.r.Read(b)
+	if n > 0 {
+		tr.t.touch()
+	}
+	return n, err
+}
+
+// timeoutKind names the Uplink timer that ended ctx ("" when none did).
+func timeoutKind(ctx context.Context) string {
+	switch cause := context.Cause(ctx); {
+	case errors.Is(cause, ErrIdleTimeout):
+		return "idle"
+	case errors.Is(cause, ErrTotalTimeout):
+		return "total"
+	}
+	return ""
+}
+
+// sseTimeoutTail ends a stream that an Uplink timer cut: the fixed error
+// event, a finish_reason chunk naming the timer, and [DONE].
+func sseTimeoutTail(kind string) []byte {
+	ev, _ := json.Marshal(map[string]any{"error": map[string]any{
+		"message": "the response was cut by an Uplink " + kind + " timeout",
+		"type":    "timeout",
+		"code":    http.StatusGatewayTimeout,
+	}})
+	out := append(append([]byte("data: "), ev...), '\n', '\n')
+	out = append(out, []byte(`data: {"choices":[{"index":0,"delta":{},"finish_reason":"uplink_`+kind+`_timeout"}]}`+"\n\n")...)
+	return append(out, []byte("data: [DONE]\n\n")...)
+}
+
+// ForwardWith is Forward with per-call timers.
+func (c *Client) ForwardWith(ctx context.Context, w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool, o ForwardOptions) (*ForwardResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	timers := startTimers(cancel, o)
+	defer timers.stop()
 	req, err := c.newRequest(http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -486,11 +610,23 @@ func (c *Client) Forward(ctx context.Context, w http.ResponseWriter, path, sessi
 	}
 	req.Header.Set("session_id", sessionID)
 
-	resp, err := c.HTTP.Do(req)
+	hc := c.ForwardHTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
+		if k := timeoutKind(ctx); k != "" {
+			return nil, &TimeoutError{Kind: k}
+		}
 		return nil, fmt.Errorf("POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	timers.touch()
+	if !o.Stream && !isEventStream(resp.Header.Get("Content-Type")) {
+		timers.idleStop() // buffered body: total governs from here
+	}
+	src := timedReader{r: resp.Body, t: timers}
 
 	res := &ForwardResult{StatusCode: resp.StatusCode}
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -501,7 +637,12 @@ func (c *Client) Forward(ctx context.Context, w http.ResponseWriter, path, sessi
 	if probeOnly && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		// Nothing is written to w: the caller classifies the typed error and
 		// fails over, retries or relays the status and body itself.
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		raw, rerr := io.ReadAll(io.LimitReader(src, maxErrorBody))
+		if rerr != nil {
+			if k := timeoutKind(ctx); k != "" {
+				return nil, &TimeoutError{Kind: k}
+			}
+		}
 		return res, &StatusError{Method: http.MethodPost, Path: path, Code: resp.StatusCode, Body: string(raw)}
 	}
 
@@ -511,16 +652,27 @@ func (c *Client) Forward(ctx context.Context, w http.ResponseWriter, path, sessi
 	streaming := isEventStream(contentType)
 	if streaming {
 		w.WriteHeader(resp.StatusCode)
-		st := flushCopyCtx(ctx, w, resp.Body)
+		st := flushCopyCtx(ctx, w, src)
 		res.PromptTokens, res.CompletionTokens = st.promptTokens, st.completionTokens
 		res.MidStreamProviderError, res.MidStreamStatus = st.providerError, st.providerStatus
 		res.Cut = st.cut
+		if st.cut == CutUplinkTimeout {
+			if res.TimeoutKind = timeoutKind(ctx); res.TimeoutKind != "" && st.clientWriteErr == nil {
+				_, _ = w.Write(sseTimeoutTail(res.TimeoutKind))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+		}
 		return res, nil
 	}
 
 	// Buffered path: capture the body so we can parse token usage.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	raw, err := io.ReadAll(io.LimitReader(src, 32<<20))
 	if err != nil {
+		if k := timeoutKind(ctx); k != "" {
+			return nil, &TimeoutError{Kind: k}
+		}
 		return nil, fmt.Errorf("read router response: %w", err)
 	}
 	var usage struct {

@@ -140,6 +140,7 @@ type fakeMarket struct {
 	opens       []openRec
 	closes      []string
 	closeStatus int
+	closeBody   string // router error text on a failed close
 	next        int
 }
 
@@ -193,7 +194,11 @@ func (m *fakeMarket) server() *httptest.Server {
 		id := r.PathValue("id")
 		m.closes = append(m.closes, id)
 		if m.closeStatus != 0 {
-			http.Error(w, `{"error":"close failed"}`, m.closeStatus)
+			body := `{"error":"close failed"}`
+			if m.closeBody != "" {
+				body = m.closeBody
+			}
+			http.Error(w, body, m.closeStatus)
 			return
 		}
 		if s := m.sessions[id]; s != nil {
@@ -525,7 +530,8 @@ func TestFailoverCooldownZero(t *testing.T) {
 	}
 }
 
-// 7. Ten concurrent 402s on A: one close, one open, all finish.
+// 7. Concurrent 402s on A: one close, one open, all finish. Four at a
+// time, the per-key in-flight cap (S5); a fifth gets 429 (TestS5InflightCaps).
 func TestFailoverConcurrentSingleFlight(t *testing.T) {
 	m := newFakeMarket(t, provA, provB)
 	m.behave[provA] = func(n int, w http.ResponseWriter) {
@@ -534,7 +540,7 @@ func TestFailoverConcurrentSingleFlight(t *testing.T) {
 	}
 	e := newFailoverEnv(t, m, nil)
 	var wg sync.WaitGroup
-	codes := make([]int, 10)
+	codes := make([]int, perKeyInflight)
 	for i := range codes {
 		wg.Add(1)
 		go func(i int) {
@@ -549,7 +555,7 @@ func TestFailoverConcurrentSingleFlight(t *testing.T) {
 		}
 	}
 	opens, closes := m.snapshot()
-	// One open on A (shared by all ten), one close of A, one open on B.
+	// One open on A (shared by all four), one close of A, one open on B.
 	if len(opens) != 2 || len(closes) != 1 {
 		t.Fatalf("opens %d closes %d (want 2/1)", len(opens), len(closes))
 	}

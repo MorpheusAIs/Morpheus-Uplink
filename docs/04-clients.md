@@ -85,6 +85,41 @@ print(client.chat.completions.create(
 
 ---
 
+## Long jobs (timeouts, session length, release)
+
+For calls that run for many minutes. All optional; without them nothing
+changes. Use a generated `sk-…` key: the master and prompt keys cannot ask
+for long sessions or release.
+
+```bash
+curl -sS https://YOUR_HOST/v1/chat/completions \
+  -H "Authorization: Bearer sk-…" -H "Content-Type: application/json" \
+  -H "X-Uplink-Request-Timeout: 1500" -H "X-Uplink-Idle-Timeout: 300" \
+  -d '{"model":"…","stream":true,"messages":[…]}'
+```
+
+- `X-Uplink-Request-Timeout` (total seconds for this call),
+  `X-Uplink-Idle-Timeout` (seconds without bytes, 30…600, default 180),
+  `X-Uplink-Session-Duration` (session length for a new session, 600…max).
+  Whole numbers only, sent once; a bad value is a `400` naming the header.
+- The response then carries `X-Uplink-Timeouts: idle=…;total=…` and
+  `X-Uplink-Session-Remaining`.
+- A timeout before any answer is a `504` with `"type":"timeout"`. In a
+  stream it ends with an error event, `finish_reason:
+  "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.
+- Too many long sessions or opens → `429` `long_session_limit`; more than
+  4 calls at once on one key → `429` `too_many_requests`.
+- When done, release your hold so unused stake returns early:
+
+```bash
+curl -sS -X POST https://YOUR_HOST/v1/sessions/release \
+  -H "Authorization: Bearer sk-…" -d '{"model":"…"}'
+```
+
+  Answers `{"released":true,"closed":true}`, `…"closed":false,"reason":"shared"`
+  (another key still uses it) or `{"released":false,"reason":"not_held"}`.
+- Details: [Long jobs](06-developers.md#long-jobs).
+
 ## Usage (`GET /v1/usage`)
 
 Poll per-key usage without the admin GUI. Same Bearer auth as other `/v1/*`
