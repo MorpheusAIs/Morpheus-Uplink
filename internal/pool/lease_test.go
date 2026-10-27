@@ -744,3 +744,30 @@ func TestS5FailoverLongCountsLimits(t *testing.T) {
 		t.Fatalf("opened at %d", opens[len(opens)-1])
 	}
 }
+
+// Security gate SHOULD-1 (pool side): with name-keyed exclusions and no
+// catalog name for the model, a new open is refused and a failover keeps
+// the session (closes nothing).
+func TestNameKeyedExclusionUnresolved(t *testing.T) {
+	c := newFakeClock()
+	lr, p := newLeaseRouter(t, c)
+	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	p.SetProviderExclude(map[string][]string{"some-model": {leaseProv1}}, func(string) string { return "" })
+	if _, _, err := p.Acquire(modelB, AcquireOpts{KeyID: "k1"}); !errors.Is(err, ErrNoEligibleProvider) {
+		t.Fatalf("open with unresolved name: %v", err)
+	}
+	if _, err := p.Failover(modelA, r.SessionID, FailoverOpts{KeyID: "k1", Reopen: true}); !errors.Is(err, ErrNoAlternate) {
+		t.Fatalf("failover with unresolved name: %v", err)
+	}
+	if lr.closedCount(r.SessionID) != 0 {
+		t.Fatal("failover closed the session")
+	}
+	// Id-keyed exclusions alone never need the name.
+	p.SetProviderExclude(map[string][]string{modelC: {leaseProv2}}, func(string) string { return "" })
+	if l, _, err := p.Acquire(modelC, AcquireOpts{KeyID: "k1"}); err != nil {
+		t.Fatalf("id-keyed: %v", err)
+	} else {
+		l.Done()
+	}
+}

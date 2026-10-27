@@ -50,6 +50,8 @@ type Pool struct {
 	// providers never opened for it. namer maps an id to its name.
 	exclude map[string]map[string]bool
 	namer   func(modelID string) string
+	// excludeByName: some exclusions are keyed by catalog name.
+	excludeByName bool
 
 	// Leases and long-session limits (lease.go), under mu.
 	sess            map[string]*sessState // session id -> lease state

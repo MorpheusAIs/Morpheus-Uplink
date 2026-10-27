@@ -3,10 +3,12 @@ package api
 import (
 	"bufio"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -423,5 +425,55 @@ func TestS4BidsUnreadableFallback(t *testing.T) {
 	}
 	if opens, _ := m2.snapshot(); len(opens) != 0 {
 		t.Fatalf("two exclusions opened %d", len(opens))
+	}
+}
+
+// Security gate SHOULD-1: a name-keyed exclusion must not fail open when
+// the catalog has no name for the id (cold boot, model feed down, client
+// sends the raw 0x id): the open is refused with 503 and no ids until the
+// name resolves; then the exclusion applies.
+func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	var feedUp atomic.Bool
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !feedUp.Load() {
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[{"Name":"test-model","Id":"` + testModelID + `","Tags":["chat"]}]}`))
+	}))
+	t.Cleanup(feed.Close)
+	m := newFakeMarket(t, a40, b40)
+	e := newFailoverEnv(t, m, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
+	e.srv.pool.SetProviderExclude(map[string][]string{"test-model": {a40}}, e.srv.catalog.NameByID)
+	chatID := func() (int, string) {
+		t.Helper()
+		body := `{"model":"` + testModelID + `","messages":[{"role":"user","content":"hi"}]}`
+		req, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+e.key)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+	code, body := chatID()
+	if code != 503 || !strings.Contains(body, "no_eligible_provider") || strings.Contains(body, a40) || strings.Contains(body, b40) {
+		t.Fatalf("feed down: %d %s", code, body)
+	}
+	if opens, _ := m.snapshot(); len(opens) != 0 {
+		t.Fatalf("feed down: opened %+v", opens)
+	}
+	feedUp.Store(true)
+	if code, body := chatID(); code != 200 {
+		t.Fatalf("feed up: %d %s", code, body)
+	}
+	for _, o := range func() []openRec { o, _ := m.snapshot(); return o }() {
+		if o.provider == a40 {
+			t.Fatal("opened on the name-keyed excluded provider")
+		}
 	}
 }

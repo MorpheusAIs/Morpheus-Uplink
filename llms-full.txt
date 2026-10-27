@@ -1823,7 +1823,12 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   A session the router opened on an excluded provider anyway is closed at
   once and answered the same way. When the rated bids cannot be read, one
   exclusion is sent as `omitProvider`; with two or more nothing is opened
-  (`502`).
+  (`502`). An entry keyed by catalog name needs the model's name: while the
+  catalog has no name for the requested id (for example the model feed is
+  down at boot and the client sends the `0x` id), opens for that model are
+  refused with `503` `no_eligible_provider`, failover keeps the session,
+  and on-chain sessions are not adopted, until the name resolves. Entries
+  keyed by model id never need the catalog.
   Bad entries are logged by position and ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short

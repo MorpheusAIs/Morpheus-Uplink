@@ -104,9 +104,29 @@ func (p *Pool) SetProviderExclude(m map[string][]string, namer func(string) stri
 			ex[k][strings.ToLower(strings.TrimSpace(pr))] = true
 		}
 	}
+	nameKeyed := false
+	for k := range ex {
+		if !strings.HasPrefix(k, "0x") {
+			nameKeyed = true // keyed by catalog name, not by model id
+		}
+	}
 	p.fmu.Lock()
-	p.exclude, p.namer = ex, namer
+	p.exclude, p.namer, p.excludeByName = ex, namer, nameKeyed
 	p.fmu.Unlock()
+}
+
+// exclusionsUnresolved is true when some exclusions are keyed by catalog
+// name and the model's name is unknown (catalog not loaded, or an id it
+// does not list): which of them apply cannot be told, so opens for the
+// model are refused (fail closed) until the name resolves.
+func (p *Pool) exclusionsUnresolved(modelID string) bool {
+	p.fmu.Lock()
+	byName, namer := p.excludeByName, p.namer
+	p.fmu.Unlock()
+	if !byName {
+		return false
+	}
+	return namer == nil || strings.TrimSpace(namer(modelID)) == ""
 }
 
 // excludedProviders is the configured exclusion set for a model.
@@ -133,6 +153,9 @@ func (p *Pool) excludedProviders(modelID string) map[string]bool {
 }
 
 func (p *Pool) isExcluded(modelID, provider string) bool {
+	if p.exclusionsUnresolved(modelID) {
+		return true // cannot tell: do not adopt
+	}
 	return provider != "" && p.excludedProviders(modelID)[strings.ToLower(strings.TrimSpace(provider))]
 }
 
@@ -340,6 +363,10 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		prov, _ := p.sessionProvider(modelID, id)
 		return id, prov, nil
 	}
+	if p.exclusionsUnresolved(modelID) {
+		warnf("pool: model %s has no catalog name and name-keyed provider exclusions are set; not opening", modelID)
+		return "", "", ErrNoEligibleProvider
+	}
 	configured := p.excludedProviders(modelID)
 	// fallback drops the soft avoidances and keeps the configured ones.
 	fallback := func(bids []router.RatedBid, bidsOK bool) (string, string, error) {
@@ -490,7 +517,11 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	p.MarkCooling(modelID, failedProv)
 
 	// 3. Guardrail: count distinct providers outside the exclusions before
-	// closing anything.
+	// closing anything (and keep the session when the exclusions cannot
+	// be resolved for this model).
+	if p.exclusionsUnresolved(modelID) {
+		return res, fmt.Errorf("%w (provider exclusions unresolved: no catalog name)", ErrNoAlternate)
+	}
 	exclude := p.avoidSet(modelID)
 	exclude[failedProv] = true
 	bids, err := p.client.RatedBids(modelID)
