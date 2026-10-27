@@ -1354,7 +1354,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 // nothing else. Functions take the values they print.
 const UI_COPY = {
   // Name-keyed provider exclusions not resolved yet: opens refused.
-  exclusionsUnresolved: (n, capped) => 'Opens are being refused for ' + (capped ? 'at least ' : '') + n + (n === 1 ? ' model' : ' models')
+  exclusionsUnresolved: (n, capped) => 'Opens are being refused for ' + n + (capped ? ' or more' : '') + (n === 1 && !capped ? ' model' : ' models')
     + ': UPLINK_PROVIDER_EXCLUDE has entries keyed by model name and the model catalog has no name for '
     + (n === 1 ? 'it' : 'them') + ' yet (is the model feed reachable?). Requests get 503 until the names resolve.',
   // Admin changes are accepted only from WEB_PUBLIC_URL.
