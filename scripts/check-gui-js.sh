@@ -574,3 +574,38 @@ grep -qF "const ks = await revealKeys();" "$HTML" || { echo "FAIL: Export all mu
 grep -qF "fetch('/admin/step-up'" "$HTML" || { echo "FAIL: step-up dialog must post /admin/step-up" >&2; exit 1; }
 grep -qF 'id="enrollPw"' "$HTML" || { echo "FAIL: enrollment needs a password field" >&2; exit 1; }
 echo "OK: no reveal button; copy and Export all fetch the full keys on demand"
+
+# S6 settings: env-pinned fields are disabled with the env name; others
+# get Save and Reset; values are built with textContent (no innerHTML).
+node - "$OUT" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function extract(name) {
+  const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = m.index + m[0].length, d = 1;
+  while (i < src.length && d > 0) { const c = src[i++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const mk = (tag) => ({ tag, children: [], style: {}, disabled: false, value: '', textContent: '',
+  appendChild(c) { this.children.push(c); return c; } });
+const box = mk('div');
+global.document = { getElementById: () => box, createElement: mk };
+const fn = extract('renderSettings');
+if (/innerHTML/.test(fn)) fail('renderSettings must not use innerHTML');
+eval(fn + '\nglobal.renderSettings = renderSettings;');
+renderSettings([
+  { name: 'forwardIdle', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true },
+  { name: 'logLevel', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false },
+]);
+const [pinned, free] = box.children;
+const pin = pinned.children.find((c) => c.tag === 'input');
+if (!pin || !pin.disabled) fail('env-pinned field must be disabled');
+if (pinned.children.some((c) => c.tag === 'button')) fail('env-pinned field must have no Save/Reset');
+if (!pinned.children.some((c) => c.textContent === 'set by environment (UPLINK_FORWARD_IDLE_SECONDS)')) fail('missing env note');
+const sel = free.children.find((c) => c.tag === 'select');
+if (!sel || sel.disabled || sel.value !== 'debug') fail('free field must be enabled with its value');
+if (free.children.filter((c) => c.tag === 'button').length !== 2) fail('free field needs Save and Reset');
+console.log('OK: settings env-pinned fields disabled; others editable');
+NODE

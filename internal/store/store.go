@@ -43,6 +43,7 @@ type state struct {
 	OpenSessions    map[string]OpenSessionMeta `json:"openSessions,omitempty"`
 	SessionTimeMode string                     `json:"sessionTimeMode,omitempty"` // "actual" after migration
 	Auth            AuthState                  `json:"auth,omitempty"`
+	Settings        Settings                   `json:"settings,omitempty"`
 }
 
 type Store struct {

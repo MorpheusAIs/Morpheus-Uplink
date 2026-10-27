@@ -173,8 +173,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"version":                Version,
 		"sessions":               sessions, // on-chain opens (pooled flagged)
 		"poolSessions":           s.pool.Snapshot(),
-		"sessionDurationSec":     s.cfg.SessionDurationSec,
-		"sessionDurationDefault": s.cfg.SessionDurationSec,
+		"sessionDurationSec":     s.durationDefault(),
+		"sessionDurationDefault": s.durationDefault(),
 		// Origin admin changes are accepted from (the GUI warns on a mismatch).
 		"webPublicUrl": webPublicOrigin(s.cfg.WebPublicURL),
 	}
@@ -362,7 +362,7 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `query "model" required`, http.StatusBadRequest)
 		return
 	}
-	durationSec := s.cfg.SessionDurationSec
+	durationSec := s.durationDefault()
 	if durationSec < 600 {
 		durationSec = 600
 	}
@@ -433,7 +433,7 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 // handleEstimateStakes returns on-chain lock estimates for every catalog model
 // at the given duration, plus liquid wallet MOR for affordability checks.
 func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
-	durationSec := s.cfg.SessionDurationSec
+	durationSec := s.durationDefault()
 	if durationSec < 600 {
 		durationSec = 600
 	}

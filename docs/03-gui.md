@@ -53,6 +53,11 @@ One topic at a time. You do not need every section on day one.
 - Locked out (lost authenticator and codes): emergency recovery is one
   restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
+- **Settings** (collapsed, below 2FA): session length default and max,
+  idle-sweep grace, the per-call idle timer and the log level. Save applies
+  at once; Reset returns to the default. A value set in the environment is
+  shown disabled with "set by environment (ENV)"
+  ([Operator settings](06-developers.md#operator-settings)).
 - **Security alerts** (below 2FA): the last 50 audit events (logins
   and lockouts, 2FA and key changes, boot session checks, provider
   failovers, balance drops),

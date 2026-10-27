@@ -44,6 +44,9 @@ type Server struct {
 	outflow   *OutflowAlert
 	inflight  *inflightLimiter
 
+	settings   *runtimeSettings // S6: effective operator settings
+	settingsMu sync.Mutex       // serialises setting changes
+
 	walletMu   sync.Mutex
 	lastWallet string // last address the router returned (never blanked)
 
@@ -75,6 +78,12 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 	emit := func(st AuditStream, ev AuditEvent) { s.auditSink.WriteAudit(st, ev) }
 	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, aggMaxKeys*16, emit)
 	s.opsAgg = newAuditAggregator(aggWindow, opsAggMaxKeys, opsAggMaxKeys, emit)
+	var persisted store.Settings
+	if st != nil {
+		persisted = st.GetSettings()
+	}
+	s.settings = resolveSettings(cfg, persisted)
+	s.applySettings()
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()
 	return s
@@ -118,6 +127,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/models", s.requireAdmin(s.handleAdminModels))
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
+	mux.HandleFunc("GET /admin/settings", s.requireAdmin(s.handleSettingsGet))
+	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.handleSettingsSet))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))

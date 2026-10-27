@@ -246,7 +246,7 @@ func (p *Pool) tryPooledLocked(key string, o AcquireOpts, dur int) (l *Lease, re
 func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, error) {
 	dur := o.DurationSec
 	if dur <= 0 {
-		dur = p.duration
+		dur = p.DurationSec()
 	}
 	key := normModel(modelID)
 	p.mu.Lock()
@@ -293,7 +293,7 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 			openDur = mx
 		}
 	}
-	long := openDur > p.duration
+	long := openDur > p.DurationSec()
 	counted := long || short
 
 	p.mu.Lock()

@@ -1069,6 +1069,18 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <button class="ghost" type="button" onclick="logout()">Log out</button>
         </div>
       </section>
+      <section id="settingsSection">
+        <details id="settingsDetails" class="fold" ontoggle="if (this.open) loadSettings()">
+          <summary>Settings</summary>
+          <p class="note" style="margin:8px 0 0">
+            Saved with the admin state and applied at once. A value set in the
+            environment wins and cannot be changed here. Every change is logged.
+          </p>
+          <div id="settingsList" class="stack" style="gap:8px;margin-top:10px">Loading…</div>
+          <p id="settingsMsg" class="note" style="margin:6px 0 0"></p>
+        </details>
+      </section>
+
       <section>
         <h2>Security alerts</h2>
         <p class="note" style="margin-top:0">
@@ -1639,6 +1651,80 @@ async function api(path, opts = {}) {
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
   return res.text();
+}
+
+/** Operator settings (#51): env-pinned rows are shown disabled. */
+async function loadSettings() {
+  const msg = document.getElementById('settingsMsg');
+  try {
+    const v = await api('/admin/settings');
+    renderSettings((v && v.settings) || []);
+    msg.textContent = '';
+  } catch (e) {
+    msg.textContent = 'Could not load settings: ' + e.message;
+  }
+}
+function renderSettings(list) {
+  const box = document.getElementById('settingsList');
+  box.textContent = '';
+  for (const s of list) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('label');
+    label.textContent = s.name;
+    label.style.minWidth = '200px';
+    let input;
+    if (Array.isArray(s.options) && s.options.length) {
+      input = document.createElement('select');
+      for (const o of s.options) {
+        const opt = document.createElement('option');
+        opt.value = o; opt.textContent = o;
+        input.appendChild(opt);
+      }
+    } else {
+      input = document.createElement('input');
+      input.type = 'number';
+      if (s.min != null) input.min = String(s.min);
+      if (s.max != null) input.max = String(s.max);
+      input.style.maxWidth = '140px';
+    }
+    input.id = 'setting-' + s.name;
+    input.value = String(s.value);
+    input.disabled = !!s.pinned;
+    row.appendChild(label);
+    row.appendChild(input);
+    const note = document.createElement('span');
+    note.className = 'note';
+    note.style.margin = '0';
+    if (s.pinned) {
+      note.textContent = 'set by environment (' + s.env + ')';
+    } else {
+      const save = document.createElement('button');
+      save.type = 'button'; save.className = 'ghost'; save.textContent = 'Save';
+      save.onclick = () => saveSetting(s.name, input.value, s.options);
+      const reset = document.createElement('button');
+      reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'Reset';
+      reset.disabled = s.source !== 'persisted';
+      reset.onclick = () => saveSetting(s.name, null);
+      row.appendChild(save);
+      row.appendChild(reset);
+      note.textContent = s.source === 'persisted' ? 'saved' : 'default ' + s.default;
+    }
+    row.appendChild(note);
+    box.appendChild(row);
+  }
+}
+async function saveSetting(name, value, options) {
+  const msg = document.getElementById('settingsMsg');
+  const body = value === null ? { name, reset: true }
+    : { name, value: (Array.isArray(options) && options.length) ? String(value) : Number(value) };
+  try {
+    await api('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    msg.textContent = value === null ? name + ' reset' : name + ' saved';
+    await loadSettings();
+  } catch (e) {
+    msg.textContent = name + ': ' + e.message;
+  }
 }
 
 /** Accessible ⓘ: focusable, announced via aria-label, shown via CSS on hover/focus. */

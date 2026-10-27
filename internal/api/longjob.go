@@ -153,17 +153,10 @@ type callLimits struct {
 	anyHeader   bool
 }
 
-func (s *Server) durationMax() int {
-	if m := s.cfg.SessionDurationMax; m >= 600 {
-		return m
-	}
-	return 1800
-}
-
 // parseCallLimits validates the three X-Uplink headers (DETAIL §2).
 func (s *Server) parseCallLimits(r *http.Request) (callLimits, string) {
 	dmax := s.durationMax()
-	idleDef := s.cfg.ForwardIdleSec
+	idleDef := s.forwardIdle()
 	if idleDef < idleTimeoutMin || idleDef > idleTimeoutMax {
 		idleDef = 180
 	}

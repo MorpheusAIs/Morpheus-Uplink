@@ -100,6 +100,12 @@ type Config struct {
 	LongPerKey           int // UPLINK_LONG_PER_KEY (0…64, default 2)
 	LongSessionsMax      int // UPLINK_LONG_SESSIONS_MAX (0…256, default 3)
 	OpensPerKeyModelHour int // UPLINK_OPENS_PER_KEY_MODEL_HOUR (0…120, default 2)
+
+	// LogLevel is UPLINK_LOG_LEVEL (debug, info, warn, error; default info).
+	LogLevel string
+	// EnvPinned names the S6 settings whose env var holds a valid value;
+	// those cannot be changed in the admin console.
+	EnvPinned map[string]bool
 }
 
 func FromEnv() (*Config, error) {
@@ -138,6 +144,17 @@ func FromEnv() (*Config, error) {
 		LongPerKey:           getenvRangeInt("UPLINK_LONG_PER_KEY", 2, 0, 64),
 		LongSessionsMax:      getenvRangeInt("UPLINK_LONG_SESSIONS_MAX", 3, 0, 256),
 		OpensPerKeyModelHour: getenvRangeInt("UPLINK_OPENS_PER_KEY_MODEL_HOUR", 2, 0, 120),
+	}
+
+	c.LogLevel = getenvLogLevel("UPLINK_LOG_LEVEL")
+	// S6: settings set in the environment win over the admin console and
+	// show there as "set by environment". Only a valid value pins.
+	c.EnvPinned = map[string]bool{
+		"SESSION_DURATION_SECONDS":          envIntValid("SESSION_DURATION_SECONDS", -1<<31, 1<<31-1),
+		"UPLINK_SESSION_DURATION_MAX":       envIntValid("UPLINK_SESSION_DURATION_MAX", 600, 86400),
+		"UPLINK_SESSION_IDLE_GRACE_SECONDS": envIntValid("UPLINK_SESSION_IDLE_GRACE_SECONDS", 60, 3600),
+		"UPLINK_FORWARD_IDLE_SECONDS":       envIntValid("UPLINK_FORWARD_IDLE_SECONDS", 30, 600),
+		"UPLINK_LOG_LEVEL":                  ParseLogLevel(os.Getenv("UPLINK_LOG_LEVEL")) != "",
 	}
 
 	if c.SessionDurationMax < c.SessionDurationSec {
@@ -352,4 +369,41 @@ func ValidateAdminPassword(adminPass, cookieContent string) error {
 		}
 	}
 	return nil
+}
+
+// ParseLogLevel returns the canonical level name or "" when v is not one.
+func ParseLogLevel(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "debug":
+		return "debug"
+	case "info":
+		return "info"
+	case "warn", "warning":
+		return "warn"
+	case "error":
+		return "error"
+	}
+	return ""
+}
+
+func getenvLogLevel(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return "info"
+	}
+	if l := ParseLogLevel(v); l != "" {
+		return l
+	}
+	log.Printf("config: %s is not debug, info, warn or error; using info", key)
+	return "info"
+}
+
+// envIntValid reports whether key holds a whole number in [lo, hi].
+func envIntValid(key string, lo, hi int) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false
+	}
+	n, err := strconv.Atoi(v)
+	return err == nil && n >= lo && n <= hi
 }

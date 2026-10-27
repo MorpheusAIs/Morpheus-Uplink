@@ -187,7 +187,7 @@ func (p *Pool) coolingProviders(modelID string) map[string]bool {
 func (p *Pool) retire(sessionID string, endsAt time.Time) {
 	now := time.Now()
 	if !endsAt.After(now) {
-		endsAt = now.Add(time.Duration(p.duration)*time.Second + expiryBuffer)
+		endsAt = now.Add(time.Duration(p.DurationSec())*time.Second + expiryBuffer)
 	}
 	p.fmu.Lock()
 	defer p.fmu.Unlock()
@@ -358,7 +358,7 @@ type FailoverResult struct {
 // provider serves the model.
 func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) (FailoverResult, error) {
 	if durationSec <= 0 {
-		durationSec = p.duration
+		durationSec = p.DurationSec()
 	}
 	res := FailoverResult{DurationSec: durationSec}
 	key := normModel(modelID)

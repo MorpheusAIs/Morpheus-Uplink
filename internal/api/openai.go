@@ -347,7 +347,7 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeModelList(w http.ResponseWriter, models []catalog.Model) {
-	defaultDur := s.cfg.SessionDurationSec
+	defaultDur := s.durationDefault()
 	if defaultDur <= 0 {
 		defaultDur = 600
 	}

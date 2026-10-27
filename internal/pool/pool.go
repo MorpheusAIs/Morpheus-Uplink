@@ -31,7 +31,7 @@ type OnSessionClosed func(sessionID string)
 
 type Pool struct {
 	client   *router.Client
-	duration int
+	duration atomic.Int64 // default session length (s); S6 settings change it live
 
 	mu      sync.Mutex
 	entries map[string]entry       // normModel(modelID) -> session
@@ -99,9 +99,8 @@ type ChainSession struct {
 // direct payment), and the router's own in-prompt failover is always off:
 // provider failover is run by the pool (Failover).
 func New(client *router.Client, durationSec int) *Pool {
-	return &Pool{
+	p := &Pool{
 		client:   client,
-		duration: durationSec,
 		entries:  map[string]entry{},
 		opening:  map[string]*sync.Mutex{},
 		cooldown: DefaultProviderCooldown,
@@ -116,10 +115,16 @@ func New(client *router.Client, durationSec int) *Pool {
 		pendingKey:      map[string]int{},
 		pendingKeyModel: map[string]int{},
 	}
+	p.duration.Store(int64(durationSec))
+	return p
 }
 
 // DurationSec is the configured default session length.
-func (p *Pool) DurationSec() int { return p.duration }
+func (p *Pool) DurationSec() int { return int(p.duration.Load()) }
+
+// SetDuration changes the default session length (S6 settings). Open
+// sessions keep their own end time.
+func (p *Pool) SetDuration(sec int) { p.duration.Store(int64(sec)) }
 
 // SetOnSessionClosed registers a hook run after each successful close.
 func (p *Pool) SetOnSessionClosed(fn OnSessionClosed) { p.onClosed = fn }
@@ -178,7 +183,7 @@ func (p *Pool) Ensure(modelID string) (string, error) {
 // Reuse order: in-memory pool → adopt a still-open on-chain session → open new.
 func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, error) {
 	if durationSec <= 0 {
-		durationSec = p.duration
+		durationSec = p.DurationSec()
 	}
 	key := normModel(modelID)
 	p.mu.Lock()
@@ -240,7 +245,7 @@ func (p *Pool) store(key, sessionID, provider string, durationSec int) {
 		expiresAt: now.Add(time.Duration(durationSec)*time.Second - expiryBuffer),
 		provider:  provider,
 	}
-	p.newStateLocked(key, sessionID, now, now.Add(time.Duration(durationSec)*time.Second), "", durationSec > p.duration)
+	p.newStateLocked(key, sessionID, now, now.Add(time.Duration(durationSec)*time.Second), "", durationSec > p.DurationSec())
 	p.mu.Unlock()
 }
 
@@ -438,7 +443,7 @@ func (p *Pool) rehydrate(force bool) error {
 		if p.sess[s.ID] == nil {
 			// Adopted: opener unknown; a long one counts toward the global cap.
 			opened := time.Unix(s.OpenedAt, 0)
-			p.newStateLocked(modelID, s.ID, opened, ends, "", s.OpenedAt > 0 && s.EndsAt-s.OpenedAt > int64(p.duration))
+			p.newStateLocked(modelID, s.ID, opened, ends, "", s.OpenedAt > 0 && s.EndsAt-s.OpenedAt > int64(p.DurationSec()))
 		}
 		adopted++
 	}

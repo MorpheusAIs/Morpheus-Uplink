@@ -29,7 +29,9 @@ import (
 var version = "dev"
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// Live level (UPLINK_LOG_LEVEL or the persisted setting, S6); info
+	// until the settings are resolved in api.NewServer.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: api.LogLevel})))
 	api.Version = version
 	cfg, err := config.FromEnv()
 	if err != nil {
@@ -127,7 +129,6 @@ func main() {
 	// Idle sweep: close pooled sessions nobody used for the grace period
 	// (never with a request in flight), and retry failed closes.
 	go func() {
-		grace := time.Duration(cfg.SessionIdleGraceSec) * time.Second
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
 		for {
@@ -135,7 +136,8 @@ func main() {
 			case <-hkCtx.Done():
 				return
 			case <-t.C:
-				pl.SweepIdle(grace)
+				// Read every tick: the grace is a live setting (S6).
+				pl.SweepIdle(time.Duration(srv.SessionIdleGrace()) * time.Second)
 			}
 		}
 	}()
