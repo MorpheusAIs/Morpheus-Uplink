@@ -142,8 +142,8 @@ func TestRelayRouterErrorWholeBodyCap(t *testing.T) {
 		body := `{"providerModelError":{"error":{"message":"` + msg + `"},"detail":"x"}}`
 		rec := httptest.NewRecorder()
 		relayRouterError(rec, &router.StatusError{Method: "POST", Path: "/v1/chat/completions", Code: 400, Body: body})
-		if n := rec.Body.Len(); n > maxRelayBody {
-			t.Fatalf("body %d bytes > %d", n, maxRelayBody)
+		if n := rec.Body.Len(); n > maxRelayBody || n > 4096 {
+			t.Fatalf("full body %d bytes, want <= 4096", n)
 		}
 		var got struct {
 			Error struct {

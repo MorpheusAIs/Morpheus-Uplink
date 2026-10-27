@@ -127,7 +127,7 @@ type fakeSess struct {
 }
 
 // fakeMarket is a stateful proxy-router with several providers for one
-// model: opens by model (router picks the first provider not omitted),
+// model: opens by model (router picks the first listed provider),
 // opens by bid, closes, session detail, rated bids and prompts.
 type fakeMarket struct {
 	t           *testing.T
