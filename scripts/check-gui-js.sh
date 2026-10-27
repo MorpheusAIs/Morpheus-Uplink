@@ -642,10 +642,20 @@ renderSettings([
   { name: 'webPublicUrl', kind: 'string', value: 'https://console.example', default: '', source: 'env', env: 'WEB_PUBLIC_URL', pinned: true, settable: false, scope: 'env', help: 'Console origin. Set in .env only.' },
 ]);
 const [pinned, free, bool, str, router, envOnly, envOnlySet] = box.children;
-const ctl = (row) => row.children.find((c) => c.id && c.id.startsWith('setting-'));
+const walk = (n) => [n].concat(...(n.children || []).map(walk));
+const ctl = (row) => walk(row).find((c) => c.id && c.id.startsWith('setting-'));
 const note = (row) => row.children[row.children.length - 1].textContent;
 const buttons = (row) => row.children.filter((c) => c.tag === 'button').length;
-const tipOf = (row) => row.children.find((c) => c.className === 'tip').attrs['data-tip'] || '';
+const tipOf = (row) => walk(row).find((c) => c.className === 'tip').attrs['data-tip'] || '';
+// One layout for every row: label and tip first, then the control in its
+// fixed-width cell; no inline widths on the controls.
+for (const row of box.children) {
+  const [head, cell] = row.children;
+  if (row.className !== 'setting-row' || head.className !== 'setting-label' || cell.className !== 'setting-cell') fail('row layout: ' + row.className);
+  if (head.children.length !== 2 || head.children[0].tag !== 'label' || head.children[1].className !== 'tip') fail('label and tip go together on the left');
+  if (cell.children.length !== 1 || !cell.children[0].id.startsWith('setting-')) fail('the cell holds only the control');
+  if (Object.keys(cell.children[0].style).length) fail('controls take their width from the cell, not inline styles');
+}
 if (!ctl(pinned).disabled || buttons(pinned)) fail('env-pinned field must be disabled with no Save/Reset');
 if (note(pinned) !== 'set by environment (UPLINK_FORWARD_IDLE_SECONDS) \u2014 remove it from .env to manage it here') fail('env note: ' + note(pinned));
 if (ctl(pinned).type !== 'number' || ctl(pinned).min !== '30' || ctl(pinned).max !== '600') fail('number field');

@@ -318,6 +318,16 @@
   .hidden { display: none !important; }
   .tf-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
   .tf-switch input { width: 18px; height: 18px; margin: 0; }
+  /* Settings tab: one row per setting, label and tip, then the control in a
+     fixed-width cell so every control starts at the same place. */
+  .setting-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .setting-label { flex: 0 0 240px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .setting-label label { overflow-wrap: anywhere; }
+  .setting-cell { flex: 0 0 280px; display: flex; align-items: center; }
+  .setting-cell input, .setting-cell select { width: 100%; }
+  .setting-cell input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
+  .setting-row .note { margin: 0; }
+  @media (max-width: 640px) { .setting-label, .setting-cell { flex-basis: 100%; } }
   .otp-input {
     width: 9ch;
     font-family: var(--mono, ui-monospace, monospace);
@@ -1701,16 +1711,20 @@ function renderSettings(list) {
   box.textContent = '';
   for (const s of list) {
     const row = document.createElement('div');
-    row.className = 'row';
+    row.className = 'setting-row';
+    const head = document.createElement('div');
+    head.className = 'setting-label';
     const label = document.createElement('label');
     label.textContent = s.name;
     label.title = s.env;
-    label.style.minWidth = '200px';
+    label.htmlFor = 'setting-' + s.name;
     const tip = document.createElement('span');
     tip.className = 'tip';
     tip.tabIndex = 0;
     setTip(tip, settingTip(s));
     tip.textContent = '\u24D8';
+    head.appendChild(label);
+    head.appendChild(tip);
     let input;
     if (s.kind === 'bool') {
       input = document.createElement('input');
@@ -1728,21 +1742,21 @@ function renderSettings(list) {
     } else if (s.kind === 'string') {
       input = document.createElement('input');
       input.type = 'text';
-      input.style.minWidth = '280px';
       input.value = s.value == null ? '' : String(s.value);
     } else {
       input = document.createElement('input');
       input.type = 'number';
       if (s.min != null) input.min = String(s.min);
       if (s.max != null) input.max = String(s.max);
-      input.style.maxWidth = '140px';
       input.value = s.value == null ? '' : String(s.value);
     }
     input.id = 'setting-' + s.name;
     input.disabled = !!s.pinned || s.settable === false;
-    row.appendChild(label);
-    row.appendChild(tip);
-    row.appendChild(input);
+    const cell = document.createElement('div');
+    cell.className = 'setting-cell';
+    cell.appendChild(input);
+    row.appendChild(head);
+    row.appendChild(cell);
     if (!input.disabled) {
       const save = document.createElement('button');
       save.type = 'button'; save.className = 'ghost'; save.textContent = 'Save';
@@ -1756,7 +1770,6 @@ function renderSettings(list) {
     }
     const note = document.createElement('span');
     note.className = 'note';
-    note.style.margin = '0';
     note.textContent = settingNote(s);
     row.appendChild(note);
     box.appendChild(row);
