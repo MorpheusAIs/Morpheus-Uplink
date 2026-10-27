@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// Leases, holders, release and the idle sweep (long-job design S5). Every state change below runs under p.mu, the same
-// lock that hands a pooled session out, so a lease can never land on a
-// session that is retired or closing:
+// Leases, holders, release and the idle sweep (long-job design S5). Every
+// state change below runs under p.mu, the same lock that hands a pooled
+// session out, so a lease can never land on a session that is retired or
+// closing:
 //
 //	OPEN --request(k)--> inflight++, holders[k]=now   (same lock as hand-out)
 //	     --end/panic/cancel--> inflight--              (Lease.Done, deferred)
