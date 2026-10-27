@@ -1859,7 +1859,7 @@ function useDefaultSettings() {
 async function restartUplink() {
   const msg = document.getElementById('settingsMsg');
   const unsaved = settingsChanges(settingsLast).length;
-  const q = 'Restart Uplink now? Calls in progress finish first, then Uplink starts again in a few seconds and you sign in again. The router is not restarted.' +
+  const q = 'Restart Uplink now? Calls in progress get up to 30 s to finish, then Uplink starts again in a few seconds and you sign in again. The router is not restarted.' +
     (unsaved ? ' Unsaved changes on this page are lost.' : '');
   if (!confirm(q)) return;
   const res = await stepUpFetch('/admin/restart', { method: 'POST' });

@@ -172,8 +172,8 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   (and 2FA code) again, like key export.
 - **Restart Uplink** restarts the Uplink process (not the router) so
   those settings take effect. It asks to confirm and, like those saves,
-  for the password again; calls in progress finish first, and you sign
-  in again once Uplink is back.
+  for the password again; calls in progress get up to 30 s to finish,
+  and you sign in again once Uplink is back.
 - A value set in `.env` wins and is read-only, with a note to remove it
   from `.env` to manage it here. Router settings, `MASTER_KEY_ADMIN`,
   `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are set in

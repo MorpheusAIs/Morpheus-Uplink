@@ -771,8 +771,11 @@ enrolment gate applies as on other admin routes.
   environment), so the container keeps running and the proxy-router is
   not restarted. Open sessions are not closed: the boot reconcile adopts
   them. Admin sessions are held in memory, so the console signs in again.
-  Audited as `uplink_restart`. If the new start fails, Uplink exits
-  non-zero and the container's restart policy starts it again.
+  Audited as `uplink_restart`. A SIGTERM or SIGINT during the drain
+  cancels the restart: Uplink finishes the drain, writes pending audit
+  summaries and shuts down as usual (exit 0). If the new start fails,
+  Uplink writes pending audit summaries, exits non-zero once, and the
+  container's restart policy starts it again.
 - *Secrets* (wallet key, ETH node URL, router cookie, admin password, API
   key seed, master key) are `.env` only: they never appear in the tab, the
   API answers or the settings file, and naming one is `400`.

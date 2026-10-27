@@ -213,14 +213,17 @@ func main() {
 	reconcileCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = httpServer.Shutdown(ctx)
-	log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
-	if restarting {
-		srv.FlushAudit()
-		err := restartSelf()
-		// Only reached when the new process could not start: exit non-zero
-		// so the container's restart policy starts Uplink again.
-		log.Fatalf("restart: %v", err)
+	// The drain runs once. After a restart request the audit is flushed,
+	// then either this binary starts again in place, or (a SIGTERM or
+	// SIGINT arrived during the drain) Uplink takes the normal shutdown
+	// path below and exits 0. A failed re-exec exits 1 once, so the
+	// container's restart policy starts Uplink again.
+	code := finishStop(restarting, stop, func() {
+		_ = httpServer.Shutdown(ctx)
+		log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
+	}, srv.FlushAudit, restartSelf)
+	if code != 0 {
+		os.Exit(code)
 	}
 	if cfg.CloseSessionsOnExit {
 		// Finish inside the 45 s stop grace: 40 s from SIGTERM in total,

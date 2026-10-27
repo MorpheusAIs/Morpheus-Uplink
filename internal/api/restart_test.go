@@ -11,6 +11,7 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
 	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
+	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
 // restartEnv is a console server whose router and pool point at a fake
@@ -125,6 +126,32 @@ func TestRestartStepUpAndNoHook(t *testing.T) {
 	}
 	if n := hookCalls(called, 100*time.Millisecond); n != 1 {
 		t.Fatalf("hook calls %d", n)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("router called %d time(s)", hits.Load())
+	}
+}
+
+// With 2FA switched on but not enrolled, the console gate refuses the
+// restart like any other admin change: no restart, no audit line, no
+// router call.
+func TestRestartRefusedUntil2FAEnrolled(t *testing.T) {
+	e, hits, called := restartEnv(t)
+	if err := e.srv.store.UpdateAuthState(func(a *store.AuthState) error {
+		a.TwoFactorOn, a.Enrolled = true, false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := e.do(t, nil, "POST", "/admin/restart", "", nil)
+	if code != http.StatusForbidden || !strings.Contains(body, "2fa enrollment required") {
+		t.Fatalf("2FA not enrolled: %d %s", code, body)
+	}
+	if n := hookCalls(called, 50*time.Millisecond); n != 0 {
+		t.Fatalf("restart ran %d time(s) without 2FA enrolment", n)
+	}
+	if len(e.audits("uplink_restart")) != 0 {
+		t.Fatal("refused restart audited as done")
 	}
 	if hits.Load() != 0 {
 		t.Fatalf("router called %d time(s)", hits.Load())

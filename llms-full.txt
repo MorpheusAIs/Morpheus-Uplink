@@ -1009,8 +1009,8 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   (and 2FA code) again, like key export.
 - **Restart Uplink** restarts the Uplink process (not the router) so
   those settings take effect. It asks to confirm and, like those saves,
-  for the password again; calls in progress finish first, and you sign
-  in again once Uplink is back.
+  for the password again; calls in progress get up to 30 s to finish,
+  and you sign in again once Uplink is back.
 - A value set in `.env` wins and is read-only, with a note to remove it
   from `.env` to manage it here. Router settings, `MASTER_KEY_ADMIN`,
   `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are set in
@@ -2042,8 +2042,11 @@ enrolment gate applies as on other admin routes.
   environment), so the container keeps running and the proxy-router is
   not restarted. Open sessions are not closed: the boot reconcile adopts
   them. Admin sessions are held in memory, so the console signs in again.
-  Audited as `uplink_restart`. If the new start fails, Uplink exits
-  non-zero and the container's restart policy starts it again.
+  Audited as `uplink_restart`. A SIGTERM or SIGINT during the drain
+  cancels the restart: Uplink finishes the drain, writes pending audit
+  summaries and shuts down as usual (exit 0). If the new start fails,
+  Uplink writes pending audit summaries, exits non-zero once, and the
+  container's restart policy starts it again.
 - *Secrets* (wallet key, ETH node URL, router cookie, admin password, API
   key seed, master key) are `.env` only: they never appear in the tab, the
   API answers or the settings file, and naming one is `400`.
