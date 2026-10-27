@@ -74,8 +74,8 @@ jobs:
     name: Vet & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
       - name: go mod tidy check
@@ -89,7 +89,7 @@ jobs:
       - run: go test ./...
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           set +e
           out=$(govulncheck ./... 2>&1)
           code=$?
@@ -194,9 +194,9 @@ jobs:
     needs: [test]
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build image (no registry push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: false
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build image (no registry push)
         run: docker build -t uplink:e2e --build-arg VERSION=e2e .
       - name: SecretVM stack with a stateful mock router (session logic)
@@ -234,7 +234,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build image (no registry push)
         run: docker build -t uplink:e2e --build-arg VERSION=e2e .
       - name: Real router + Uplink (throwaway key, no secrets)
@@ -253,7 +253,7 @@ jobs:
       vfull: ${{ steps.gen.outputs.vfull }}
       is_release: ${{ steps.gen.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -328,7 +328,7 @@ jobs:
       VTAG: ${{ needs.generate-tag.outputs.tag_name }}
       IS_RELEASE: ${{ needs.generate-tag.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -357,7 +357,7 @@ jobs:
           bash scripts/deploy-assets.sh check "${IMAGE_NAME}" "${PLACEHOLDER}" "$PRE"
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
