@@ -586,13 +586,16 @@ eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['exclusionsWarni
 if (exclusionsWarning({}) !== '' || exclusionsWarning({ exclusionsUnresolved: 0 }) !== '') fail('no warning without refusals');
 const w = exclusionsWarning({ exclusionsUnresolved: 2 });
 if (!w.includes('2 models') || !w.includes('UPLINK_PROVIDER_EXCLUDE') || /0x/.test(w)) fail('warning text: ' + w);
+const wc = exclusionsWarning({ exclusionsUnresolved: 64, exclusionsUnresolvedCapped: true });
+if (!wc.includes('at least 64 models')) fail('capped warning text: ' + wc);
+if (exclusionsWarning({ exclusionsUnresolved: 3, exclusionsUnresolvedCapped: 'true' }).includes('at least')) fail('capped flag must be a real boolean');
 renderExclusionsWarn({ exclusionsUnresolved: 1 });
 if (el.classList._h || !el.textContent.includes('1 model')) fail('exclusions warning not shown');
 renderExclusionsWarn({ exclusionsUnresolved: 0 });
 if (!el.classList._h || el.textContent) fail('exclusions warning not cleared');
 if (html.indexOf('id="exclusionsWarn"') < 0 || html.indexOf('id="exclusionsWarn"') > html.indexOf('id="connectClient"')) fail('exclusionsWarn must be on the Status overview');
 if (!/renderExclusionsWarn\(st\);/.test(src)) fail('status refresh must render the exclusions warning');
-console.log('OK: Status warns while name-keyed provider exclusions refuse opens');
+console.log('OK: Status warns while name-keyed provider exclusions refuse opens (capped count shown as at least N)');
 NODE
 
 # API Keys has no reveal button; copy and Export all fetch the full keys.

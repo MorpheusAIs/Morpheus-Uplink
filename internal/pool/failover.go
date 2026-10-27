@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -112,43 +113,75 @@ func (p *Pool) SetProviderExclude(m map[string][]string, namer func(string) stri
 	}
 	p.fmu.Lock()
 	p.exclude, p.namer, p.excludeByName = ex, namer, nameKeyed
-	p.unresolvedRefused = nil
+	p.unresolvedRefused, p.unresolvedCapped = nil, false
+	p.fmu.Unlock()
+}
+
+// MaxUnresolvedRefusals caps the refused-model record behind the console
+// warning; ids past the cap only set the capped flag.
+const MaxUnresolvedRefusals = 64
+
+// reRefusedModelID is the model id format the record accepts (lowercase
+// 0x + 64 hex); anything else a client sends is never recorded.
+var reRefusedModelID = regexp.MustCompile(`^0x[0-9a-f]{64}$`)
+
+// SetCatalogLoaded wires a check (no network) for whether the model
+// catalog has any data. While it has none, refusals for unresolved
+// name-keyed exclusions are recorded for the console; once it has data,
+// an id without a name is one the catalog does not list (still refused)
+// and is not a feed problem, so the record is dropped.
+func (p *Pool) SetCatalogLoaded(loaded func() bool) {
+	p.fmu.Lock()
+	p.catalogLoaded = loaded
 	p.fmu.Unlock()
 }
 
 // noteUnresolvedRefusal records that an open for the model was refused
-// because its name-keyed exclusions could not be resolved.
+// because its name-keyed exclusions could not be resolved. Only valid ids
+// are recorded, only while the catalog has no data, and at most
+// MaxUnresolvedRefusals of them.
 func (p *Pool) noteUnresolvedRefusal(modelID string) {
+	id := normModel(modelID)
+	if !reRefusedModelID.MatchString(id) {
+		return
+	}
 	p.fmu.Lock()
+	loaded := p.catalogLoaded
+	p.fmu.Unlock()
+	if loaded != nil && loaded() {
+		return
+	}
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	if p.unresolvedRefused[id] {
+		return
+	}
+	if len(p.unresolvedRefused) >= MaxUnresolvedRefusals {
+		p.unresolvedCapped = true
+		return
+	}
 	if p.unresolvedRefused == nil {
 		p.unresolvedRefused = map[string]bool{}
 	}
-	p.unresolvedRefused[normModel(modelID)] = true
-	p.fmu.Unlock()
+	p.unresolvedRefused[id] = true
 }
 
-// UnresolvedExclusionRefusals is the number of models whose opens are
-// being refused because name-keyed exclusions cannot be resolved for
-// them; models whose name has since resolved are dropped. The console
-// shows a warning while it is non-zero.
-func (p *Pool) UnresolvedExclusionRefusals() int {
+// UnresolvedExclusionRefusals is the number of models whose opens were
+// refused because name-keyed exclusions could not be resolved while the
+// catalog had no data, and whether the record hit its cap. It makes no
+// catalog lookups: once the catalog has data the record is cleared.
+func (p *Pool) UnresolvedExclusionRefusals() (int, bool) {
 	p.fmu.Lock()
-	ids := make([]string, 0, len(p.unresolvedRefused))
-	for id := range p.unresolvedRefused {
-		ids = append(ids, id)
-	}
+	loaded := p.catalogLoaded
 	p.fmu.Unlock()
-	n := 0
-	for _, id := range ids {
-		if p.exclusionsUnresolved(id) {
-			n++
-			continue
-		}
-		p.fmu.Lock()
-		delete(p.unresolvedRefused, id)
-		p.fmu.Unlock()
+	isLoaded := loaded != nil && loaded()
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	if isLoaded || !p.excludeByName {
+		p.unresolvedRefused, p.unresolvedCapped = nil, false
+		return 0, false
 	}
-	return n
+	return len(p.unresolvedRefused), p.unresolvedCapped
 }
 
 // exclusionsUnresolved is true when some exclusions are keyed by catalog

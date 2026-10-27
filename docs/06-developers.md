@@ -588,7 +588,14 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   down at boot and the client sends the `0x` id), opens for that model are
   refused with `503` `no_eligible_provider`, failover keeps the session,
   and on-chain sessions are not adopted, until the name resolves; the
-  console Status page shows a warning while that refusal lasts. Entries
+  console Status page shows a warning while that refusal lasts. The
+  warning counts well-formed model ids (`0x` + 64 hex) refused while the
+  catalog has never loaded, up to 64 ("at least 64" past that); reading it
+  fetches nothing, and it clears once the catalog loads. An id the loaded
+  catalog does not list is still refused but not counted. After a failed
+  catalog fetch no new fetch starts for 10 seconds (stale data is served,
+  or the lookup fails while nothing has loaded), and fetches never hold the
+  catalog lock. Entries
   keyed by model id never need the catalog.
   Bad entries are logged by position and ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,

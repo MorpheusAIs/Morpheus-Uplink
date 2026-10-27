@@ -91,20 +91,50 @@ type Catalog struct {
 	bidsURL string // GATEWAY_BIDS_URL companion feed; not merged into LowestBid
 	client  *http.Client
 
+	// fetchMu serializes feed fetches; it is never held with mu, and mu is
+	// never held during a fetch.
+	fetchMu sync.Mutex
+
 	mu        sync.Mutex
 	models    []Model
 	byName    map[string]string // lowercase name -> id
 	byID      map[string]string // lowercase id -> display name
 	fetchedAt time.Time
 	ttl       time.Duration
+	// After a failed fetch no new fetch starts for retryAfter: callers get
+	// the stale data, or lastErr while nothing has ever loaded. This keeps
+	// repeated lookups (status polls, unknown ids) from becoming a fetch
+	// per call while the feed is down.
+	retryAfter time.Duration
+	lastErr    error
+	lastErrAt  time.Time
 }
+
+// DefaultRetryAfter is the pause after a failed catalog fetch.
+const DefaultRetryAfter = 10 * time.Second
 
 func New(url string) *Catalog {
 	return &Catalog{
-		url:    url,
-		client: &http.Client{Timeout: 15 * time.Second},
-		ttl:    5 * time.Minute,
+		url:        url,
+		client:     &http.Client{Timeout: 15 * time.Second},
+		ttl:        5 * time.Minute,
+		retryAfter: DefaultRetryAfter,
 	}
+}
+
+// SetRetryAfter sets the pause after a failed fetch (0: none).
+func (c *Catalog) SetRetryAfter(d time.Duration) {
+	c.mu.Lock()
+	c.retryAfter = d
+	c.mu.Unlock()
+}
+
+// Loaded reports whether the catalog has data (possibly stale). It never
+// fetches.
+func (c *Catalog) Loaded() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.models != nil
 }
 
 // WithBidsURL records the companion gateway_bids feed URL (GATEWAY_BIDS_URL).
@@ -117,37 +147,76 @@ func (c *Catalog) WithBidsURL(bidsURL string) *Catalog {
 // GatewayBidsURL returns the companion bids feed URL, if set.
 func (c *Catalog) GatewayBidsURL() string { return c.bidsURL }
 
-func (c *Catalog) refresh() error {
+// fetch reads and indexes the feed. It touches no Catalog state, so it
+// runs without mu.
+func (c *Catalog) fetch() ([]Model, map[string]string, map[string]string, error) {
 	resp, err := c.client.Get(c.url)
 	if err != nil {
-		return fmt.Errorf("fetch model catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("fetch model catalog: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch model catalog: status %d", resp.StatusCode)
+		return nil, nil, nil, fmt.Errorf("fetch model catalog: status %d", resp.StatusCode)
 	}
 	var file activeModelsFile
 	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
-		return fmt.Errorf("parse model catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("parse model catalog: %w", err)
 	}
 	byName, byID := indexModels(file.Models)
-	c.models = file.Models
-	c.byName = byName
-	c.byID = byID
-	c.fetchedAt = time.Now()
-	return nil
+	return file.Models, byName, byID, nil
 }
 
+// state reports, under mu, whether the data is fresh and, when a fetch
+// should not start now (pause after a failure), the error to return.
+func (c *Catalog) state() (fresh bool, wait bool, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.models != nil && time.Since(c.fetchedAt) < c.ttl {
+		return true, false, nil
+	}
+	if c.lastErr != nil && time.Since(c.lastErrAt) < c.retryAfter {
+		if c.models != nil {
+			return false, true, nil // serve stale
+		}
+		return false, true, c.lastErr
+	}
+	return false, false, nil
+}
+
+// ensureFresh refreshes stale data. It must be called WITHOUT mu: the
+// network fetch never runs under mu. Fetches are serialized (fetchMu);
+// while one runs, callers with stale data get it at once and callers with
+// no data wait for its result instead of starting their own.
 func (c *Catalog) ensureFresh() error {
-	if time.Since(c.fetchedAt) < c.ttl && c.models != nil {
-		return nil
+	if fresh, wait, err := c.state(); fresh || wait {
+		return err
 	}
-	err := c.refresh()
-	// Serve stale data over failing hard if we have any.
-	if err != nil && c.models != nil {
-		return nil
+	if !c.fetchMu.TryLock() {
+		if c.Loaded() {
+			return nil // a fetch is running; serve stale
+		}
+		c.fetchMu.Lock()
 	}
-	return err
+	defer c.fetchMu.Unlock()
+	// Another caller may have fetched (or failed) while we waited.
+	if fresh, wait, err := c.state(); fresh || wait {
+		return err
+	}
+	models, byName, byID, err := c.fetch()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		c.lastErr, c.lastErrAt = err, time.Now()
+		// Serve stale data over failing hard if we have any.
+		if c.models != nil {
+			return nil
+		}
+		return err
+	}
+	c.models, c.byName, c.byID = models, byName, byID
+	c.fetchedAt = time.Now()
+	c.lastErr = nil
+	return nil
 }
 
 // Resolve maps a model name (or an already-resolved 0x id) to a blockchain
@@ -158,11 +227,11 @@ func (c *Catalog) Resolve(nameOrID string) (string, error) {
 	if strings.HasPrefix(nameOrID, "0x") {
 		return nameOrID, nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.ensureFresh(); err != nil {
 		return "", err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if id, ok := c.byName[strings.ToLower(nameOrID)]; ok {
 		return id, nil
 	}
@@ -170,11 +239,11 @@ func (c *Catalog) Resolve(nameOrID string) (string, error) {
 }
 
 func (c *Catalog) List() ([]Model, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.ensureFresh(); err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := make([]Model, len(c.models))
 	copy(out, c.models)
 	return out, nil
@@ -183,11 +252,11 @@ func (c *Catalog) List() ([]Model, error) {
 // NameByID returns the catalog display name for a blockchain model id.
 // Empty string if unknown.
 func (c *Catalog) NameByID(id string) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.ensureFresh(); err != nil {
 		return ""
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.byID[strings.ToLower(id)]
 }
 

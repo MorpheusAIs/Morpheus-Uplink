@@ -52,6 +52,11 @@ type Server struct {
 }
 
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
+	if pl != nil && cat != nil {
+		// The refused-model record behind the console warning checks the
+		// catalog without fetching.
+		pl.SetCatalogLoaded(cat.Loaded)
+	}
 	lo, err := adminauth.NewLockout(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		warnf("adminauth: trusted proxy CIDR: %v (using RemoteAddr only)", err)

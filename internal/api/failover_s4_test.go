@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/config"
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
@@ -448,21 +449,9 @@ func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
 	t.Cleanup(feed.Close)
 	m := newFakeMarket(t, a40, b40)
 	e := newFailoverEnv(t, m, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
+	e.srv.catalog.SetRetryAfter(0) // the feed comes back within the test
 	e.srv.pool.SetProviderExclude(map[string][]string{"test-model": {a40}}, e.srv.catalog.NameByID)
-	chatID := func() (int, string) {
-		t.Helper()
-		body := `{"model":"` + testModelID + `","messages":[{"role":"user","content":"hi"}]}`
-		req, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/v1/chat/completions", strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+e.key)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(raw)
-	}
+	chatID := func() (int, string) { t.Helper(); return chatModel(t, e, testModelID) }
 	code, body := chatID()
 	if code != 503 || !strings.Contains(body, "no_eligible_provider") || strings.Contains(body, a40) || strings.Contains(body, b40) {
 		t.Fatalf("feed down: %d %s", code, body)
@@ -471,18 +460,7 @@ func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
 		t.Fatalf("feed down: opened %+v", opens)
 	}
 	// The console status reports the refusal (a count, no ids) while it lasts.
-	unresolved := func() string {
-		t.Helper()
-		code, body := e.admin(t, "GET", "/admin/status", "")
-		if code != 200 {
-			t.Fatalf("status %d", code)
-		}
-		var st map[string]any
-		if err := json.Unmarshal([]byte(body), &st); err != nil {
-			t.Fatal(err)
-		}
-		return fmt.Sprint(st["exclusionsUnresolved"])
-	}
+	unresolved := func() string { t.Helper(); n, _ := statusRefusals(t, e); return n }
 	if n := unresolved(); n != "1" {
 		t.Fatalf("status exclusionsUnresolved=%s while refusing, want 1", n)
 	}
@@ -574,5 +552,79 @@ func TestS4FailoverOmitProviderUnknownRelaysOriginal(t *testing.T) {
 	}
 	if a := e.failoverAudits(); len(a) != 1 || a[0] != "reopen_failed" {
 		t.Errorf("audits %v", a)
+	}
+}
+
+// chatModel sends a chat completion for the model string as given.
+func chatModel(t *testing.T, e *failoverEnv, model string) (int, string) {
+	t.Helper()
+	body := `{"model":"` + model + `","messages":[{"role":"user","content":"hi"}]}`
+	req, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+e.key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
+}
+
+// statusRefusals reads exclusionsUnresolved and its capped flag from the
+// console status.
+func statusRefusals(t *testing.T, e *failoverEnv) (string, string) {
+	t.Helper()
+	code, body := e.admin(t, "GET", "/admin/status", "")
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	var st map[string]any
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprint(st["exclusionsUnresolved"]), fmt.Sprint(st["exclusionsUnresolvedCapped"])
+}
+
+// Security gate SHOULD-2: one client key sending many distinct model ids
+// while the feed is down at boot. Every request is still refused with 503
+// and no ids; the status count stops at the cap with the capped flag set;
+// ill-formed ids are not counted; and neither the requests nor the status
+// polls turn into a feed fetch each (the stub feed counts fetches).
+func TestS4RefusalRecordCappedNoFetchStorm(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	var fetches atomic.Int32
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	t.Cleanup(feed.Close)
+	m := newFakeMarket(t, a40, b40)
+	e := newFailoverEnv(t, m, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
+	e.srv.pool.SetProviderExclude(map[string][]string{"test-model": {a40}}, e.srv.catalog.NameByID)
+	start := fetches.Load()
+
+	for i := 0; i < pool.MaxUnresolvedRefusals+20; i++ {
+		id := fmt.Sprintf("0x%064x", i+1)
+		if code, body := chatModel(t, e, id); code != 503 || !strings.Contains(body, "no_eligible_provider") || strings.Contains(body, "0x") {
+			t.Fatalf("id %d: %d %s", i, code, body)
+		}
+	}
+	for _, bad := range []string{"0x12", "0x" + strings.Repeat("z", 64), "0x" + strings.Repeat("a", 70)} {
+		if code, _ := chatModel(t, e, bad); code == 200 {
+			t.Fatalf("ill-formed id %q served", bad)
+		}
+	}
+	for i := 0; i < 5; i++ { // the Status tab polls
+		n, capped := statusRefusals(t, e)
+		if n != fmt.Sprint(pool.MaxUnresolvedRefusals) || capped != "true" {
+			t.Fatalf("status poll %d: exclusionsUnresolved=%s capped=%s", i, n, capped)
+		}
+	}
+	if got := fetches.Load() - start; got > 1 {
+		t.Fatalf("feed fetched %d times for %d requests and 5 status polls, want at most 1", got, pool.MaxUnresolvedRefusals+23)
+	}
+	if opens, _ := m.snapshot(); len(opens) != 0 {
+		t.Fatalf("opened %d sessions", len(opens))
 	}
 }

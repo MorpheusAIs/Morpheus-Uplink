@@ -55,6 +55,8 @@ type Pool struct {
 	// unresolvedRefused: models whose opens were refused because their
 	// name-keyed exclusions could not be resolved (for the console).
 	unresolvedRefused map[string]bool
+	unresolvedCapped  bool        // an id was dropped at MaxUnresolvedRefusals
+	catalogLoaded     func() bool // no network; see SetCatalogLoaded
 
 	// Leases and long-session limits (lease.go), under mu.
 	sess            map[string]*sessState // session id -> lease state
