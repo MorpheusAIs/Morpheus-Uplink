@@ -646,8 +646,9 @@ timers and session handling. Source: `internal/api/longjob.go`,
   `X-Uplink-Timeouts: idle=<s>;total=<s>`. Without them responses are
   unchanged. Other `X-Uplink-` headers are not read.
 - *Session reuse.* A pooled session is reused until it expires (less the
-  90 s buffer) or the idle sweep closes it; the next call then opens a new
-  one at the requested or default length, capped at the max.
+  90 s buffer), the idle sweep closes it, a release ends it, or a failover
+  retires it; the next call then opens a new one at the requested or
+  default length, capped at the max.
 - *Leases.* Every call holds a lease on its session; a session is closed
   (release, idle sweep, failover) only when no call is in flight.
   A failover on a session another call is still using retires it and

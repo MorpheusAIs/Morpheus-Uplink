@@ -1151,8 +1151,8 @@ curl -sS https://YOUR_HOST/v1/chat/completions \
   Whole numbers only, sent once; a bad value is a `400` naming the header.
   Each call's total timer is 600 s.
 - The response then carries `X-Uplink-Timeouts: idle=…;total=…`.
-- A session is used until it expires or is closed for being idle; the
-  next call opens a new one.
+- A session is used until it expires, is closed for being idle, is
+  released, or is replaced in a failover; the next call opens a new one.
 - A timeout before any answer is a `504` with `"type":"timeout"`. In a
   stream it ends with an error event, `finish_reason:
   "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.
@@ -1917,8 +1917,9 @@ timers and session handling. Source: `internal/api/longjob.go`,
   `X-Uplink-Timeouts: idle=<s>;total=<s>`. Without them responses are
   unchanged. Other `X-Uplink-` headers are not read.
 - *Session reuse.* A pooled session is reused until it expires (less the
-  90 s buffer) or the idle sweep closes it; the next call then opens a new
-  one at the requested or default length, capped at the max.
+  90 s buffer), the idle sweep closes it, a release ends it, or a failover
+  retires it; the next call then opens a new one at the requested or
+  default length, capped at the max.
 - *Leases.* Every call holds a lease on its session; a session is closed
   (release, idle sweep, failover) only when no call is in flight.
   A failover on a session another call is still using retires it and
