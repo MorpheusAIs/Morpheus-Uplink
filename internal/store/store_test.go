@@ -303,7 +303,7 @@ func TestSymlinkedStateFileRefused(t *testing.T) {
 
 // Conformance NIT-3 / security gate: orphan temp files from a crash are
 // removed at boot — only regular files matching the save pattern directly
-// in DATA_DIR. A matching symlink, a matching directory, a non-matching
+// in DATA_DIR, with an mtime at least orphanTempMinAge old. A matching symlink, a matching directory, a non-matching
 // file and anything in a subdirectory are left alone.
 func TestOpenRemovesOnlyOrphanTemps(t *testing.T) {
 	dir := t.TempDir()
@@ -316,6 +316,31 @@ func TestOpenRemovesOnlyOrphanTemps(t *testing.T) {
 	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	old := time.Now().Add(-orphanTempMinAge - time.Minute)
+	if err := os.Chtimes(orphan, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh temp file may be a live save (another process sharing
+	// DATA_DIR): left alone, as is one with a future mtime.
+	fresh := filepath.Join(dir, "uplink-state.json.424242.tmp")
+	future := filepath.Join(dir, "uplink-state.json.515151.tmp")
+	for _, f := range []string{fresh, future} {
+		if err := os.WriteFile(f, []byte("in flight"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	almost := time.Now().Add(-orphanTempMinAge + time.Minute)
+	if err := os.Chtimes(fresh, almost, almost); err != nil {
+		t.Fatal(err)
+	}
+	ahead := time.Now().Add(time.Hour)
+	if err := os.Chtimes(future, ahead, ahead); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chtimes(victim, old, old); err != nil { // an old target
+		t.Fatal(err)
+	}
 	link := filepath.Join(dir, "uplink-state.json.777.tmp")
 	if err := os.Symlink(victim, link); err != nil {
 		t.Fatal(err)
@@ -326,15 +351,22 @@ func TestOpenRemovesOnlyOrphanTemps(t *testing.T) {
 	}
 	nested := filepath.Join(subdir, "uplink-state.json.66.tmp")
 	keep := []string{
+		fresh, future,
 		filepath.Join(dir, "uplink-state.json.abc.tmp"),
 		filepath.Join(dir, "uplink-state.json.tmp"),
 		filepath.Join(dir, "other.123.tmp"),
 		nested,
 	}
-	for _, k := range keep {
+	for _, k := range keep[2:] {
 		if err := os.WriteFile(k, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chtimes(k, old, old); err != nil { // old, so only name/type keeps them
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(subdir, old, old); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := Open(dir); err != nil {
 		t.Fatal(err)

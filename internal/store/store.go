@@ -147,11 +147,23 @@ func (s *Store) save() error {
 // "uplink-state.json.*.tmp": the * is decimal digits).
 var orphanTemp = regexp.MustCompile(`^uplink-state\.json\.[0-9]+\.tmp$`)
 
+// orphanTempMinAge: a temp file is an orphan only when its mtime is at
+// least this old. A save writes, syncs and renames its temp file within
+// moments, so a younger file may belong to a live save (another Uplink
+// process sharing DATA_DIR, or this one) and is left alone.
+const orphanTempMinAge = 10 * time.Minute
+
 // removeOrphanTemps deletes temp files a crash between CreateTemp and
 // rename left behind: only regular files (Lstat; symlinks and anything
 // else are left alone) whose name matches orphanTemp, directly inside
-// dataDir. Nothing is followed and nothing outside dataDir is touched.
+// dataDir, and whose mtime is at least orphanTempMinAge old (a future
+// mtime counts as fresh). Nothing is followed and nothing outside dataDir
+// is touched.
 func removeOrphanTemps(dataDir string) {
+	removeOrphanTempsAt(dataDir, time.Now())
+}
+
+func removeOrphanTempsAt(dataDir string, now time.Time) {
 	ents, err := os.ReadDir(dataDir)
 	if err != nil {
 		return
@@ -162,7 +174,7 @@ func removeOrphanTemps(dataDir string) {
 		}
 		p := filepath.Join(dataDir, e.Name())
 		fi, err := os.Lstat(p)
-		if err != nil || !fi.Mode().IsRegular() {
+		if err != nil || !fi.Mode().IsRegular() || now.Sub(fi.ModTime()) < orphanTempMinAge {
 			continue
 		}
 		_ = os.Remove(p)

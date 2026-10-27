@@ -1935,7 +1935,7 @@ cross-site too); the 2FA enrolment gate applies as on other admin routes.
   (out of range) is logged by name and written to the ops audit stream as
   `setting_ignored`. Settings are saved beside the 2FA state in
   `uplink-state.json` (a fresh temp file in the same directory, fsync,
-  rename, directory fsync; mode 0640; a symlinked state file is refused; at boot, temp files a crash left behind, regular files named `uplink-state.json.<digits>.tmp` directly in `DATA_DIR`, are removed, and symlinks or anything else are left alone) and apply at once:
+  rename, directory fsync; mode 0640; a symlinked state file is refused; at boot, temp files a crash left behind, regular files named `uplink-state.json.<digits>.tmp` directly in `DATA_DIR` whose mtime is at least 10 minutes old (a younger one may be a live save by another process sharing `DATA_DIR`), are removed, and symlinks or anything else are left alone) and apply at once:
   new sessions, the next call's idle timer, the next idle sweep and the
   log level, no restart.
 - *Audit.* Each change is a `setting_change` event (`name old→new`) in the
