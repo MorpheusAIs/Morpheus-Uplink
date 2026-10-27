@@ -552,7 +552,7 @@ Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-
 
 **Pin note:** tag `v7.17.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
-**CA bundle note:** the proxy-router `v7.17.0` image ships a refreshed CA bundle that removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS after the upgrade; all default endpoints are unaffected.
+**CA bundle note:** the proxy-router `v7.17.0` image ships a refreshed CA bundle that removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS after the upgrade. The default endpoints in the compose files were checked against the new bundle on 2026-10-27.
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
