@@ -65,8 +65,8 @@ with `O_NOFOLLOW`, mode 0600:
 
 | File | Holds |
 |---|---|
-| `audit-security.jsonl` | Successful admin and credential events: `login`, `step_up`, `key_reveal`, `key_create` / `key_import` / `key_revoke`, 2FA changes, `setting_change`, a successful `session_open_long`, `pool_close` / `pool_close_all`, `admin_session_ip_change`, `admin_key_use`, `balance_drop` |
-| `audit.jsonl` | Failures and agent or system events: `admin_bearer_reject`, login and step-up failures, other rejects, `session_release`, a refused `session_open_long`, `provider_failover`, `session_reconcile*` |
+| `audit-security.jsonl` | Successful admin and credential events: `login`, `step_up`, `key_reveal`, `key_create` / `key_import` / `key_revoke`, 2FA changes, `setting_change`, `settings_export` / `settings_import`, `pool_close` / `pool_close_all`, `admin_session_ip_change`, `admin_key_use`, `balance_drop` |
+| `audit.jsonl` | Failures and agent or system events: `admin_bearer_reject`, login and step-up failures, other rejects, `session_release`, `setting_ignored`, `provider_failover`, `session_reconcile*` |
 
 - **Aggregation**: unauthenticated failures (`login`, `login_lockout`,
   `admin_bearer_reject`) are written at most once per minute per (client
@@ -331,11 +331,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `UPLINK_FORWARD_IDLE_SECONDS` | `180` | Default idle timer per inference call (no bytes from upstream), 30…600 |
 | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | `300` | A session with nothing in flight and no use for this long is closed early, 60…3600 |
 | `UPLINK_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error`; also a console setting ([Operator settings](#operator-settings)). Runtime warnings are written at `warn`, so at `error` they are dropped (warnings about the configuration itself still print at boot, before the level applies); audit lines on stdout are always written (pinned at `info`) |
-| `UPLINK_INFLIGHT_MAX` | `32` | In-flight inference requests across all keys, 1…1024 (4 per key, fixed) |
-| `UPLINK_LONG_PER_KEY_MODEL` | `1` | Long sessions one generated key may hold per model, 0…16 |
-| `UPLINK_LONG_PER_KEY` | `2` | Long sessions one generated key may hold in total, 0…64 |
-| `UPLINK_LONG_SESSIONS_MAX` | `3` | Long sessions open at once across all keys, 0…256 |
-| `UPLINK_OPENS_PER_KEY_MODEL_HOUR` | `2` | Long opens (and reopens for remaining life) per key per model per rolling hour, 0…120 |
+| `UPLINK_SESSION_RELEASE` | `true` | `POST /v1/sessions/release` on (`true`) or off (`false`: `403` `release_disabled`) ([Long jobs](#long-jobs)) |
 | `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
@@ -621,8 +617,6 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   address, the status class (`402`, `429`, `5xx`, `stream_cut` for a bare
   upstream cut, ...), and the outcome:
   `retried_ok`, `retry_failed`, `no_alternate`, `reopen_failed`,
-  `long_session_limit` (a long replacement counts toward the long-session
-  limits like any long open, and was refused),
   `close_failed` (an extra event when the close did not land), or
   `stream_retired`. No request or response bodies, no keys.
 
@@ -663,71 +657,112 @@ timers and session handling. Source: `internal/api/longjob.go`,
   closes it later.
 - *Idle sweep.* Every 30 s, sessions with nothing in flight and unused for
   `UPLINK_SESSION_IDLE_GRACE_SECONDS` are closed so unused stake returns.
-- *Long sessions* (longer than `SESSION_DURATION_SECONDS`) are for
-  generated keys only; the master and prompt keys get `429`
-  `long_session_limit`. Limits: per key per model, per key, across all keys,
-  and opens per key per model per hour (envs above). A release does not
-  refund the hourly count; counters start at zero after a restart, and
-  long sessions adopted at boot count toward the global cap.
-- *In-flight caps.* 4 per key and `UPLINK_INFLIGHT_MAX` overall; over
-  either is `429` `too_many_requests`.
+- *No Uplink limits.* Any key may ask for a session up to
+  `UPLINK_SESSION_DURATION_MAX`, and Uplink caps neither the number of
+  such sessions nor the calls in flight: no inference call gets a `429`
+  from Uplink itself.
+  A `429` from the router or a provider is relayed (and may fail over).
 - *Server deadlines.* `IdleTimeout` 120 s for keep-alive connections; the
   request body must arrive within 60 s; each response write must finish
   within 60 s (reset before every write, so a slow upstream is not cut, a
   client that stops reading is).
-- *`POST /v1/sessions/release`* `{"model":"<name or id>"}` (generated
-  keys only; master/prompt → `403` `shared_key`; body ≤ 1 KiB, unknown
+- *`POST /v1/sessions/release`* `{"model":"<name or id>"}` (API key auth;
+  generated keys only; master/prompt → `403` `shared_key`; with
+  `UPLINK_SESSION_RELEASE=false` (console setting `sessionRelease`) →
+  `403` `release_disabled`; body ≤ 1 KiB, unknown
   fields → `400`; unknown model → `404`). Drops this key's hold on the
   model's session: `{"released":true,"closed":true}` when it was the last
   holder, `{"released":true,"closed":false,"reason":"shared"}` (or
   `in_flight`, or `retry` when the close did not land) and
   `{"released":false,"reason":"not_held"}` otherwise. No ids in any body.
   Audited as `session_release` in the ops stream.
-- *Status.* Each pooled session in `/admin/status` shows `inFlight`,
-  `holderCount`, `holders` (key ids), `openedAt`, `endsAt`, `opener` and
-  `long`.
+- *Status.* Each row of `sessions` in `/admin/status` (the console
+  Sessions table) carries, for a pooled session, `inFlight`,
+  `holderCount`, `holders` (key ids), `openedAt`, `endsAt` and `opener`.
+  There is no separate `poolSessions` list.
 - *Close endpoints.* `POST /admin/pool/close/{id}` and `close-all` answer
   fixed text on failure; the router's error text is logged only.
 
 
 ### Operator settings
 
-Five values can be changed in the console (**Security → Settings**) or
-with `GET` / `POST /admin/settings` (source `internal/api/settings.go`).
-Both need the admin cookie session: any `Authorization` header, the
-master key Bearer with `MASTER_KEY_ADMIN=true` included, is `403`; a
-request from another site is `403` (CSRF check; a `GET` marked
-cross-site too); the 2FA enrolment gate applies as on other admin routes.
+Every operator-tunable, non-secret setting is on the console **Settings**
+tab, backed by one registry (`internal/config/settings_registry.go`; each
+optional feature is tagged with a `Group` so it can be dropped by
+deleting its rows). The tab and `GET` / `POST /admin/settings`, `GET
+/admin/settings/export` and `POST /admin/settings/import` (source
+`internal/api/settings.go`, `internal/api/settings_file.go`) need the
+admin cookie session: any `Authorization` header, the master key Bearer
+with `MASTER_KEY_ADMIN=true` included, is `403`; a request from another
+site is `403` (CSRF check; a `GET` marked cross-site too); the 2FA
+enrolment gate applies as on other admin routes.
 
-| Name | Env | Range | Default |
-|---|---|---|---|
-| `sessionDurationDefault` | `SESSION_DURATION_SECONDS` | 600…86400 | `600` |
-| `sessionDurationMax` | `UPLINK_SESSION_DURATION_MAX` | 600…86400 | `1800` |
-| `sessionIdleGrace` | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | 60…3600 | `300` |
-| `forwardIdle` | `UPLINK_FORWARD_IDLE_SECONDS` | 30…600 | `180` |
-| `logLevel` | `UPLINK_LOG_LEVEL` | `debug` `info` `warn` `error` | `info` |
+| Name | Env | Type | Range / values | Default | Applies | Read by |
+|---|---|---|---|---|---|---|
+| `sessionDurationDefault` | `SESSION_DURATION_SECONDS` | int | 600…86400 | `600` | at once | pool.SetDuration (live) |
+| `sessionDurationMax` | `UPLINK_SESSION_DURATION_MAX` | int | 600…86400 | `1800` | at once | pool.SetDurationMax (live) |
+| `sessionIdleGrace` | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | int | 60…3600 | `300` | at once | idle sweep, read every tick (live) |
+| `forwardIdle` | `UPLINK_FORWARD_IDLE_SECONDS` | int | 30…600 | `180` | at once | inference timers, per request (live) |
+| `logLevel` | `UPLINK_LOG_LEVEL` | enum | `debug` `info` `warn` `error` | `info` | at once | slog.LevelVar (live) |
+| `sessionFailover` | `SESSION_FAILOVER` | bool | `true` `false` | `true` | Uplink restart | api/openai.go (Config.SessionFailover) |
+| `providerCooldown` | `UPLINK_PROVIDER_COOLDOWN_SECONDS` | int | 0…86400 | `600` | Uplink restart | cmd/uplink pool.SetProviderCooldown |
+| `providerExclude` | `UPLINK_PROVIDER_EXCLUDE` | string | text | (empty) | Uplink restart | cmd/uplink pool.SetProviderExclude |
+| `sessionRelease` | `UPLINK_SESSION_RELEASE` | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
+| `auditRetentionDays` | `AUDIT_RETENTION_DAYS` | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
+| `housekeeping` | `HOUSEKEEPING` | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
+| `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | text | `https://active.mor.org/gateway_models.json` | Uplink restart | cmd/uplink catalog.New |
+| `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | text | `https://active.mor.org/gateway_bids.json` | Uplink restart | cmd/uplink catalog.WithBidsURL |
+| `webPublicUrl` | `WEB_PUBLIC_URL` | string | text | (empty) | Uplink restart | api CSRF and settings origin checks (Config.WebPublicURL) |
+| `masterKeyAdmin` | `MASTER_KEY_ADMIN` | bool | `true` `false` | `false` | .env + Uplink restart (read-only) | api requireAdmin (Config.MasterKeyAdmin) |
+| `proxyStoreChatContext` | `PROXY_STORE_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
+| `proxyForwardChatContext` | `PROXY_FORWARD_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
+| `routerLogLevelApp` | `LOG_LEVEL_APP` | enum | `debug` `info` `warn` `error` `dpanic` `panic` `fatal` | `warn` | router .env + router restart (read-only) | proxy-router |
+| `routerLogLevelTcp` | `LOG_LEVEL_TCP` | enum | `debug` `info` `warn` `error` `dpanic` `panic` `fatal` | `warn` | router .env + router restart (read-only) | proxy-router |
+| `routerLogLevelEthRpc` | `LOG_LEVEL_ETH_RPC` | enum | `debug` `info` `warn` `error` `dpanic` `panic` `fatal` | `warn` | router .env + router restart (read-only) | proxy-router |
 
 - *Precedence* is env > saved > default. A setting whose env var holds a
-  valid value is shown as "set by environment (ENV)" and cannot be changed
-  (`409`); remove the env var and restart to manage it in the console.
+  valid value (any value for a text setting) is shown read-only as "set
+  by environment (ENV)" with a note to remove it from `.env`; changing it
+  is `409`.
+- *Controls.* Booleans are toggles, numbers number fields, enums a list,
+  text a text field. Each row shows its default; the tooltip gives the
+  range or values and says when a restart is needed.
+- *Applies.* "at once": new sessions, the next call's timers, the next
+  idle sweep and the log level, no restart. "Uplink restart": saved now,
+  read once at the next start (the row shows the running value until
+  then). Router rows: the router reads them from its own environment
+  (`router_network_env` in the SecretVM compose); Uplink cannot deliver a
+  value, so they are read-only and show the deployed defaults.
+  `MASTER_KEY_ADMIN` is a security switch: read-only, `.env` only.
 - *Saving.* `POST {"name":"forwardIdle","value":240}` or
   `{"name":"forwardIdle","reset":true}` (one JSON object, body ≤ 1 KiB;
-  unknown fields or trailing data → `400`). Values are checked against the ranges above, and the default may
-  not exceed the max (`400`). The max always wins: at boot a default above
-  the max (from env or saved) is clamped down to it with a warning, and
-  every session open is capped at the max. A saved value ignored at boot
-  (out of range) is logged by name and written to the ops audit stream as
-  `setting_ignored`. Settings are saved beside the 2FA state in
+  unknown fields or trailing data → `400`). Values are checked against the
+  ranges above, and the default may not exceed the max (`400`). The max
+  always wins: at boot a default above the max (from env or saved) is
+  clamped down to it with a warning, and every session open is capped at
+  the max. A saved value ignored at boot (invalid) is logged by name and
+  written to the ops audit stream as `setting_ignored`.
+- *Storage.* Settings are saved in `DATA_DIR` beside the 2FA state in
   `uplink-state.json` (a fresh temp file in the same directory, fsync,
-  rename, directory fsync; mode 0640; a symlinked state file is refused; at boot, temp files a crash left behind, regular files named `uplink-state.json.<digits>.tmp` directly in `DATA_DIR` whose mtime is at least 10 minutes old (a younger one may be a live save by another process sharing `DATA_DIR`), are removed, and symlinks or anything else are left alone) and apply at once:
-  new sessions, the next call's idle timer, the next idle sweep and the
-  log level, no restart.
-- *Audit.* Each change is a `setting_change` event (`name old→new`) in the
-  high-value stream. The log level filters runtime logs only: the audit
-  mirror on stdout is pinned at `info`, so `warn` or `error` never hides
-  an audit line.
+  rename, directory fsync; mode 0640; a symlinked state file is refused; at boot, temp files a crash left behind, regular files named `uplink-state.json.<digits>.tmp` directly in `DATA_DIR` whose mtime is at least 10 minutes old (a younger one may be a live save by another process sharing `DATA_DIR`), are removed, and symlinks or anything else are left alone).
+- *Export / import* work like key export and import: a fresh login or
+  step-up is required (`401` `step_up_required` otherwise). Export
+  downloads `{"format":"uplink-settings","version":1,"settings":{…}}` with
+  the saved values. Import (≤ 64 KiB) validates every value first and
+  saves nothing on any error: unknown keys, secrets, router or `.env`-only
+  rows, out-of-range or mistyped values are `400`. A valid file replaces
+  the saved set; values the environment pins are saved but still lose to
+  env and are listed in the answer's `pinned`.
+- *Secrets* (wallet key, ETH node URL, router cookie, admin password, API
+  key seed, master key) are `.env` only: they never appear in the tab, the
+  API answers or the settings file, and naming one is `400`.
+- *Audit.* Each change is a `setting_change` event (`name old→new`; text
+  settings say only `changed`) in the high-value stream, as are
+  `settings_export` and `settings_import`. The log level filters runtime
+  logs only: the audit mirror on stdout is pinned at `info`, so `warn` or
+  `error` never hides an audit line.
 - *Not settable:* the admin session timeouts (fixed 4 h idle, 12 h
-  absolute), `MASTER_KEY_ADMIN`, and every secret.
+  absolute), `MASTER_KEY_ADMIN`, the router settings, and every secret.
 
 ## CI/CD and versioning
 

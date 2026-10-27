@@ -896,6 +896,7 @@
     <button class="tab" data-tab="playground" onclick="showTab('playground')">Probe</button>
     <button class="tab" data-tab="activity" onclick="showTab('activity')">Sessions &amp; Usage</button>
     <button class="tab" data-tab="security" onclick="showTab('security')">Security</button>
+    <button class="tab" data-tab="settings" onclick="showTab('settings')">Settings</button>
   </nav>
 
   <main>
@@ -1070,18 +1071,6 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <button class="ghost" type="button" onclick="logout()">Log out</button>
         </div>
       </section>
-      <section id="settingsSection">
-        <details id="settingsDetails" class="fold" ontoggle="if (this.open) loadSettings()">
-          <summary>Settings</summary>
-          <p class="note" style="margin:8px 0 0">
-            Saved with the admin state and applied at once. A value set in the
-            environment wins and cannot be changed here. Every change is logged.
-          </p>
-          <div id="settingsList" class="stack" style="gap:8px;margin-top:10px">Loading…</div>
-          <p id="settingsMsg" class="note" style="margin:6px 0 0"></p>
-        </details>
-      </section>
-
       <section>
         <h2>Security alerts</h2>
         <p class="note" style="margin-top:0">
@@ -1153,7 +1142,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
         <div style="overflow-x:auto">
           <table id="sessTable">
-            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Ends</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Opened</th><th>Ends</th><th>In flight</th><th>Holders</th><th>Status</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -1209,6 +1198,25 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
     </div>
 
     <!-- PROBE -->
+    <div class="panel" id="tab-settings">
+      <section id="settingsSection">
+        <h2>Settings</h2>
+        <p class="note" style="margin-top:0">
+          Saved in DATA_DIR with the admin state. Some apply at once; others say
+          they take effect after an Uplink or router restart. A value set in the
+          environment wins and is read-only here: remove it from .env to manage it
+          in the console. Secrets stay in .env only. Every change is logged.
+        </p>
+        <div class="row" style="margin-bottom:8px">
+          <button class="ghost" type="button" id="settingsExportBtn" onclick="exportSettings()">Export settings</button>
+          <button class="ghost" type="button" id="settingsImportBtn" onclick="document.getElementById('settingsImportFile').click()">Import settings</button>
+          <input type="file" id="settingsImportFile" accept="application/json,.json" class="hidden" onchange="importSettingsFile(this)">
+        </div>
+        <div id="settingsList" class="stack" style="gap:8px;margin-top:10px">Loading…</div>
+        <p id="settingsMsg" class="note" style="margin:6px 0 0" role="status"></p>
+      </section>
+    </div>
+
     <div class="panel" id="tab-playground">
       <section>
         <h2 id="pgHeading">Probe</h2>
@@ -1625,6 +1633,7 @@ function showTab(id) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
+  if (id === 'settings' && authed) loadSettings();
   // Status / Sessions show live wallet + chain state — refresh on every visit.
   if ((id === 'status' || id === 'activity') && authed && !document.getElementById('app').classList.contains('hidden')) {
     refresh({ force: true });
@@ -1658,7 +1667,8 @@ async function api(path, opts = {}) {
   return res.text();
 }
 
-/** Operator settings (#51): env-pinned rows are shown disabled. */
+/** Operator settings (#51): one row per registry setting. Env-pinned,
+ * router and env-only rows are read-only. */
 async function loadSettings() {
   const msg = document.getElementById('settingsMsg');
   try {
@@ -1669,6 +1679,23 @@ async function loadSettings() {
     msg.textContent = 'Could not load settings: ' + e.message;
   }
 }
+function settingText(v) {
+  if (v === null || v === undefined || v === '') return '(none)';
+  return String(v);
+}
+function settingTip(s) {
+  let t = s.help || s.name;
+  t += ' Default: ' + settingText(s.default) + '.';
+  return t;
+}
+function settingNote(s) {
+  if (s.scope === 'router') return 'router setting: set ' + s.env + ' in the router\u2019s .env and restart the router';
+  if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
+  if (s.scope === 'env') return 'set in .env only (' + s.env + ')';
+  if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
+  if (s.source === 'persisted') return 'saved';
+  return 'default ' + settingText(s.default);
+}
 function renderSettings(list) {
   const box = document.getElementById('settingsList');
   box.textContent = '';
@@ -1677,52 +1704,72 @@ function renderSettings(list) {
     row.className = 'row';
     const label = document.createElement('label');
     label.textContent = s.name;
+    label.title = s.env;
     label.style.minWidth = '200px';
+    const tip = document.createElement('span');
+    tip.className = 'tip';
+    tip.tabIndex = 0;
+    setTip(tip, settingTip(s));
+    tip.textContent = '\u24D8';
     let input;
-    if (Array.isArray(s.options) && s.options.length) {
+    if (s.kind === 'bool') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('role', 'switch');
+      input.checked = s.value === true;
+    } else if (s.kind === 'enum' || (Array.isArray(s.options) && s.options.length)) {
       input = document.createElement('select');
-      for (const o of s.options) {
+      for (const o of (s.options || [])) {
         const opt = document.createElement('option');
         opt.value = o; opt.textContent = o;
         input.appendChild(opt);
       }
+      input.value = s.value == null ? '' : String(s.value);
+    } else if (s.kind === 'string') {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.style.minWidth = '280px';
+      input.value = s.value == null ? '' : String(s.value);
     } else {
       input = document.createElement('input');
       input.type = 'number';
       if (s.min != null) input.min = String(s.min);
       if (s.max != null) input.max = String(s.max);
       input.style.maxWidth = '140px';
+      input.value = s.value == null ? '' : String(s.value);
     }
     input.id = 'setting-' + s.name;
-    input.value = String(s.value);
-    input.disabled = !!s.pinned;
+    input.disabled = !!s.pinned || s.settable === false;
     row.appendChild(label);
+    row.appendChild(tip);
     row.appendChild(input);
-    const note = document.createElement('span');
-    note.className = 'note';
-    note.style.margin = '0';
-    if (s.pinned) {
-      note.textContent = 'set by environment (' + s.env + ')';
-    } else {
+    if (!input.disabled) {
       const save = document.createElement('button');
       save.type = 'button'; save.className = 'ghost'; save.textContent = 'Save';
-      save.onclick = () => saveSetting(s.name, input.value, s.options);
+      save.onclick = () => saveSetting(s.name, s.kind === 'bool' ? input.checked : input.value, s.kind);
       const reset = document.createElement('button');
       reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'Reset';
       reset.disabled = s.source !== 'persisted';
       reset.onclick = () => saveSetting(s.name, null);
       row.appendChild(save);
       row.appendChild(reset);
-      note.textContent = s.source === 'persisted' ? 'saved' : 'default ' + s.default;
     }
+    const note = document.createElement('span');
+    note.className = 'note';
+    note.style.margin = '0';
+    note.textContent = settingNote(s);
     row.appendChild(note);
     box.appendChild(row);
   }
 }
-async function saveSetting(name, value, options) {
+function settingValue(value, kind) {
+  if (kind === 'bool') return !!value;
+  if (kind === 'int') return Number(value);
+  return String(value);
+}
+async function saveSetting(name, value, kind) {
   const msg = document.getElementById('settingsMsg');
-  const body = value === null ? { name, reset: true }
-    : { name, value: (Array.isArray(options) && options.length) ? String(value) : Number(value) };
+  const body = value === null ? { name, reset: true } : { name, value: settingValue(value, kind || 'int') };
   try {
     await api('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     msg.textContent = value === null ? name + ' reset' : name + ' saved';
@@ -1730,6 +1777,52 @@ async function saveSetting(name, value, options) {
   } catch (e) {
     msg.textContent = name + ': ' + e.message;
   }
+}
+// stepUpFetch is fetch for routes that need a fresh step-up (settings
+// export and import): on 401 step_up_required it asks once, then retries.
+// null when cancelled or the session is gone.
+async function stepUpFetch(path, opts) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+    if (res.status === 401) {
+      const t = ((await res.text()) || '').trim();
+      if (t !== 'step_up_required') { showLogin(); return null; }
+      if (attempt > 0 || !(await openStepUp())) return null;
+      continue;
+    }
+    return res;
+  }
+  return null;
+}
+async function exportSettings() {
+  const msg = document.getElementById('settingsMsg');
+  const res = await stepUpFetch('/admin/settings/export');
+  if (!res) { msg.textContent = 'Export needs your password first.'; return; }
+  if (!res.ok) { msg.textContent = 'Export failed: ' + ((await res.text()) || res.statusText); return; }
+  const blob = new Blob([await res.text()], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uplink-settings.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  msg.textContent = 'Settings exported.';
+}
+async function importSettingsFile(input) {
+  const msg = document.getElementById('settingsMsg');
+  const file = input && input.files && input.files[0];
+  if (input) input.value = '';
+  if (!file) return;
+  if (!confirm('Replace the saved settings with this file? Settings not in the file go back to their defaults.')) return;
+  const text = await file.text();
+  const res = await stepUpFetch('/admin/settings/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text });
+  if (!res) { msg.textContent = 'Import needs your password first.'; return; }
+  if (!res.ok) { msg.textContent = 'Import refused: ' + ((await res.text()) || res.statusText); return; }
+  const v = await res.json();
+  renderSettings((v && v.settings) || []);
+  const pinned = (v && v.pinned) || [];
+  msg.textContent = 'Settings imported.' + (pinned.length ? ' Set by environment, so the env value still wins: ' + pinned.join(', ') + '.' : '');
 }
 
 /** Accessible ⓘ: focusable, announced via aria-label, shown via CSS on hover/focus. */
@@ -2879,7 +2972,7 @@ function setSessNote(msg) {
 function renderSessions(sessions, sessionsError) {
   const body = document.querySelector('#sessTable tbody');
   if (sessionsError && !sessions.length) {
-    body.innerHTML = `<tr><td colspan=6 class="note">session scan: ${escapeHtml(sessionsError)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan=9 class="note">session scan: ${escapeHtml(sessionsError)}</td></tr>`;
     return;
   }
   body.innerHTML = sessions.map(s => {
@@ -2889,15 +2982,20 @@ function renderSessions(sessions, sessionsError) {
       ? `<span class="model-name">${escapeHtml(name)}</span><code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`
       : `<code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`;
     const sid = s.sessionId || '';
+    const holders = Array.isArray(s.holders) ? s.holders : [];
+    const holderCount = Number(s.holderCount) || holders.length;
     return `<tr>
       <td class="model-cell">${modelCell}</td>
       <td><code title="${escapeAttr(sid)}">${shortSecret(sid)}</code></td>
       <td>${fmtMor(s.stakeWei)}</td>
+      <td>${fmtEnds(s.openedAt)}</td>
       <td>${fmtEnds(s.endsAt)}</td>
+      <td>${s.pooled ? (Number(s.inFlight) || 0) : '—'}</td>
+      <td title="${escapeAttr(holders.join(', '))}">${s.pooled ? holderCount : '—'}</td>
       <td>${status}</td>
       <td><button type="button" class="danger-ghost" data-sid="${escapeAttr(sid)}" onclick="closeSession(this.dataset.sid, this)" ${sid ? '' : 'disabled'}>Close</button></td>
     </tr>`;
-  }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
+  }).join('') || '<tr><td colspan=9 class="note">none</td></tr>';
 }
 
 async function refreshKeys() {

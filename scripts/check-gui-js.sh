@@ -607,11 +607,16 @@ grep -qF "fetch('/admin/step-up'" "$HTML" || { echo "FAIL: step-up dialog must p
 grep -qF 'id="enrollPw"' "$HTML" || { echo "FAIL: enrollment needs a password field" >&2; exit 1; }
 echo "OK: no reveal button; copy and Export all fetch the full keys on demand"
 
-# S6 settings: env-pinned fields are disabled with the env name; others
-# get Save and Reset; values are built with textContent (no innerHTML).
-node - "$OUT" <<'NODE'
+# Settings tab: one row per registry setting. Booleans are switches,
+# numbers number fields, strings text fields, enums selects. Env-pinned,
+# router and env-only rows are disabled with their note; others get Save
+# and Reset; the tooltip carries the range or values, the default and the
+# restart note; built with textContent (no innerHTML). Export and import
+# go through the step-up retry.
+node - "$OUT" "$HTML" <<'NODE'
 const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
 function extract(name) {
   const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
   if (!m) throw new Error('missing function ' + name);
@@ -620,24 +625,78 @@ function extract(name) {
   return src.slice(m.index, i);
 }
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
-const mk = (tag) => ({ tag, children: [], style: {}, disabled: false, value: '', textContent: '',
-  appendChild(c) { this.children.push(c); return c; } });
+const mk = (tag) => ({ tag, children: [], style: {}, attrs: {}, disabled: false, value: '', checked: false, textContent: '',
+  setAttribute(k, v) { this.attrs[k] = v; }, appendChild(c) { this.children.push(c); return c; } });
 const box = mk('div');
 global.document = { getElementById: () => box, createElement: mk };
-const fn = extract('renderSettings');
-if (/innerHTML/.test(fn)) fail('renderSettings must not use innerHTML');
-eval(fn + '\nglobal.renderSettings = renderSettings;');
+const names = ['renderSettings', 'settingText', 'settingTip', 'settingNote', 'setTip', 'settingValue'];
+for (const n of ['renderSettings', 'settingTip', 'settingNote']) if (/innerHTML/.test(extract(n))) fail(n + ' must not use innerHTML');
+eval(names.map(extract).join('\n') + '\nObject.assign(global, { renderSettings, settingValue });');
 renderSettings([
-  { name: 'forwardIdle', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true },
-  { name: 'logLevel', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false },
+  { name: 'forwardIdle', kind: 'int', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
+  { name: 'logLevel', kind: 'enum', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false, settable: true, scope: 'live', help: 'Log level.' },
+  { name: 'sessionFailover', kind: 'bool', value: false, default: true, source: 'persisted', env: 'SESSION_FAILOVER', pinned: false, settable: true, scope: 'restart', restart: 'uplink', pendingRestart: true, effective: true, help: 'Fail over (true or false). Takes effect after an Uplink restart.' },
+  { name: 'activeModelsUrl', kind: 'string', value: 'https://a.example/m.json', default: 'https://a.example/m.json', source: 'default', env: 'ACTIVE_MODELS_URL', pinned: false, settable: true, scope: 'restart', help: 'Feed.' },
+  { name: 'routerLogLevelApp', kind: 'enum', value: null, default: 'warn', options: ['debug', 'warn'], source: 'router', env: 'LOG_LEVEL_APP', pinned: false, settable: false, scope: 'router', help: 'Router log level. Router setting: change it in the router\u2019s .env and restart the router.' },
+  { name: 'masterKeyAdmin', kind: 'bool', value: false, default: false, source: 'default', env: 'MASTER_KEY_ADMIN', pinned: false, settable: false, scope: 'env', help: 'Security switch.' },
 ]);
-const [pinned, free] = box.children;
-const pin = pinned.children.find((c) => c.tag === 'input');
-if (!pin || !pin.disabled) fail('env-pinned field must be disabled');
-if (pinned.children.some((c) => c.tag === 'button')) fail('env-pinned field must have no Save/Reset');
-if (!pinned.children.some((c) => c.textContent === 'set by environment (UPLINK_FORWARD_IDLE_SECONDS)')) fail('missing env note');
-const sel = free.children.find((c) => c.tag === 'select');
-if (!sel || sel.disabled || sel.value !== 'debug') fail('free field must be enabled with its value');
-if (free.children.filter((c) => c.tag === 'button').length !== 2) fail('free field needs Save and Reset');
-console.log('OK: settings env-pinned fields disabled; others editable');
+const [pinned, free, bool, str, router, envOnly] = box.children;
+const ctl = (row) => row.children.find((c) => c.id && c.id.startsWith('setting-'));
+const note = (row) => row.children[row.children.length - 1].textContent;
+const buttons = (row) => row.children.filter((c) => c.tag === 'button').length;
+const tipOf = (row) => row.children.find((c) => c.className === 'tip').attrs['data-tip'] || '';
+if (!ctl(pinned).disabled || buttons(pinned)) fail('env-pinned field must be disabled with no Save/Reset');
+if (note(pinned) !== 'set by environment (UPLINK_FORWARD_IDLE_SECONDS) \u2014 remove it from .env to manage it here') fail('env note: ' + note(pinned));
+if (ctl(pinned).type !== 'number' || ctl(pinned).min !== '30' || ctl(pinned).max !== '600') fail('number field');
+if (!tipOf(pinned).includes('30–600') || !tipOf(pinned).includes('Default: 180')) fail('tooltip needs range and default: ' + tipOf(pinned));
+if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || buttons(free) !== 2) fail('enum select with Save and Reset');
+if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false || buttons(bool) !== 2) fail('bool must be a switch');
+if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
+if (ctl(str).type !== 'text' || ctl(str).value !== 'https://a.example/m.json') fail('string must be a text field');
+if (!ctl(router).disabled || buttons(router) || !note(router).includes('router') || !tipOf(router).includes('restart the router')) fail('router row must be read-only with the router note');
+if (!ctl(envOnly).disabled || buttons(envOnly) || !note(envOnly).includes('.env only')) fail('env-only row must be read-only');
+if (settingValue('64', 'int') !== 64 || settingValue(true, 'bool') !== true || settingValue('x', 'string') !== 'x') fail('typed values');
+if (!html.includes('data-tab="settings"') || !html.includes('id="tab-settings"')) fail('Settings must be its own tab');
+const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-keys"'));
+if (sec.includes('settingsList')) fail('settings must leave the Security tab');
+if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
+if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
+console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, env/router/env-only rows read-only, export/import behind step-up');
+NODE
+
+# Sessions page: per-session lease state (opened, ends, in flight, holders)
+# is on the Sessions table; /admin/status has no poolSessions.
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function extract(name) {
+  const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = m.index + m[0].length, d = 1;
+  while (i < src.length && d > 0) { const c = src[i++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const head = /<table id="sessTable">\s*<thead><tr>(.*?)<\/tr><\/thead>/s.exec(html);
+if (!head) fail('sessTable header not found');
+const cols = [...head[1].matchAll(/<th>(.*?)<\/th>/g)].map((m) => m[1]);
+const want = ['Model', 'Session', 'Stake', 'Opened', 'Ends', 'In flight', 'Holders', 'Status', ''];
+if (JSON.stringify(cols) !== JSON.stringify(want)) fail('Sessions columns: ' + JSON.stringify(cols));
+const body = { innerHTML: '' };
+global.document = { querySelector: () => body };
+global.escapeHtml = (s) => String(s); global.escapeAttr = (s) => String(s);
+global.shortSecret = (s) => String(s).slice(0, 6); global.fmtMor = () => '1 MOR';
+global.fmtEnds = (iso) => (iso ? 'T:' + iso : '—');
+eval(extract('renderSessions') + '\nglobal.renderSessions = renderSessions;');
+renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', openedAt: 'o1', endsAt: 'e1', pooled: true, usable: true, inFlight: 3, holderCount: 2, holders: ['k1', 'k2'], long: true }], '');
+const cells = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim());
+if (cells.length !== 9) fail('row has ' + cells.length + ' cells');
+if (cells[3] !== 'T:o1' || cells[4] !== 'T:e1' || cells[5] !== '3' || cells[6] !== '2' || cells[7] !== 'reused') fail('cells ' + JSON.stringify(cells));
+if (!body.innerHTML.includes('title="k1, k2"')) fail('holders tooltip');
+renderSessions([], '');
+if (!body.innerHTML.includes('colspan=9')) fail('empty row must span 9 columns');
+if (/\blong\b/i.test(extract('renderSessions')) || body.innerHTML.includes('long')) fail('the Sessions table must not show a long flag');
+if (/poolSessions/.test(src)) fail('the GUI must not read poolSessions');
+console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag)');
 NODE

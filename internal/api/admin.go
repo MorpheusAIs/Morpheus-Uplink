@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/chain"
@@ -162,7 +163,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		_ = err
 	}
 
-	sessions := s.pool.ChainOpen()
+	sessions := sessionRows(s.pool.ChainOpen(), s.pool.Snapshot(), time.Now())
 	for i := range sessions {
 		if name := s.catalog.NameByID(sessions[i].ModelID); name != "" {
 			sessions[i].ModelName = name
@@ -170,8 +171,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status := map[string]any{
 		"version":                Version,
-		"sessions":               sessions, // on-chain opens (pooled flagged)
-		"poolSessions":           s.pool.Snapshot(),
+		"sessions":               sessions, // on-chain opens (pooled flagged) with lease state
 		"sessionDurationSec":     s.durationDefault(),
 		"sessionDurationDefault": s.durationDefault(),
 		// Origin admin changes are accepted from (the GUI warns on a mismatch).
@@ -582,4 +582,59 @@ func (s *Server) adminSessionStatus(twoFactorOn bool) map[string]any {
 func (s *Server) auditAdmin(r *http.Request, kind, message string) {
 	ip := s.lockout.ClientIP(r)
 	s.writeAudit(AuditStreamHighValue, AuditEvent{At: time.Now().UTC(), Kind: kind, Actor: ip, IP: ip, Result: "ok", Message: message})
+}
+
+// sessionRow is one row of the console Sessions table: the on-chain open
+// plus, for a session in the reuse pool, its lease state.
+type sessionRow struct {
+	pool.ChainSession
+	InFlight    int        `json:"inFlight"`
+	HolderCount int        `json:"holderCount"`
+	Holders     []string   `json:"holders"` // key ids
+	OpenedAt    *time.Time `json:"openedAt,omitempty"`
+	Opener      string     `json:"opener,omitempty"`
+}
+
+// sessionRows merges the pool's lease state into the on-chain list by
+// session id. A pooled session the last chain scan has not seen yet is
+// appended. endsAt comes from the chain, else from the lease.
+func sessionRows(chain []pool.ChainSession, snaps []pool.Snapshot, now time.Time) []sessionRow {
+	bySID := make(map[string]pool.Snapshot, len(snaps))
+	for _, sn := range snaps {
+		bySID[strings.ToLower(sn.SessionID)] = sn
+	}
+	out := make([]sessionRow, 0, len(chain)+len(snaps))
+	seen := map[string]bool{}
+	add := func(cs pool.ChainSession, sn pool.Snapshot, ok bool) {
+		r := sessionRow{ChainSession: cs, Holders: []string{}}
+		if ok {
+			r.InFlight, r.HolderCount, r.Opener = sn.InFlight, sn.HolderCount, sn.Opener
+			if sn.Holders != nil {
+				r.Holders = sn.Holders
+			}
+			if !sn.OpenedAt.IsZero() {
+				t := sn.OpenedAt
+				r.OpenedAt = &t
+			}
+			if r.EndsAt.IsZero() {
+				r.EndsAt = sn.EndsAt
+			}
+		}
+		out = append(out, r)
+	}
+	for _, cs := range chain {
+		id := strings.ToLower(cs.SessionID)
+		sn, ok := bySID[id]
+		seen[id] = true
+		add(cs, sn, ok)
+	}
+	for _, sn := range snaps {
+		id := strings.ToLower(sn.SessionID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		add(pool.ChainSession{ModelID: sn.ModelID, SessionID: sn.SessionID, Usable: now.Before(sn.ExpiresAt), Pooled: true}, sn, true)
+	}
+	return out
 }

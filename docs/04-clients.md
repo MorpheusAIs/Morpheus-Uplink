@@ -88,8 +88,8 @@ print(client.chat.completions.create(
 ## Long jobs (timeouts, session length, release)
 
 For calls that run for many minutes. All optional; without them nothing
-changes. Use a generated `sk-…` key: the master and prompt keys cannot ask
-for long sessions or release.
+changes. Any key may ask for a long session; release needs a generated
+`sk-…` key (the master and prompt keys hold no sessions of their own).
 
 ```bash
 curl -sS https://YOUR_HOST/v1/chat/completions \
@@ -107,8 +107,8 @@ curl -sS https://YOUR_HOST/v1/chat/completions \
 - A timeout before any answer is a `504` with `"type":"timeout"`. In a
   stream it ends with an error event, `finish_reason:
   "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.
-- Too many long sessions or opens → `429` `long_session_limit`; more than
-  4 calls at once on one key → `429` `too_many_requests`.
+- Uplink adds no limit on long sessions or calls at once; a `429` from
+  the router or provider is passed through.
 - When done, release your hold so unused stake returns early:
 
 ```bash
@@ -118,6 +118,8 @@ curl -sS -X POST https://YOUR_HOST/v1/sessions/release \
 
   Answers `{"released":true,"closed":true}`, `…"closed":false,"reason":"shared"`
   (another key still uses it) or `{"released":false,"reason":"not_held"}`.
+  When the operator turned release off (`sessionRelease` on the Settings
+  tab) the answer is `403` `release_disabled`.
 - Details: [Long jobs](06-developers.md#long-jobs).
 
 ## Usage (`GET /v1/usage`)

@@ -15,7 +15,7 @@ One topic at a time. You do not need every section on day one.
   a recovery code). Wrong password and missing code get the same answer, so
   the page never reveals whether 2FA is enrolled; lockout and audit apply to
   both steps.
-- Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
+- Tabs: Status, API Keys, Probe, Sessions & Usage, Security, Settings (far right).
 - Status, top to bottom: a status line (health or the reason it is not
   healthy, open sessions, versions), the four MOR numbers below, Connect a
   client, then Add MOR and Support (both collapsed). Hover or focus an &#9432; for help.
@@ -53,11 +53,6 @@ One topic at a time. You do not need every section on day one.
 - Locked out (lost authenticator and codes): emergency recovery is one
   restart with `UPLINK_RESET_2FA=true`, then remove it; 2FA comes back off
   ([details](06-developers.md#admin-2fa-and-recovery-codes)).
-- **Settings** (collapsed, below 2FA): session length default and max,
-  idle-sweep grace, the per-call idle timer and the log level. Save applies
-  at once; Reset returns to the default. A value set in the environment is
-  shown disabled with "set by environment (ENV)"
-  ([Operator settings](06-developers.md#operator-settings)).
 - **Security alerts** (below 2FA): the last 50 audit events (logins
   and lockouts, 2FA and key changes, boot session checks, provider
   failovers, balance drops),
@@ -142,8 +137,8 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   (`UPLINK_SESSION_IDLE_GRACE_SECONDS`) is closed early so its unused stake
   returns. A session is never closed while a call is still running on it;
   apps can release their hold when done ([Long jobs](04-clients.md#long-jobs-timeouts-session-length-release)).
-  `/admin/status` lists, per pool session, `inFlight`, `holderCount` and
-  `holders` (key ids), `openedAt`, `endsAt`, `opener` and `long`.
+  The **Sessions** table shows, per session, when it opened and ends, the
+  calls in flight and the holders (key ids in the tooltip).
 - **Usage** counters are stored on the Uplink data volume: they survive
   restarts and redeploys, and reset on a fresh deploy or when the volume is
   deleted. Funds do not depend on them.
@@ -161,6 +156,27 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 2. Pick a model (fuzzy search) and an API key.
 3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
+
+---
+
+## Settings
+
+- Every operator setting that is not a secret, one row each: a toggle,
+  number field, list or text field, with its default. The tooltip gives
+  the range or values and says whether it applies at once or after an
+  Uplink or router restart. **Save** stores it in `DATA_DIR`; **Reset**
+  returns to the default.
+- A value set in `.env` wins and is read-only, with a note to remove it
+  from `.env` to manage it here. Router settings and `MASTER_KEY_ADMIN`
+  are read-only (set in `.env`).
+- `sessionRelease` turns the apps' session release
+  (`POST /v1/sessions/release`) on or off.
+- **Export settings** / **Import settings** download or load a settings
+  file; both ask for the password (and 2FA code) again, like key export.
+  An import with any invalid, unknown or secret entry changes nothing.
+- Secrets (wallet key, ETH node URL, cookie, admin password, API key
+  seed, master key) never show here: they stay in `.env`.
+- Details: [Operator settings](06-developers.md#operator-settings).
 
 ---
 
