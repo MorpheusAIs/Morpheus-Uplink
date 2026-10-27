@@ -20,8 +20,9 @@
 #                provider A closes A and opens on B (omitProvider, router
 #                failover off) and the request answers 200; an impaired
 #                400 on B with A cooling keeps the session (no alternate).
-#  2fa           2FA starts off (password-only); turning it on (enroll)
-#                makes login need TOTP or a recovery code; the switch
+#  2fa           2FA starts off (password-only); turning it on (enroll,
+#                password in the body; confirm re-issues the session and
+#                ends the old cookie) makes login need TOTP or a recovery code; the switch
 #                survives a container restart; reset keeps it on and forces
 #                re-enrollment; turning it off (password + code) ends every
 #                session, login is password-only again, and that survives a
@@ -400,17 +401,40 @@ try_login() {
   LCODE=$(printf '%s' "$out" | tail -n 1)
   LSESSION=$(printf '%s' "$out" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
 }
+# pw_body: {"password": ADMIN_PASSWORD} for the enrolment calls.
+pw_body() { jq -cn --arg p "$ADMIN_PASSWORD" '{password: $p}'; }
+# enroll_confirm CODE: POST /admin/2fa/enroll/confirm {password, code}. A
+# success signs out the other sessions and re-issues this one, so the new
+# cookie replaces $SESSION. Body in $ECONF, HTTP code in $E2E_BOOT_DIR/ucode.
+enroll_confirm() {
+  local out body cookie
+  body=$(jq -cn --arg p "$ADMIN_PASSWORD" --arg c "$1" '{password: $p, code: $c}')
+  out=$(dc exec -T uplink curl -sS -D - -w '\n%{http_code}' -X POST \
+    -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
+    -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:8080/admin/2fa/enroll/confirm <<<"$body" | tr -d '\r')
+  printf '%s' "$out" | tail -n 1 > "$E2E_BOOT_DIR/ucode"
+  cookie=$(printf '%s\n' "$out" | sed -n '1,/^$/s/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
+  ECONF=$(printf '%s\n' "$out" | sed '1,/^$/d' | sed '$d')
+  if [ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ]; then
+    [ -n "$cookie" ] || fail "enroll confirm did not re-issue the session cookie"
+    SESSION=$cookie
+  fi
+}
 # state_auth: the auth object of the state file, read as the app user
 # (uid 10001): the service drops CAP_DAC_OVERRIDE, so a root exec cannot.
 state_auth() { dc exec -T --user 10001 uplink cat /data/uplink-state.json | jq -c '.auth // {}'; }
 login
 uapi GET /admin/2fa/status | jq -e '.on == false and .enrolled == false and .need2fa == false' >/dev/null || fail "2FA must start off"
 state_auth | jq -e '.twoFactorOn == false' >/dev/null || fail "state file: want twoFactorOn false on a fresh install"
-start=$(uapi POST /admin/2fa/enroll/start '{}')
+start=$(uapi POST /admin/2fa/enroll/start "$(pw_body)")
 TOTP_SECRET=$(printf '%s' "$start" | jq -r .secret)
 [ -n "$TOTP_SECRET" ] && [ "$TOTP_SECRET" != null ] || fail "2fa enroll start: $start"
-conf=$(uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$TOTP_SECRET")\"}")
+PRE_ENROLL_SESSION=$SESSION
+enroll_confirm "$(totp "$TOTP_SECRET")"; conf=$ECONF
 [ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "2fa enroll confirm: $conf"
+NEW_ENROLL_SESSION=$SESSION; SESSION=$PRE_ENROLL_SESSION; uapi GET /admin/2fa/status >/dev/null
+[ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "pre-enrolment cookie still works after confirm: $(cat "$E2E_BOOT_DIR/ucode")"
+SESSION=$NEW_ENROLL_SESSION
 RECOVERY=$(printf '%s' "$conf" | jq -r '.recoveryCodes[]')
 [ "$(printf '%s\n' "$RECOVERY" | grep -cE '^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}$')" = 10 ] || fail "want 10 recovery codes at enrollment"
 uapi GET /admin/2fa/status | jq -e '.on == true and .enrolled == true' >/dev/null || fail "2FA must be on after enrollment"
@@ -464,14 +488,14 @@ SESSION=$LSESSION
 uapi GET /admin/2fa/status | jq -e '.on == true and .enrolled == false and .need2fa == true' >/dev/null || fail "want the enrollment-required state after reset"
 body=$(uapi GET /admin/status)
 [ "$(cat "$E2E_BOOT_DIR/ucode")" = 403 ] && printf '%s' "$body" | grep -q '2fa enrollment required' || fail "admin routes before re-enroll: $(cat "$E2E_BOOT_DIR/ucode") $body"
-start=$(uapi POST /admin/2fa/enroll/start '{}')
+start=$(uapi POST /admin/2fa/enroll/start "$(pw_body)")
 NEW_SECRET=$(printf '%s' "$start" | jq -r .secret)
 [ -n "$NEW_SECRET" ] && [ "$NEW_SECRET" != null ] && [ "$NEW_SECRET" != "$TOTP_SECRET" ] || fail "re-enroll must issue a new secret"
 if [ "$(totp "$TOTP_SECRET")" != "$(totp "$NEW_SECRET")" ]; then
-  uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$TOTP_SECRET")\"}" >/dev/null
+  enroll_confirm "$(totp "$TOTP_SECRET")"
   [ "$(cat "$E2E_BOOT_DIR/ucode")" = 401 ] || fail "OLD secret accepted at enroll confirm: $(cat "$E2E_BOOT_DIR/ucode")"
 fi
-conf=$(uapi POST /admin/2fa/enroll/confirm "{\"code\":\"$(totp "$NEW_SECRET")\"}")
+enroll_confirm "$(totp "$NEW_SECRET")"; conf=$ECONF
 [ "$(cat "$E2E_BOOT_DIR/ucode")" = 200 ] || fail "enroll confirm with new secret: $conf"
 NEW_RECOVERY=$(printf '%s' "$conf" | jq -r '.recoveryCodes[]')
 [ "$(printf '%s\n' "$NEW_RECOVERY" | grep -c .)" = 10 ] || fail "want 10 new recovery codes"

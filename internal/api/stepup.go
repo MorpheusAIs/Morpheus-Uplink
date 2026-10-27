@@ -17,8 +17,12 @@ import (
 const StepUpMaxAge = 30 * time.Minute
 
 const (
-	errMsgTOTPOnly      = "authenticator code required (recovery codes are not accepted here)"
-	errMsgStepUp        = "step_up_required"
+	errMsgTOTPOnly = "authenticator code required (recovery codes are not accepted here)"
+	errMsgStepUp   = "step_up_required"
+	// errMsgBadPassword: wrong password on an enrolment call made inside a
+	// live session, so the GUI can tell it from a lost session (401
+	// "unauthorized"). /admin/login already tells a wrong password apart.
+	errMsgBadPassword   = "invalid password"
 	maxCredentialBodyKB = 4
 )
 

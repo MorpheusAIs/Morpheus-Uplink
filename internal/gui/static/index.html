@@ -1023,6 +1023,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <span data-copy="tfSwitchLabel">Require an authenticator code at login (2FA)</span>
         </label>
         <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
+        <p class="note" style="margin-top:0" id="sessionLengths" role="status"></p>
         <div class="callout compact hidden" id="twoFactorOffNote" role="status" data-copy="tfOffNote" style="margin:0 0 10px"></div>
         <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
           <div class="enroll-qr">
@@ -1030,6 +1031,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
             <div id="enrollSecret" class="note"></div>
           </div>
           <div class="row">
+            <input id="enrollPw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px">
             <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
           </div>
           <form id="enrollConfirmForm" class="row" onsubmit="event.preventDefault(); confirmTotpEnroll();" style="display:none">
@@ -1050,6 +1052,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
         <form id="twoFactorManage" class="stack hidden" style="gap:8px;margin-top:12px" onsubmit="event.preventDefault()">
           <p class="note" style="margin:0" data-copy="factorNeeded">Enter your password and a current authenticator code or a recovery code.</p>
+          <p class="note" style="margin:0" data-copy="regenNeedsTotp">Regenerating recovery codes needs a current authenticator code (a recovery code is not accepted).</p>
           <div class="row">
             <input id="managePw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px" oninput="updateManageButtons()">
             <input id="manageCode" type="text" autocomplete="one-time-code" placeholder="123456 or recovery code" aria-label="Authenticator code or recovery code" style="flex:1;min-width:160px" oninput="updateManageButtons()">
@@ -1297,6 +1300,23 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
   </div>
 </div>
 
+<!-- Step-up: confirm the password (and code) before showing full keys -->
+<div id="stepUpModal" class="modal-backdrop hidden" onclick="if(event.target===this)cancelStepUp()">
+  <div class="modal" role="dialog" aria-labelledby="stepUpTitle" style="width:min(420px,100%)">
+    <h2 id="stepUpTitle" data-copy="stepUpTitle">Confirm it's you</h2>
+    <p class="note" style="margin:0" data-copy="stepUpNote">Showing full keys needs your password (and an authenticator code when 2FA is on). It stays confirmed for 30 minutes.</p>
+    <form class="stack" onsubmit="event.preventDefault(); submitStepUp();">
+      <input id="stepUpPw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password">
+      <input id="stepUpCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" aria-label="6-digit code from authenticator">
+      <div class="row">
+        <button type="submit">Confirm</button>
+        <button class="ghost" type="button" onclick="cancelStepUp()">Cancel</button>
+      </div>
+      <div id="stepUpMsg" class="note" role="status"></div>
+    </form>
+  </div>
+</div>
+
 <!-- Bulk import ephemeral keys -->
 <div id="bulkImportModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeBulkImportModal()">
   <div class="modal" role="dialog" aria-labelledby="bulkImportTitle" style="width:min(560px,100%)">
@@ -1405,6 +1425,15 @@ const UI_COPY = {
   resetConfirm: 'Reset 2FA? This removes the authenticator and all recovery codes and logs out every admin session. You will enroll again after logging in.',
   resetDone: '2FA reset. All sessions were logged out. Log in with your password and enroll again.',
   factorNeeded: 'Enter your password and a current authenticator code or a recovery code.',
+  regenNeedsTotp: 'Regenerating recovery codes needs a current authenticator code (a recovery code is not accepted).',
+  enrollPwNeeded: 'Enter your admin password to start or confirm the enrollment.',
+  stepUpTitle: 'Confirm it\'s you',
+  stepUpNote: 'Showing full keys needs your password (and an authenticator code when 2FA is on). It stays confirmed for 30 minutes.',
+  stepUpNeeded: 'Enter your password and the 6-digit code.',
+  stepUpRejected: 'Password or code not accepted.',
+  stepUpCancelled: 'Full keys need your password first.',
+  sessionLengths: (idle, absolute) => 'Admin sessions end after ' + idle + ' without activity and ' + absolute + ' after login.',
+  twoFactorOffSession: ' 2FA is off.',
 };
 
 let authed = false;
@@ -1446,12 +1475,77 @@ function rememberKeys(ks) {
 async function fullKey(id) {
   if (realKeys[id]) return realKeys[id];
   try {
-    const res = await fetch('/admin/keys?reveal=1', { credentials: 'same-origin' });
-    if (res.status === 401) { showLogin(); return ''; }
-    if (!res.ok) return '';
-    rememberKeys(await res.json());
+    const ks = await revealKeys();
+    if (!ks) return '';
+    rememberKeys(ks);
   } catch (_) { return ''; }
   return realKeys[id] || '';
+}
+
+// revealKeys fetches the full keys (audited reveal). The server answers
+// 401 step_up_required when the login or last step-up is older than 30
+// min: ask for the password (and code) once, then retry. null when
+// unavailable or cancelled.
+async function revealKeys() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch('/admin/keys?reveal=1', { credentials: 'same-origin' });
+    if (res.status === 401) {
+      const t = ((await res.text()) || '').trim();
+      if (t !== 'step_up_required') { showLogin(); return null; }
+      if (attempt > 0 || !(await openStepUp())) return null;
+      continue;
+    }
+    if (!res.ok) return null;
+    return await res.json();
+  }
+  return null;
+}
+
+// Step-up dialog: resolves true after POST /admin/step-up succeeds, false
+// on cancel. Credentials go in the POST body only.
+let stepUpResolve = null;
+function openStepUp() {
+  if (stepUpResolve) stepUpResolve(false);
+  const m = document.getElementById('stepUpModal');
+  const code = document.getElementById('stepUpCode');
+  document.getElementById('stepUpMsg').textContent = '';
+  document.getElementById('stepUpPw').value = '';
+  if (code) { code.value = ''; code.style.display = (tfState && tfState.enrolled) ? '' : 'none'; }
+  m.classList.remove('hidden');
+  setTimeout(() => document.getElementById('stepUpPw').focus(), 0);
+  return new Promise((resolve) => { stepUpResolve = resolve; });
+}
+function closeStepUp(ok) {
+  document.getElementById('stepUpModal').classList.add('hidden');
+  document.getElementById('stepUpPw').value = '';
+  document.getElementById('stepUpCode').value = '';
+  const r = stepUpResolve;
+  stepUpResolve = null;
+  if (r) r(ok);
+}
+function cancelStepUp() { closeStepUp(false); }
+async function submitStepUp() {
+  const pw = document.getElementById('stepUpPw').value || '';
+  const codeEl = document.getElementById('stepUpCode');
+  const needCode = !!(tfState && tfState.enrolled);
+  const code = needCode ? ((codeEl.value || '').trim()) : '';
+  const msg = document.getElementById('stepUpMsg');
+  if (!pw || (needCode && !/^\d{6}$/.test(code))) { msg.textContent = UI_COPY.stepUpNeeded; return; }
+  msg.textContent = 'Checking…';
+  let res;
+  try {
+    res = await fetch('/admin/step-up', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw, code }),
+    });
+  } catch (e) { msg.textContent = e.message; return; }
+  document.getElementById('stepUpPw').value = '';
+  if (codeEl) codeEl.value = '';
+  if (res.ok) { closeStepUp(true); return; }
+  if (res.status === 429) { msg.textContent = 'Too many attempts. Retry after ' + (res.headers.get('Retry-After') || '?') + 's.'; return; }
+  msg.textContent = UI_COPY.stepUpRejected;
 }
 let promptKey = '';
 let allModels = [];
@@ -1533,7 +1627,7 @@ async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   if (res.status === 401) {
     const t = codeCheck ? (await res.text()).trim() : '';
-    if (codeCheck && t === 'invalid code') throw new Error(t);
+    if (codeCheck && (t === 'invalid code' || t === 'invalid password')) throw new Error(t);
     showLogin(); throw new Error('unauthorized');
   }
   if (!res.ok) {
@@ -1854,10 +1948,18 @@ async function startTotpEnroll() {
   const qr = document.getElementById('enrollQr');
   const form = document.getElementById('enrollConfirmForm');
   const codeEl = document.getElementById('enrollCode');
+  const pwEl = document.getElementById('enrollPw');
+  const password = (pwEl && pwEl.value) || '';
   hideRecoveryCodes();
   setEnrollMsg('', '');
+  if (!password) {
+    // The server needs the password first; ask for it, post nothing.
+    setEnrollMsg(UI_COPY.enrollPwNeeded, '');
+    if (pwEl) setTimeout(() => pwEl.focus(), 0);
+    return;
+  }
   try {
-    const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await api('/admin/2fa/enroll/start', { codeCheck: true, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
     secretEl.textContent = 'Secret (save offline):\n' + (data.secret || '');
     if (data.qrPngB64 && qr) {
       qr.src = 'data:image/png;base64,' + data.qrPngB64;
@@ -1880,14 +1982,22 @@ async function confirmTotpEnroll() {
     if (codeEl) codeEl.focus();
     return;
   }
+  const pwEl = document.getElementById('enrollPw');
+  const password = (pwEl && pwEl.value) || '';
+  if (!password) {
+    setEnrollMsg(UI_COPY.enrollPwNeeded, 'err');
+    if (pwEl) pwEl.focus();
+    return;
+  }
   setEnrollMsg('Checking…', '');
   try {
     const data = await api('/admin/2fa/enroll/confirm', {
       codeCheck: true,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ password, code }),
     });
+    if (pwEl) pwEl.value = '';
     hideEnrollSecret();
     if (codeEl) codeEl.value = '';
     setTwoFactorHint(true);
@@ -1987,6 +2097,7 @@ async function factorError(res) {
 async function regenerateRecoveryCodes() {
   const f = manageFields();
   if (!f.password || !f.code) { setManageMsg(UI_COPY.factorNeeded, 'err'); return; }
+  if (!/^\d{6}$/.test(f.code)) { setManageMsg(UI_COPY.regenNeedsTotp, 'err'); return; }
   try {
     const res = await postFactor('/admin/2fa/recovery/regen', f);
     if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
@@ -2373,6 +2484,18 @@ function renderRouterBanner(st) {
   el.textContent = p ? p.text : '';
 }
 
+// Security tab: the fixed admin session lengths (status.adminSession) and
+// the informational "2FA is off" note.
+function renderSessionLengths(st) {
+  const el = document.getElementById('sessionLengths');
+  const a = st && st.adminSession;
+  if (!el || !a) return;
+  const h = (sec) => (sec % 3600 === 0 ? (sec / 3600) + 'h' : Math.round(sec / 60) + 'm');
+  let t = UI_COPY.sessionLengths(h(a.idleSec), h(a.absoluteSec));
+  if ((a.warnings || []).includes('2FA is off')) t += UI_COPY.twoFactorOffSession;
+  el.textContent = t;
+}
+
 // Shown on every tab while MASTER_KEY_ADMIN=true (status.twoFactor.masterKeyAdmin).
 function renderMasterKeyBanner(st) {
   const el = document.getElementById('masterKeyAdminBanner');
@@ -2442,6 +2565,7 @@ async function doRefresh() {
     }
     renderRouterBanner(st);
     renderOriginWarn(st);
+    renderSessionLengths(st);
     renderSessionReconcile(st.sessionReconcile || {});
 
     const rawSessions = st.sessions || [];
@@ -3275,7 +3399,8 @@ function closeBulkImportModal() {
 async function exportEphemeralKeys() {
   // The key list is masked: fetch the full keys (audited) for the file.
   try {
-    const ks = await api('/admin/keys?reveal=1');
+    const ks = await revealKeys();
+    if (!ks) { document.getElementById('keysBulkMsg').textContent = UI_COPY.stepUpCancelled; return; }
     rememberKeys(ks);
     renderGeneratedKeys(ks.keys || []);
   } catch (e) {

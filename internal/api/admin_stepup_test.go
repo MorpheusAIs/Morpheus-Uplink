@@ -346,7 +346,7 @@ func TestS1EnrollNeedsPassword(t *testing.T) {
 
 	for _, body := range []string{`{}`, `{"password":"wrong"}`} {
 		code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", body)
-		if code != http.StatusUnauthorized || strings.Contains(string(b), "secret") || strings.Contains(string(b), "otpauth") {
+		if code != http.StatusUnauthorized || strings.TrimSpace(string(b)) != errMsgBadPassword || strings.Contains(string(b), "otpauth") {
 			t.Fatalf("start %s: %d %s", body, code, b)
 		}
 	}

@@ -53,7 +53,7 @@ func (s *Server) handleTOTPEnrollStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
-		s.failAuth(w, "2fa_enroll", ip, "bad_password", "unauthorized")
+		s.failAuth(w, "2fa_enroll", ip, "bad_password", errMsgBadPassword)
 		return
 	}
 	key, err := adminauth.GenerateTOTP("Morpheus-Uplink", "admin")
@@ -128,7 +128,7 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
-		s.failAuth(w, "2fa_enroll", ip, "bad_password", "unauthorized")
+		s.failAuth(w, "2fa_enroll", ip, "bad_password", errMsgBadPassword)
 		return
 	}
 	codes, hashes, err := s.issueRecoveryCodes()

@@ -24,7 +24,10 @@ One topic at a time. You do not need every section on day one.
 - Security: the **2FA switch** turns two-factor login on or off. It is off
   by default on every deploy (password-only login), and the tab shows a
   short note recommending turning it on; nothing is forced. Turning it on
-  runs the enrollment (scan the QR code, confirm a code). Until a code is
+  runs the enrollment: enter the admin password, start, scan the QR code,
+  and confirm a code (the password is asked for again on confirm).
+  Confirming signs out every other admin session; this browser stays
+  signed in. Until a code is
   confirmed the tab shows one message, "Finish setup", and switching back
   off cancels the setup (after a reset, below, it cannot be switched off). 2FA is on once the code is confirmed, and 10
   recovery codes are shown once; save them.
@@ -32,7 +35,14 @@ One topic at a time. You do not need every section on day one.
   `DATA_DIR`, so it survives restarts and redeploys.
 - Regenerate recovery codes, reset 2FA or turn it off from the same tab:
   the buttons (and switching off) need both the password and a current
-  code or recovery code.
+  code or recovery code. Regenerate takes only a 6-digit authenticator
+  code, not a recovery code.
+- Admin sessions end after 4 hours without activity and 12 hours after
+  login, whether 2FA is on or off; the Security tab shows both. Background
+  refreshes do not count as activity. These lengths are fixed (no setting).
+- Full API keys (copy, Probe, Export all) need a recent confirmation: within
+  30 minutes of login or of the last confirmation. Otherwise the page asks
+  for the password (and a 6-digit code when 2FA is on) and then continues.
 - Turn off removes the 2FA secret and all recovery codes and signs out
   every session; the next login is password only.
 - Reset wipes the 2FA secret and all recovery codes and signs out every

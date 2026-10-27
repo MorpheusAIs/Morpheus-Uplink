@@ -20,12 +20,37 @@ GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
 code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
 is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
 token only when `MASTER_KEY_ADMIN=true` (default off); each such request
-writes an `admin_key_use` audit record. The session-only routes
-`POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`
-and `POST /admin/2fa/enroll/confirm` require the admin cookie session: any
+writes an `admin_key_use` audit record (aggregated: the first use per
+client address per minute is written at once, repeats become one
+`count=N` line). The session-only routes
+`POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`,
+`POST /admin/2fa/enroll/confirm` and `POST /admin/step-up` require the admin cookie session: any
 Authorization header is refused on session-only routes (any scheme or case,
 empty or repeated, the Master key included) with the same 401 as a request
 without credentials, whatever `MASTER_KEY_ADMIN` says.
+
+### Admin sessions and step-up
+
+- **Lengths** are fixed constants: idle 4h, absolute 12h, the same whether
+  2FA is on or off. There is no environment variable or GUI setting for
+  them. The cookie `MaxAge` is 12h; requests with `X-Uplink-Poll: 1` do not
+  extend idle. `/admin/status` reports `adminSession` (`idle`, `idleSec`,
+  `absolute`, `absoluteSec`, `stepUpMaxAgeSec`, and `warnings`, which holds
+  the informational `2FA is off` while 2FA is off).
+- **Step-up**: `POST /admin/step-up {"password", "code"}` (cookie session
+  only, CSRF-checked, under the login lockout, checked before the
+  password). With 2FA enrolled `code` must be a current TOTP code (a step
+  works once); a recovery code is refused without being consumed. With 2FA
+  not enrolled the password alone is checked. Success stamps the session
+  and audits `step_up`. Credentials are read from the POST body only.
+- **Key reveal**: `GET /admin/keys?reveal=1` returns full keys only on a
+  cookie session that logged in or stepped up within 30 minutes; otherwise
+  `401 step_up_required`. With any Authorization header it is `403`,
+  whatever `MASTER_KEY_ADMIN` says; the masked listing over the Bearer is
+  unchanged.
+- **Client address**: a change of client address within a session is
+  audited once per change as `admin_session_ip_change` (aggregated per
+  session per minute). The session is not bound to an address.
 
 ### Admin 2FA and recovery codes
 
@@ -64,9 +89,12 @@ without credentials, whatever `MASTER_KEY_ADMIN` says.
   `GET /admin/2fa/status` (`on`, `enrolled`, `need2fa`, `recoveryRemaining`),
   `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
   (returns the codes), `POST /admin/2fa/recovery/regen`,
-  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
-  remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
-  code.
+  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Enroll start needs
+  `{"password"}` and confirm `{"password", "code"}` (wrong password: 401
+  `invalid password`, counted by the lockout); a confirmed enrollment
+  revokes every admin session and re-issues the caller's cookie. Regen
+  needs `{"password", "code"}` with a TOTP code only. Reset and remove need
+  `{"password", "code"}`, where `code` is a TOTP or a recovery code.
 - **Lifecycle.** Turn on (enroll): Security tab switch, scan the QR code,
   confirm a code; the 10 recovery codes are shown once. Regenerate:
   replaces all codes (password plus a code), shown once. Reset: below.

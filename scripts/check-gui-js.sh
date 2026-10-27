@@ -130,11 +130,12 @@ function extract(name) {
 const FULL = 'sk-p' + 'a'.repeat(40) + 'd04f';
 const MASKED = 'sk-p\u2026d04f';
 const WALLET = '0x' + 'ab12'.repeat(10);
-let sent = [], reveals = 0, clip = [];
+let sent = [], reveals = 0, clip = [], stepUpPending = 0, stepUps = 0, stepUpAnswer = true, logins = 0;
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || { value: '', textContent: '', classList: { add() {}, remove() {} } }) };
 Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { clip.push(t); } } }, configurable: true, writable: true });
-global.showLogin = () => {};
+global.showLogin = () => { logins++; };
+global.openStepUp = async () => { stepUps++; if (stepUpAnswer) stepUpPending = 0; return stepUpAnswer; };
 global.flashIconCopied = () => {};
 global.probeDurationSec = () => 600;
 global.baseURL = () => 'https://u.example/v1';
@@ -142,6 +143,7 @@ global.shellSingleQuote = (s) => s;
 global.fetch = async (url, opts = {}) => {
   if (String(url).startsWith('/admin/keys?reveal=1')) {
     reveals++;
+    if (stepUpPending) return { status: 401, ok: false, text: async () => 'step_up_required\n' };
     return { status: 200, ok: true, json: async () => ({ masked: false, masterKey: 'sk-m' + 'b'.repeat(40), promptKey: FULL, keys: [] }) };
   }
   const h = (opts.headers || {}).Authorization;
@@ -153,9 +155,9 @@ global.fetch = async (url, opts = {}) => {
 eval([
   "let realKeys = {}; const KEY_PLACEHOLDER = 'YOUR_API_KEY'; let selectedKeyId = 'prompt'; let selectedModel = 'm'; let curlDirty = false; const MIN_SESSION_DURATION = 600;",
   "let pgKeys = [{ id: 'prompt', secret: '" + MASKED + "' }]; let secrets = { wallet: '' };",
-  ...['isMaskedKey', 'usableKey', 'rememberKeys', 'fullKey', 'selectedKeySecret', 'buildCurl', 'updateCurlPreview',
+  ...['isMaskedKey', 'usableKey', 'rememberKeys', 'revealKeys', 'fullKey', 'selectedKeySecret', 'buildCurl', 'updateCurlPreview',
       'parseCurlCommand', 'postChatCompletion', 'runCurlCommand', 'runPlayground', 'copyText', 'copySecret', 'copyWallet', 'connectKeySecret', 'copyConnectKey'].map(extract),
-  'global.T = { rememberKeys, buildCurl, runPlayground, runCurlCommand, copySecret, copyWallet, copyConnectKey, get realKeys() { return realKeys; }, secrets };',
+  'global.T = { rememberKeys, revealKeys, buildCurl, runPlayground, runCurlCommand, copySecret, copyWallet, copyConnectKey, get realKeys() { return realKeys; }, secrets };',
 ].join('\n'));
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 (async () => {
@@ -183,7 +185,14 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
   await T.copyWallet(null);
   if (clip[2] !== WALLET) fail('wallet copy got ' + JSON.stringify(clip[2]));
   if (reveals !== 1) fail('wallet copy fetched a key reveal');
-  console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key; wallet copy copies the full address');
+  // A stale session (401 step_up_required) asks for step-up once, then retries.
+  stepUpPending = 1; reveals = 0;
+  const ks = await T.revealKeys();
+  if (!ks || ks.promptKey !== FULL || stepUps !== 1 || reveals !== 2 || logins !== 0) fail('step-up retry: ' + JSON.stringify({ ks, stepUps, reveals, logins }));
+  // Cancelled step-up: no keys, no logout, no loop.
+  stepUpPending = 1; stepUpAnswer = false; reveals = 0; stepUps = 0;
+  if ((await T.revealKeys()) !== null || stepUps !== 1 || reveals !== 1 || logins !== 0) fail('cancelled step-up');
+  console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key; wallet copy copies the full address; a stale reveal asks for step-up once');
 })().catch((e) => fail(e.stack || e));
 NODE
 
@@ -546,5 +555,7 @@ NODE
 if grep -qE 'Reveal full keys|Masked by default|refreshKeys\(true' "$HTML"; then
   echo "FAIL: API Keys still has the reveal button or its note" >&2; exit 1
 fi
-grep -qF "await api('/admin/keys?reveal=1')" "$HTML" || { echo "FAIL: Export all must fetch full keys" >&2; exit 1; }
+grep -qF "const ks = await revealKeys();" "$HTML" || { echo "FAIL: Export all must fetch full keys" >&2; exit 1; }
+grep -qF "fetch('/admin/step-up'" "$HTML" || { echo "FAIL: step-up dialog must post /admin/step-up" >&2; exit 1; }
+grep -qF 'id="enrollPw"' "$HTML" || { echo "FAIL: enrollment needs a password field" >&2; exit 1; }
 echo "OK: no reveal button; copy and Export all fetch the full keys on demand"
