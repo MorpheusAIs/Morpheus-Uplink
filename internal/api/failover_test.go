@@ -636,12 +636,14 @@ func TestFailoverRetryMidStream(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, closes := m.snapshot(); len(closes) == 2 {
+		// The stream_retired audit is written by the background failover
+		// goroutine after the close, so wait for both, not just the close.
+		if _, closes := m.snapshot(); len(closes) == 2 && len(e.failoverAudits()) == 2 {
 			break
 		}
 		if time.Now().After(deadline) {
 			_, closes := m.snapshot()
-			t.Fatalf("B's session was not retired: closes %v", closes)
+			t.Fatalf("B's session was not retired: closes %v audits %v", closes, e.failoverAudits())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
