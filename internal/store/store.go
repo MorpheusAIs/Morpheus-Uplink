@@ -6,12 +6,15 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
@@ -60,7 +63,10 @@ func Open(dataDir string) (*Store, error) {
 		path: filepath.Join(dataDir, "uplink-state.json"),
 		st:   state{Usage: map[string]*UsageRow{}},
 	}
-	raw, err := os.ReadFile(s.path)
+	if err := refuseSymlink(s.path); err != nil {
+		return nil, err
+	}
+	raw, err := readNoFollow(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return s, nil
@@ -87,17 +93,77 @@ func Open(dataDir string) (*Store, error) {
 	return s, nil
 }
 
-// save must be called with s.mu held.
+// save must be called with s.mu held. It writes a fresh temp file in the
+// same directory (O_EXCL, 0600: a planted or symlinked *.tmp is never
+// followed or reused), sets 0640, fsyncs, renames over the state file and
+// fsyncs the directory. A state file that is a symlink is refused.
 func (s *Store) save() error {
 	raw, err := json.MarshalIndent(s.st, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o640); err != nil {
+	if err := refuseSymlink(s.path); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	dir := filepath.Dir(s.path)
+	f, err := os.CreateTemp(dir, filepath.Base(s.path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(raw); err != nil {
+		return err
+	}
+	if err := f.Chmod(0o640); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	ok = true
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
+}
+
+// refuseSymlink errors when p exists and is a symlink.
+func refuseSymlink(p string) error {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("state file %s is a symlink; refusing it", filepath.Base(p))
+	}
+	return nil
+}
+
+// readNoFollow reads p without following a symlink at the last element.
+func readNoFollow(p string) ([]byte, error) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 // AddKey appends a new key. Rejects id or hash collisions with any existing

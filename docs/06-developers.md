@@ -681,7 +681,8 @@ cross-site too); the 2FA enrolment gate applies as on other admin routes.
   every session open is capped at the max. A saved value ignored at boot
   (out of range) is logged by name and written to the ops audit stream as
   `setting_ignored`. Settings are saved beside the 2FA state in
-  `uplink-state.json` (temp file + rename, mode 0640) and apply at once:
+  `uplink-state.json` (a fresh temp file in the same directory, fsync,
+  rename, directory fsync; mode 0640; a symlinked state file is refused) and apply at once:
   new sessions, the next call's idle timer, the next idle sweep and the
   log level, no restart.
 - *Audit.* Each change is a `setting_change` event (`name old→new`) in the

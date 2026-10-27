@@ -223,3 +223,80 @@ func TestAuthStateOn(t *testing.T) {
 		}
 	}
 }
+
+// Josh S-3: save writes a fresh temp file (a planted *.tmp, symlinked or
+// world-writable, has no effect), leaves the state file at 0640, and a
+// symlinked state file is refused at open and at save.
+func TestSaveIgnoresPlantedTmp(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "uplink-state.json")
+	if err := os.Symlink(victim, statePath+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, "uplink-state.json.x.tmp")
+	if err := os.WriteFile(planted, []byte("planted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(planted, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSettings(func(st *Settings) error { st.LogLevel = "warn"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("symlinked tmp followed: victim now %q", b)
+	}
+	if b, _ := os.ReadFile(planted); string(b) != "planted" {
+		t.Fatalf("planted tmp reused: %q", b)
+	}
+	fi, err := os.Lstat(statePath)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || fi.Mode().Perm() != 0o640 {
+		t.Fatalf("state file %v %v", fi.Mode(), err)
+	}
+	if s2, err := Open(dir); err != nil || s2.GetSettings().LogLevel != "warn" {
+		t.Fatalf("reopen: %v", err)
+	}
+	// No temp file of ours is left behind.
+	m, _ := filepath.Glob(filepath.Join(dir, "uplink-state.json.*.tmp"))
+	if len(m) != 1 || m[0] != planted {
+		t.Fatalf("temp files left: %v", m)
+	}
+}
+
+func TestSymlinkedStateFileRefused(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere.json")
+	if err := os.WriteFile(target, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "uplink-state.json")
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("open accepted a symlinked state file")
+	}
+	// A symlink swapped in after open is refused at save too.
+	dir2 := t.TempDir()
+	s, err := Open(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir2, "uplink-state.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSettings(func(st *Settings) error { st.LogLevel = "warn"; return nil }); err == nil {
+		t.Fatal("save accepted a symlinked state file")
+	}
+	if b, _ := os.ReadFile(target); string(b) != `{"keys":[]}` {
+		t.Fatalf("target written: %q", b)
+	}
+}
