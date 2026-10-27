@@ -1690,8 +1690,8 @@ function settingTip(s) {
 }
 function settingNote(s) {
   if (s.scope === 'router') return 'router setting: set ' + s.env + ' in the router\u2019s .env and restart the router';
-  if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
   if (s.scope === 'env') return 'set in .env only (' + s.env + ')';
+  if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
   if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
   if (s.source === 'persisted') return 'saved';
   return 'default ' + settingText(s.default);
@@ -1771,7 +1771,10 @@ async function saveSetting(name, value, kind) {
   const msg = document.getElementById('settingsMsg');
   const body = value === null ? { name, reset: true } : { name, value: settingValue(value, kind || 'int') };
   try {
-    await api('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // Restart-scope rows need a fresh step-up (like import); live rows never ask.
+    const res = await stepUpFetch('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res) { msg.textContent = name + ' needs your password first.'; return; }
+    if (!res.ok) { msg.textContent = name + ': ' + ((await res.text()) || res.statusText); return; }
     msg.textContent = value === null ? name + ' reset' : name + ' saved';
     await loadSettings();
   } catch (e) {
@@ -1779,7 +1782,7 @@ async function saveSetting(name, value, kind) {
   }
 }
 // stepUpFetch is fetch for routes that need a fresh step-up (settings
-// export and import): on 401 step_up_required it asks once, then retries.
+// export, import and restart-scope saves): on 401 step_up_required it asks once, then retries.
 // null when cancelled or the session is gone.
 async function stepUpFetch(path, opts) {
   for (let attempt = 0; attempt < 2; attempt++) {

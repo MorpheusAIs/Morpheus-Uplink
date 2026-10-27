@@ -419,69 +419,67 @@ func TestSettingsImportPinnedListed(t *testing.T) {
 	}
 }
 
-// An http webPublicUrl needs UPLINK_DEV_HTTP: set and import refuse it
-// with DEV_HTTP off and accept it with DEV_HTTP on, and the restart view
-// agrees with what ApplyPersisted does at the next start.
-func TestSettingsWebPublicURLNeedsDevHTTP(t *testing.T) {
-	const origin = "http://localhost:9999"
-	set := `{"name":"webPublicUrl","value":"` + origin + `"}`
-	file := `{"format":"uplink-settings","version":1,"settings":{"webPublicUrl":"` + origin + `"}}`
-	nextStart := func(e *settingsEnv) (string, []string) {
-		c := *e.cfg
-		c.SettingNotes = nil
-		notes := config.ApplyPersisted(&c, e.st.GetSettings().All())
-		return c.WebPublicURL, notes
+// webPublicUrl (the admin origin anchor) and the two feed URLs are env-only:
+// a console set and an import are refused, and a value found in the
+// persisted file is ignored at boot and audited as setting_ignored.
+func TestSettingsEnvOnlyURLsRefused(t *testing.T) {
+	rows := map[string]string{
+		"webPublicUrl":    "https://console.example",
+		"activeModelsUrl": "https://feed.example/m.json",
+		"gatewayBidsUrl":  "https://feed.example/b.json",
 	}
+	e := newSettingsEnv(t, nil, rows)
+	if e.cfg.ActiveModelsURL != "https://active.mor.org/gateway_models.json" || e.cfg.GatewayBidsURL != "https://active.mor.org/gateway_bids.json" || e.cfg.WebPublicURL == rows["webPublicUrl"] {
+		t.Fatalf("a persisted env-only value was applied: %q %q %q", e.cfg.ActiveModelsURL, e.cfg.GatewayBidsURL, e.cfg.WebPublicURL)
+	}
+	ignored := strings.Join(e.audits("setting_ignored"), ";")
+	view := e.view(t)
+	for name, val := range rows {
+		if !strings.Contains(ignored, name) {
+			t.Errorf("%s: persisted value not audited as ignored: %q", name, ignored)
+		}
+		if r := view[name]; r.Settable || r.Scope != "env" || r.Value == val || r.PendingRestart {
+			t.Errorf("%s view %+v", name, r)
+		}
+		set := `{"name":"` + name + `","value":"` + val + `"}`
+		file := `{"format":"uplink-settings","version":1,"settings":{"` + name + `":"` + val + `"}}`
+		for path, body := range map[string]string{"/admin/settings": set, "/admin/settings/import": file} {
+			if code, msg := e.do(t, nil, "POST", path, body, nil); code != 400 || !strings.Contains(msg, name+" is set in .env only") {
+				t.Errorf("%s %s: %d %q", path, name, code, msg)
+			}
+		}
+		if code, _ := e.do(t, nil, "POST", "/admin/settings", `{"name":"`+name+`","reset":true}`, nil); code != 400 {
+			t.Errorf("reset %s: %d", name, code)
+		}
+	}
+	if len(e.audits("setting_change")) != 0 || len(e.audits("settings_import")) != 0 {
+		t.Fatal("a refused env-only write was audited as a change")
+	}
+}
 
+// A restart-scope single-row write needs a fresh step-up, like import;
+// a live row does not.
+func TestSettingsSetRestartNeedsStepUp(t *testing.T) {
 	e := newSettingsEnv(t, nil, nil)
-	running := e.cfg.WebPublicURL
-	for path, body := range map[string]string{"/admin/settings": set, "/admin/settings/import": file} {
-		if code, msg := e.do(t, nil, "POST", path, body, nil); code != 400 || !strings.Contains(msg, "http needs UPLINK_DEV_HTTP") {
-			t.Fatalf("%s with DEV_HTTP off: %d %q", path, code, msg)
+	e.clk.Advance(StepUpMaxAge + time.Minute)
+	for _, b := range []string{`{"name":"auditRetentionDays","value":1}`, `{"name":"sessionRelease","value":false}`, `{"name":"providerExclude","reset":true}`} {
+		if code, body := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 401 || strings.TrimSpace(body) != errMsgStepUp {
+			t.Errorf("%s stale: %d %s", b, code, body)
 		}
 	}
-	if _, ok := e.st.GetSettings().Value("webPublicUrl"); ok {
-		t.Fatal("a refused http origin was saved")
+	if _, ok := e.st.GetSettings().Value("auditRetentionDays"); ok {
+		t.Fatal("a stale-session write was saved")
 	}
-	// A value saved before this check (or by hand) is neither shown as the
-	// next-start value nor applied.
-	v := origin
-	if err := e.st.UpdateSettings(func(s *store.Settings) error { return s.SetValue("webPublicUrl", &v) }); err != nil {
-		t.Fatal(err)
+	if code, body := e.do(t, nil, "POST", "/admin/settings", `{"name":"forwardIdle","value":240}`, nil); code != 200 || e.srv.forwardIdle() != 240 {
+		t.Fatalf("live row without step-up: %d %s", code, body)
 	}
-	row := e.view(t)["webPublicUrl"]
-	got, notes := nextStart(e)
-	// (The harness sets the running origin to the test server, so the
-	// view's default "" differs from it; only the persisted value matters.)
-	if row.Source != "default" || row.Value != "" || got != running || len(notes) != 1 || !strings.Contains(notes[0], "webPublicUrl") {
-		t.Fatalf("DEV_HTTP off: view %+v, next start %q %v", row, got, notes)
+	if code, body := e.do(t, nil, "POST", "/admin/step-up", `{"password":"`+e.cfg.AdminPassword+`","code":""}`, nil); code != 200 {
+		t.Fatalf("step-up %d %s", code, body)
 	}
-
-	// DEV_HTTP on: the session cookie name changes, so log in again.
-	e.cfg.DevHTTP = true
-	code, c, _ := login(t, e.ts, e.cfg.AdminPassword, "")
-	if code != http.StatusOK {
-		t.Fatalf("login %d", code)
+	if code, body := e.do(t, nil, "POST", "/admin/settings", `{"name":"auditRetentionDays","value":120}`, nil); code != 200 {
+		t.Fatalf("after step-up: %d %s", code, body)
 	}
-	for path, body := range map[string]string{"/admin/settings": set, "/admin/settings/import": file} {
-		if code, msg := e.do(t, c, "POST", path, body, nil); code != 200 {
-			t.Fatalf("%s with DEV_HTTP on: %d %q", path, code, msg)
-		}
-	}
-	code, body := e.do(t, c, "GET", "/admin/settings", "", nil)
-	var resp struct {
-		Settings []settingView `json:"settings"`
-	}
-	if code != 200 || json.Unmarshal([]byte(body), &resp) != nil {
-		t.Fatalf("GET settings %d", code)
-	}
-	for _, r := range resp.Settings {
-		if r.Name == "webPublicUrl" {
-			row = r
-		}
-	}
-	got, notes = nextStart(e)
-	if row.Source != "persisted" || row.Value != origin || !row.PendingRestart || got != origin || len(notes) != 0 {
-		t.Fatalf("DEV_HTTP on: view %+v, next start %q %v", row, got, notes)
+	if v, _ := e.st.GetSettings().Value("auditRetentionDays"); v != "120" {
+		t.Fatalf("saved %q", v)
 	}
 }

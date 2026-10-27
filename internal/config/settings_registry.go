@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -16,11 +16,14 @@ import (
 //   - ScopeRouter: a proxy-router setting. The router reads it from its own
 //     environment (deploy/secretvm: the router_network_env config); Uplink
 //     cannot deliver a value to it, so the console shows it read-only.
-//   - ScopeEnvOnly: a security switch shown read-only; set in .env only.
+//   - ScopeEnvOnly: shown read-only; set in .env only (security switches,
+//     the console origin and the feed URLs).
 //
 // Group tags optional features so each can be dropped by deleting its rows
-// here: "release" (the session release endpoint). The settings code names no setting outside this table except the five live
-// ones it applies at once.
+// here: "release" (the session release endpoint).
+//
+// The settings code names no setting outside this table except the five
+// live ones it applies at once.
 type SettingKind string
 
 const (
@@ -103,15 +106,15 @@ var Settings = []SettingDef{
 	{Name: "housekeeping", Env: "HOUSEKEEPING", Kind: KindBool, Default: "true", Scope: ScopeRestart,
 		Help: "Post-midnight stake reclaim via the router API (true or false). Takes effect after an Uplink restart.", Consumer: "cmd/uplink housekeep.New",
 		get: func(c *Config) string { return btoa(c.Housekeeping) }, set: func(c *Config, v string) { c.Housekeeping = atob(v) }},
-	{Name: "activeModelsUrl", Env: "ACTIVE_MODELS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_models.json", Scope: ScopeRestart, check: validateFeedURL,
-		Help: "Model catalog feed (an https URL). Takes effect after an Uplink restart.", Consumer: "cmd/uplink catalog.New",
-		get: func(c *Config) string { return c.ActiveModelsURL }, set: func(c *Config, v string) { c.ActiveModelsURL = v }},
-	{Name: "gatewayBidsUrl", Env: "GATEWAY_BIDS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_bids.json", Scope: ScopeRestart, check: validateFeedURL,
-		Help: "Rated bids feed (an https URL). Takes effect after an Uplink restart.", Consumer: "cmd/uplink catalog.WithBidsURL",
-		get: func(c *Config) string { return c.GatewayBidsURL }, set: func(c *Config, v string) { c.GatewayBidsURL = v }},
-	{Name: "webPublicUrl", Env: "WEB_PUBLIC_URL", Kind: KindString, Default: "", Scope: ScopeRestart, check: validatePublicOrigin,
-		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only. Takes effect after an Uplink restart.", Consumer: "api CSRF and settings origin checks (Config.WebPublicURL)",
-		get: func(c *Config) string { return c.WebPublicURL }, set: func(c *Config, v string) { c.WebPublicURL = strings.TrimRight(v, "/") }},
+	{Name: "activeModelsUrl", Env: "ACTIVE_MODELS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_models.json", Scope: ScopeEnvOnly,
+		Help: "Model catalog feed (an https URL); it decides the model-id mapping. Set in .env only; takes effect after an Uplink restart.", Consumer: "cmd/uplink catalog.New",
+		get: func(c *Config) string { return c.ActiveModelsURL }},
+	{Name: "gatewayBidsUrl", Env: "GATEWAY_BIDS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_bids.json", Scope: ScopeEnvOnly,
+		Help: "Rated bids feed (an https URL). Informational: Uplink stores it but does not fetch it today, so it has no effect. Set in .env only.", Consumer: "cmd/uplink catalog.WithBidsURL (stored, not fetched)",
+		get: func(c *Config) string { return c.GatewayBidsURL }},
+	{Name: "webPublicUrl", Env: "WEB_PUBLIC_URL", Kind: KindString, Default: "", Scope: ScopeEnvOnly,
+		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only. Set in .env only; takes effect after an Uplink restart.", Consumer: "api CSRF and settings origin checks (Config.WebPublicURL)",
+		get: func(c *Config) string { return c.WebPublicURL }},
 
 	{Name: "masterKeyAdmin", Env: "MASTER_KEY_ADMIN", Kind: KindBool, Default: "false", Scope: ScopeEnvOnly,
 		Help: "Lets the master API key call /admin (true or false). Security switch: set in .env only; takes effect after an Uplink restart.", Consumer: "api requireAdmin (Config.MasterKeyAdmin)",
@@ -233,32 +236,27 @@ func (d SettingDef) envPins(v string) bool {
 	return err == nil
 }
 
-// ValidateFor is Validate plus the checks that depend on the running
-// config: an http webPublicUrl needs UPLINK_DEV_HTTP. The console set,
-// import, the restart view and ApplyPersisted all use it, so a value is
-// accepted only if it will apply at the next start.
-func (d SettingDef) ValidateFor(c *Config, v string) (string, error) {
-	v, err := d.Validate(v)
-	if err != nil {
-		return "", err
-	}
-	if d.Name == "webPublicUrl" && !c.DevHTTP && strings.HasPrefix(strings.ToLower(v), "http://") {
-		return "", fmt.Errorf("http needs UPLINK_DEV_HTTP")
-	}
-	return v, nil
-}
-
 // ApplyPersisted applies persisted ScopeRestart values (by console name)
 // that the environment does not pin. A value that no longer validates is
-// skipped; the returned notes (names only) go to the ops audit stream.
+// skipped, and so is a persisted value for an env-only or router row
+// (never applied from the file); the returned notes (names only) go to the
+// ops audit stream.
 func ApplyPersisted(c *Config, vals map[string]string) []string {
 	var notes []string
 	for _, d := range Settings {
 		raw, ok := vals[d.Name]
-		if !ok || d.Scope != ScopeRestart || c.EnvPinned[d.Env] {
+		if !ok {
 			continue
 		}
-		v, err := d.ValidateFor(c, raw)
+		if d.Scope == ScopeEnvOnly || d.Scope == ScopeRouter {
+			warnf("config: persisted %s is not a console setting; ignored", d.Name)
+			notes = append(notes, d.Name+" is set in .env only; persisted value ignored")
+			continue
+		}
+		if d.Scope != ScopeRestart || c.EnvPinned[d.Env] {
+			continue
+		}
+		v, err := d.Validate(raw)
 		if err != nil {
 			warnf("config: persisted %s is invalid; ignored", d.Name)
 			notes = append(notes, d.Name+" persisted value invalid; ignored")
@@ -268,33 +266,6 @@ func ApplyPersisted(c *Config, vals map[string]string) []string {
 	}
 	c.SettingNotes = append(c.SettingNotes, notes...)
 	return notes
-}
-
-func validateFeedURL(v string) error {
-	u, err := url.Parse(v)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
-		return fmt.Errorf("must be an https URL")
-	}
-	return nil
-}
-
-func validatePublicOrigin(v string) error {
-	if v == "" {
-		return nil
-	}
-	u, err := url.Parse(strings.TrimRight(v, "/"))
-	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("must be https://host[:port]")
-	}
-	switch u.Scheme {
-	case "https":
-		return nil
-	case "http":
-		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" {
-			return nil
-		}
-	}
-	return fmt.Errorf("must be https://host[:port] (http only for localhost)")
 }
 
 // ValidateProviderExclude is ParseProviderExclude without the forgiveness:
@@ -325,7 +296,7 @@ func FormatProviderExclude(m map[string][]string) string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sortStrings(keys)
+	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, k+"="+strings.Join(m[k], ","))

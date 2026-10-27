@@ -165,10 +165,12 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   number field, list or text field, with its default. The tooltip gives
   the range or values and says whether it applies at once or after an
   Uplink or router restart. **Save** stores it in `DATA_DIR`; **Reset**
-  returns to the default.
+  returns to the default. Saving a setting that applies after an Uplink
+  restart asks for the password (and 2FA code) again, like key export.
 - A value set in `.env` wins and is read-only, with a note to remove it
-  from `.env` to manage it here. Router settings and `MASTER_KEY_ADMIN`
-  are read-only (set in `.env`).
+  from `.env` to manage it here. Router settings, `MASTER_KEY_ADMIN`,
+  `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are
+  read-only (set in `.env`).
 - `sessionRelease` turns the apps' session release
   (`POST /v1/sessions/release`) on or off.
 - **Export settings** / **Import settings** download or load a settings

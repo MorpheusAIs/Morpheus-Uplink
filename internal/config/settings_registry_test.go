@@ -54,9 +54,9 @@ func TestSettingsRegistryTable(t *testing.T) {
 		{"sessionRelease", "UPLINK_SESSION_RELEASE", KindBool, "true", 0, 0, ScopeRestart, "release"},
 		{"auditRetentionDays", "AUDIT_RETENTION_DAYS", KindInt, "90", 1, 3650, ScopeRestart, ""},
 		{"housekeeping", "HOUSEKEEPING", KindBool, "true", 0, 0, ScopeRestart, ""},
-		{"activeModelsUrl", "ACTIVE_MODELS_URL", KindString, "https://active.mor.org/gateway_models.json", 0, 0, ScopeRestart, ""},
-		{"gatewayBidsUrl", "GATEWAY_BIDS_URL", KindString, "https://active.mor.org/gateway_bids.json", 0, 0, ScopeRestart, ""},
-		{"webPublicUrl", "WEB_PUBLIC_URL", KindString, "", 0, 0, ScopeRestart, ""},
+		{"activeModelsUrl", "ACTIVE_MODELS_URL", KindString, "https://active.mor.org/gateway_models.json", 0, 0, ScopeEnvOnly, ""},
+		{"gatewayBidsUrl", "GATEWAY_BIDS_URL", KindString, "https://active.mor.org/gateway_bids.json", 0, 0, ScopeEnvOnly, ""},
+		{"webPublicUrl", "WEB_PUBLIC_URL", KindString, "", 0, 0, ScopeEnvOnly, ""},
 		{"masterKeyAdmin", "MASTER_KEY_ADMIN", KindBool, "false", 0, 0, ScopeEnvOnly, ""},
 		{"proxyStoreChatContext", "PROXY_STORE_CHAT_CONTEXT", KindBool, "false", 0, 0, ScopeRouter, ""},
 		{"proxyForwardChatContext", "PROXY_FORWARD_CHAT_CONTEXT", KindBool, "false", 0, 0, ScopeRouter, ""},
@@ -191,7 +191,8 @@ func TestSettingsEnvPins(t *testing.T) {
 }
 
 // Restart-scope values persisted in the console reach Config at boot
-// unless the environment pins them; an invalid one is skipped with a note.
+// unless the environment pins them; an invalid one is skipped with a note,
+// and so is any persisted env-only or router row (even a valid value).
 func TestApplyPersisted(t *testing.T) {
 	clearSettingEnv(t)
 	t.Setenv("AUDIT_RETENTION_DAYS", "5")
@@ -201,20 +202,27 @@ func TestApplyPersisted(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 	notes := ApplyPersisted(c, map[string]string{
 		"sessionRelease": "false", "auditRetentionDays": "400", "sessionFailover": "false", "housekeeping": "false",
-		"providerCooldown": "999999", "activeModelsUrl": "https://feed.example/m.json",
+		"providerCooldown": "999999", "activeModelsUrl": "https://feed.example/m.json", "gatewayBidsUrl": "https://feed.example/b.json",
+		"masterKeyAdmin": "true", "routerLogLevelTcp": "debug",
 		"providerExclude": "m1=0x" + strings.Repeat("a", 40),
 		"forwardIdle":     "60", // live: applied by the API server, not here
-		"webPublicUrl":    "http://console.example",
+		"webPublicUrl":    "https://console.example",
 	})
-	if c.SessionRelease || c.AuditRetentionDays != 5 || c.SessionFailover || c.Housekeeping ||
-		c.ActiveModelsURL != "https://feed.example/m.json" || len(c.ProviderExclude["m1"]) != 1 {
+	if c.SessionRelease || c.AuditRetentionDays != 5 || c.SessionFailover || c.Housekeeping || len(c.ProviderExclude["m1"]) != 1 {
 		t.Fatalf("persisted values not applied: %+v", c)
 	}
-	if c.ProviderCooldownSec != 600 || c.ForwardIdleSec != 180 || c.WebPublicURL != "" {
-		t.Fatalf("invalid or live values applied: cooldown %d fwd %d web %q", c.ProviderCooldownSec, c.ForwardIdleSec, c.WebPublicURL)
+	if c.ProviderCooldownSec != 600 || c.ForwardIdleSec != 180 || c.WebPublicURL != "" || c.MasterKeyAdmin ||
+		c.ActiveModelsURL != "https://active.mor.org/gateway_models.json" || c.GatewayBidsURL != "https://active.mor.org/gateway_bids.json" {
+		t.Fatalf("invalid, live or env-only values applied: %+v", c)
 	}
-	if len(notes) != 2 || !strings.Contains(strings.Join(notes, ";"), "providerCooldown") {
+	all := strings.Join(notes, ";")
+	if len(notes) != 6 {
 		t.Fatalf("notes %v", notes)
+	}
+	for _, n := range []string{"providerCooldown", "activeModelsUrl", "gatewayBidsUrl", "webPublicUrl", "masterKeyAdmin", "routerLogLevelTcp"} {
+		if !strings.Contains(all, n) {
+			t.Errorf("no note for %s: %v", n, notes)
+		}
 	}
 }
 

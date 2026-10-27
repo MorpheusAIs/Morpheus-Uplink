@@ -636,11 +636,12 @@ renderSettings([
   { name: 'forwardIdle', kind: 'int', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
   { name: 'logLevel', kind: 'enum', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false, settable: true, scope: 'live', help: 'Log level.' },
   { name: 'sessionFailover', kind: 'bool', value: false, default: true, source: 'persisted', env: 'SESSION_FAILOVER', pinned: false, settable: true, scope: 'restart', restart: 'uplink', pendingRestart: true, effective: true, help: 'Fail over (true or false). Takes effect after an Uplink restart.' },
-  { name: 'activeModelsUrl', kind: 'string', value: 'https://a.example/m.json', default: 'https://a.example/m.json', source: 'default', env: 'ACTIVE_MODELS_URL', pinned: false, settable: true, scope: 'restart', help: 'Feed.' },
+  { name: 'providerExclude', kind: 'string', value: 'm1=0xabc', default: '', source: 'persisted', env: 'UPLINK_PROVIDER_EXCLUDE', pinned: false, settable: true, scope: 'restart', help: 'Excluded providers.' },
   { name: 'routerLogLevelApp', kind: 'enum', value: null, default: 'warn', options: ['debug', 'warn'], source: 'router', env: 'LOG_LEVEL_APP', pinned: false, settable: false, scope: 'router', help: 'Router log level. Router setting: change it in the router\u2019s .env and restart the router.' },
   { name: 'masterKeyAdmin', kind: 'bool', value: false, default: false, source: 'default', env: 'MASTER_KEY_ADMIN', pinned: false, settable: false, scope: 'env', help: 'Security switch.' },
+  { name: 'webPublicUrl', kind: 'string', value: 'https://console.example', default: '', source: 'env', env: 'WEB_PUBLIC_URL', pinned: true, settable: false, scope: 'env', help: 'Console origin. Set in .env only.' },
 ]);
-const [pinned, free, bool, str, router, envOnly] = box.children;
+const [pinned, free, bool, str, router, envOnly, envOnlySet] = box.children;
 const ctl = (row) => row.children.find((c) => c.id && c.id.startsWith('setting-'));
 const note = (row) => row.children[row.children.length - 1].textContent;
 const buttons = (row) => row.children.filter((c) => c.tag === 'button').length;
@@ -652,16 +653,18 @@ if (!tipOf(pinned).includes('30–600') || !tipOf(pinned).includes('Default: 180
 if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || buttons(free) !== 2) fail('enum select with Save and Reset');
 if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false || buttons(bool) !== 2) fail('bool must be a switch');
 if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
-if (ctl(str).type !== 'text' || ctl(str).value !== 'https://a.example/m.json') fail('string must be a text field');
+if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
 if (!ctl(router).disabled || buttons(router) || !note(router).includes('router') || !tipOf(router).includes('restart the router')) fail('router row must be read-only with the router note');
 if (!ctl(envOnly).disabled || buttons(envOnly) || !note(envOnly).includes('.env only')) fail('env-only row must be read-only');
+if (!ctl(envOnlySet).disabled || buttons(envOnlySet) || note(envOnlySet) !== 'set in .env only (WEB_PUBLIC_URL)') fail('env-only row set in .env must say .env only, not "remove it": ' + note(envOnlySet));
+if (!/stepUpFetch\('\/admin\/settings'/.test(extract('saveSetting')) || /\bapi\('\/admin\/settings'/.test(extract('saveSetting'))) fail('a single-setting save must use the step-up retry');
 if (settingValue('64', 'int') !== 64 || settingValue(true, 'bool') !== true || settingValue('x', 'string') !== 'x') fail('typed values');
 if (!html.includes('data-tab="settings"') || !html.includes('id="tab-settings"')) fail('Settings must be its own tab');
 const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-keys"'));
 if (sec.includes('settingsList')) fail('settings must leave the Security tab');
 if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
 if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
-console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, env/router/env-only rows read-only, export/import behind step-up');
+console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, env/router/env-only rows read-only, saves, export and import behind step-up');
 NODE
 
 # Sessions page: per-session lease state (opened, ends, in flight, holders)

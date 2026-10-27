@@ -322,7 +322,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | Var | Default | Purpose |
 |---|---|---|
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
-| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (stored, not fetched today; not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | `600` | Default session length (stake scales), 600…86400; above `UPLINK_SESSION_DURATION_MAX` it is clamped down to the max |
 | `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
 | `UPLINK_PROVIDER_EXCLUDE` | (empty) | Providers never opened for a model: `<model>=<provider>[,<provider>]…`, entries separated by `;`; model is an id or a catalog name ([Provider failover](#provider-failover)). Bad entries are warned and ignored |
@@ -710,9 +710,9 @@ enrolment gate applies as on other admin routes.
 | `sessionRelease` | `UPLINK_SESSION_RELEASE` | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
 | `auditRetentionDays` | `AUDIT_RETENTION_DAYS` | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
 | `housekeeping` | `HOUSEKEEPING` | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
-| `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | text | `https://active.mor.org/gateway_models.json` | Uplink restart | cmd/uplink catalog.New |
-| `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | text | `https://active.mor.org/gateway_bids.json` | Uplink restart | cmd/uplink catalog.WithBidsURL |
-| `webPublicUrl` | `WEB_PUBLIC_URL` | string | text | (empty) | Uplink restart | api CSRF and settings origin checks (Config.WebPublicURL) |
+| `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | https URL | `https://active.mor.org/gateway_models.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.New |
+| `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | https URL | `https://active.mor.org/gateway_bids.json` | .env (read-only; no effect today) | cmd/uplink catalog.WithBidsURL (stored, not fetched) |
+| `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF and settings origin checks (Config.WebPublicURL) |
 | `masterKeyAdmin` | `MASTER_KEY_ADMIN` | bool | `true` `false` | `false` | .env + Uplink restart (read-only) | api requireAdmin (Config.MasterKeyAdmin) |
 | `proxyStoreChatContext` | `PROXY_STORE_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
 | `proxyForwardChatContext` | `PROXY_FORWARD_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
@@ -733,15 +733,22 @@ enrolment gate applies as on other admin routes.
   then). Router rows: the router reads them from its own environment
   (`router_network_env` in the SecretVM compose); Uplink cannot deliver a
   value, so they are read-only and show the deployed defaults.
-  `MASTER_KEY_ADMIN` is a security switch: read-only, `.env` only.
+  `.env`-only rows are read-only and show the running value:
+  `MASTER_KEY_ADMIN` (a security switch), `WEB_PUBLIC_URL` (the origin the
+  admin CSRF check is anchored to), `ACTIVE_MODELS_URL` (the catalog feed,
+  which decides the model-id mapping) and `GATEWAY_BIDS_URL` (stored but
+  not fetched today, so it has no effect).
 - *Saving.* `POST {"name":"forwardIdle","value":240}` or
   `{"name":"forwardIdle","reset":true}` (one JSON object, body ≤ 1 KiB;
-  unknown fields or trailing data → `400`). Values are checked against the
+  unknown fields or trailing data → `400`). Saving or resetting an
+  "Uplink restart" row needs a fresh login or step-up, like import
+  (`401` `step_up_required` otherwise); "at once" rows do not. Values are checked against the
   ranges above, and the default may not exceed the max (`400`). The max
   always wins: at boot a default above the max (from env or saved) is
   clamped down to it with a warning, and every session open is capped at
-  the max. A saved value ignored at boot (invalid) is logged by name and
-  written to the ops audit stream as `setting_ignored`.
+  the max. A saved value ignored at boot (invalid, or a router or
+  `.env`-only row found in the state file) is logged by name and written
+  to the ops audit stream as `setting_ignored`.
 - *Storage.* Settings are saved in `DATA_DIR` beside the 2FA state in
   `uplink-state.json` (a fresh temp file in the same directory, fsync,
   rename, directory fsync; mode 0640; a symlinked state file is refused; at boot, temp files a crash left behind, regular files named `uplink-state.json.<digits>.tmp` directly in `DATA_DIR` whose mtime is at least 10 minutes old (a younger one may be a live save by another process sharing `DATA_DIR`), are removed, and symlinks or anything else are left alone).
@@ -762,7 +769,8 @@ enrolment gate applies as on other admin routes.
   logs only: the audit mirror on stdout is pinned at `info`, so `warn` or
   `error` never hides an audit line.
 - *Not settable:* the admin session timeouts (fixed 4 h idle, 12 h
-  absolute), `MASTER_KEY_ADMIN`, the router settings, and every secret.
+  absolute), `MASTER_KEY_ADMIN`, `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL`,
+  `GATEWAY_BIDS_URL`, the router settings, and every secret.
 
 ## CI/CD and versioning
 

@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 )
-
-func sortStrings(s []string) { sort.Strings(s) }
 
 type Config struct {
 	// Listen address for the gateway, e.g. ":8080".

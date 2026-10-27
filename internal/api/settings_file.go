@@ -58,7 +58,7 @@ func (s *Server) restartValue(d config.SettingDef, st store.Settings) (string, s
 		return d.Effective(s.cfg), "env"
 	}
 	if raw, ok := st.Value(d.Name); ok {
-		if v, err := d.ValidateFor(s.cfg, raw); err == nil {
+		if v, err := d.Validate(raw); err == nil {
 			return v, "persisted"
 		}
 	}
@@ -143,11 +143,15 @@ func registryLookup(name string) (config.SettingDef, int, string) {
 }
 
 // handleRegistrySet sets or resets one restart-scope setting. It is stored
-// now and read on the next Uplink start.
+// now and read on the next Uplink start. Like import, it needs a fresh
+// step-up.
 func (s *Server) handleRegistrySet(w http.ResponseWriter, r *http.Request, name string, raw json.RawMessage, reset bool) {
 	d, code, msg := registryLookup(name)
 	if code != 0 {
 		http.Error(w, msg, code)
+		return
+	}
+	if !s.requireStepUp(w, r) {
 		return
 	}
 	var val *string
@@ -157,7 +161,7 @@ func (s *Server) handleRegistrySet(w http.ResponseWriter, r *http.Request, name 
 			http.Error(w, "invalid value", http.StatusBadRequest)
 			return
 		}
-		v, err := d.ValidateFor(s.cfg, t)
+		v, err := d.Validate(t)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -287,7 +291,7 @@ func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, d.Name+": invalid value", http.StatusBadRequest)
 			return
 		}
-		v, err := d.ValidateFor(s.cfg, t)
+		v, err := d.Validate(t)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
