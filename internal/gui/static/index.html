@@ -4102,7 +4102,7 @@ function enterUiPreview() {
   liquidWei = String(135864n * 10n ** 14n); // 13.5864 MOR
   const ethWei = String(374n * 10n ** 13n); // 0.00374 ETH
   setHeaderBalances(liquidWei, ethWei);
-  renderSysLine('v1.0.15', 'v7.15.0', { ok: true, text: UI_COPY.healthy }, 0);
+  renderSysLine('v1.0.15', 'v7.17.0', { ok: true, text: UI_COPY.healthy }, 0);
   const nextMidnight = new Date(); nextMidnight.setUTCHours(24, 0, 0, 0);
   renderMorTiles({
     walletWei: liquidWei, activeWei: '0', onHoldWei: String(3636n * 10n ** 14n),

@@ -2,7 +2,7 @@
 # Require the pinned Lumerin router digest on every compose template.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WANT='ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4'
+WANT='ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d'
 bad=0
 for f in "$ROOT"/deploy/*/docker-compose.yml "$ROOT"/docker-compose.local.yml; do
   [ -f "$f" ] || continue
@@ -10,8 +10,8 @@ for f in "$ROOT"/deploy/*/docker-compose.yml "$ROOT"/docker-compose.local.yml; d
     echo "Missing router digest pin in $f"
     bad=1
   fi
-  # No unpinned :v7.15.0 without digest
-  if grep -nE 'morpheus-lumerin-node:v7\.15\.0(["[:space:]]|$)' "$f" | grep -v '@sha256:'; then
+  # No unpinned :v7.17.0 without digest
+  if grep -nE 'morpheus-lumerin-node:v7\.17\.0(["[:space:]]|$)' "$f" | grep -v '@sha256:'; then
     echo "Unpinned router tag in $f"
     bad=1
   fi

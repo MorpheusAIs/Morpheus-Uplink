@@ -62,8 +62,8 @@ wait_for() {
   fail "timed out waiting for: $desc"
 }
 
-pin=$(sed -n 's/^ *image: *\(ghcr.io\/morpheusais\/morpheus-lumerin-node:v7\.15\.0@sha256:[0-9a-f]\{64\}\).*/\1/p' deploy/secretvm/docker-compose.yml)
-[ -n "$pin" ] || fail "router image is not the pinned v7.15.0 digest"
+pin=$(sed -n 's/^ *image: *\(ghcr.io\/morpheusais\/morpheus-lumerin-node:v7\.17\.0@sha256:[0-9a-f]\{64\}\).*/\1/p' deploy/secretvm/docker-compose.yml)
+[ -n "$pin" ] || fail "router image is not the pinned v7.17.0 digest"
 echo "router image: $pin"
 
 echo "== up =="

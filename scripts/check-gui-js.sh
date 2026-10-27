@@ -274,9 +274,9 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (T.statusHealth({}).text !== 'Healthy') fail('healthy');
   if (T.statusHealth({ routerError: 'x' }).text !== T.UI_COPY.routerDown) fail('router down reason');
   if (T.statusHealth({ routerAuth: { ok: false } }).text !== T.UI_COPY.routerAuthFail) fail('router auth reason');
-  T.renderSysLine('1.0.15', '7.15.0', T.statusHealth({}), 0);
+  T.renderSysLine('1.0.15', '7.17.0', T.statusHealth({}), 0);
   const line = els.stats.innerHTML.replace(/<[^>]+>/g, '');
-  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.15.0') fail('status line: ' + line);
+  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.17.0') fail('status line: ' + line);
 
   // Model dropdown: name + lock, no hash; copy copies the full ID.
   const ID = '0x' + 'ab'.repeat(32);

@@ -2,7 +2,7 @@
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.15.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.17.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -22,7 +22,7 @@ Railway does not run compose, so use them as the reference: copy the image
 digests and variables into the Railway services instead of `:latest`.
 Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.15.0@sha256:c52e9f12725d7c85e09eec11e0c06ae2b0970d12d1c770dc4daa4cc66f961ea4`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d`
 
 ## Services
 
@@ -65,7 +65,7 @@ under `docker compose`.
 
 Railway applies neither the compose `${VAR:-default}` defaults nor its
 literal values. An unset variable takes the process's own default (Uplink
-code, Uplink image, or stock router v7.15.0):
+code, Uplink image, or stock router v7.17.0):
 
 | Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
 |---|---|---|---|
@@ -115,7 +115,7 @@ cross-replica wallet lock on the stock router).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.15.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.17.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -139,7 +139,7 @@ set them as `proxy-router` service variables:
   (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.15.0 digest until verified.
+privacy on the pinned v7.17.0 digest until verified.
 
 ## M1 / keep list
 
