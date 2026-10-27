@@ -3,6 +3,8 @@ package api
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -428,10 +430,11 @@ func TestS4BidsUnreadableFallback(t *testing.T) {
 	}
 }
 
-// Security gate SHOULD-1: a name-keyed exclusion must not fail open when
-// the catalog has no name for the id (cold boot, model feed down, client
-// sends the raw 0x id): the open is refused with 503 and no ids until the
-// name resolves; then the exclusion applies.
+// Security gate SHOULD-1 and the console-warning NIT: a name-keyed
+// exclusion must not fail open when the catalog has no name for the id
+// (cold boot, model feed down, client sends the raw 0x id). The open is
+// refused with 503 and no ids until the name resolves, the status reports
+// the refusal while it lasts, and then the exclusion applies.
 func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
 	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
 	var feedUp atomic.Bool
@@ -467,9 +470,28 @@ func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
 	if opens, _ := m.snapshot(); len(opens) != 0 {
 		t.Fatalf("feed down: opened %+v", opens)
 	}
+	// The console status reports the refusal (a count, no ids) while it lasts.
+	unresolved := func() string {
+		t.Helper()
+		code, body := e.admin(t, "GET", "/admin/status", "")
+		if code != 200 {
+			t.Fatalf("status %d", code)
+		}
+		var st map[string]any
+		if err := json.Unmarshal([]byte(body), &st); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprint(st["exclusionsUnresolved"])
+	}
+	if n := unresolved(); n != "1" {
+		t.Fatalf("status exclusionsUnresolved=%s while refusing, want 1", n)
+	}
 	feedUp.Store(true)
 	if code, body := chatID(); code != 200 {
 		t.Fatalf("feed up: %d %s", code, body)
+	}
+	if n := unresolved(); n != "0" {
+		t.Fatalf("status exclusionsUnresolved=%s after the name resolved, want 0", n)
 	}
 	for _, o := range func() []openRec { o, _ := m.snapshot(); return o }() {
 		if o.provider == a40 {

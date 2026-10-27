@@ -566,6 +566,35 @@ if (html.indexOf('id="originWarn"') < 0 || html.indexOf('id="originWarn"') > htm
 console.log('OK: Status warns when the page origin is not WEB_PUBLIC_URL');
 NODE
 
+# Status warns while name-keyed provider exclusions refuse opens (text only).
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function fn(name) {
+  const m = new RegExp('^function\\s+' + name + '\\s*\\(', 'm').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  return src.slice(m.index, src.indexOf('\n}', m.index) + 2);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const ui = /const UI_COPY = \{[\s\S]*?\n\};/.exec(src);
+if (!ui) fail('UI_COPY not found');
+const el = { textContent: '', classList: { _h: true, toggle(c, on) { this._h = on; } } };
+global.document = { getElementById: (id) => (id === 'exclusionsWarn' ? el : null) };
+eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['exclusionsWarning', 'renderExclusionsWarn'].map(fn).join('\n')
+  + '\nObject.assign(global, { exclusionsWarning, renderExclusionsWarn });');
+if (exclusionsWarning({}) !== '' || exclusionsWarning({ exclusionsUnresolved: 0 }) !== '') fail('no warning without refusals');
+const w = exclusionsWarning({ exclusionsUnresolved: 2 });
+if (!w.includes('2 models') || !w.includes('UPLINK_PROVIDER_EXCLUDE') || /0x/.test(w)) fail('warning text: ' + w);
+renderExclusionsWarn({ exclusionsUnresolved: 1 });
+if (el.classList._h || !el.textContent.includes('1 model')) fail('exclusions warning not shown');
+renderExclusionsWarn({ exclusionsUnresolved: 0 });
+if (!el.classList._h || el.textContent) fail('exclusions warning not cleared');
+if (html.indexOf('id="exclusionsWarn"') < 0 || html.indexOf('id="exclusionsWarn"') > html.indexOf('id="connectClient"')) fail('exclusionsWarn must be on the Status overview');
+if (!/renderExclusionsWarn\(st\);/.test(src)) fail('status refresh must render the exclusions warning');
+console.log('OK: Status warns while name-keyed provider exclusions refuse opens');
+NODE
+
 # API Keys has no reveal button; copy and Export all fetch the full keys.
 if grep -qE 'Reveal full keys|Masked by default|refreshKeys\(true' "$HTML"; then
   echo "FAIL: API Keys still has the reveal button or its note" >&2; exit 1

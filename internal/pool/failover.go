@@ -112,7 +112,43 @@ func (p *Pool) SetProviderExclude(m map[string][]string, namer func(string) stri
 	}
 	p.fmu.Lock()
 	p.exclude, p.namer, p.excludeByName = ex, namer, nameKeyed
+	p.unresolvedRefused = nil
 	p.fmu.Unlock()
+}
+
+// noteUnresolvedRefusal records that an open for the model was refused
+// because its name-keyed exclusions could not be resolved.
+func (p *Pool) noteUnresolvedRefusal(modelID string) {
+	p.fmu.Lock()
+	if p.unresolvedRefused == nil {
+		p.unresolvedRefused = map[string]bool{}
+	}
+	p.unresolvedRefused[normModel(modelID)] = true
+	p.fmu.Unlock()
+}
+
+// UnresolvedExclusionRefusals is the number of models whose opens are
+// being refused because name-keyed exclusions cannot be resolved for
+// them; models whose name has since resolved are dropped. The console
+// shows a warning while it is non-zero.
+func (p *Pool) UnresolvedExclusionRefusals() int {
+	p.fmu.Lock()
+	ids := make([]string, 0, len(p.unresolvedRefused))
+	for id := range p.unresolvedRefused {
+		ids = append(ids, id)
+	}
+	p.fmu.Unlock()
+	n := 0
+	for _, id := range ids {
+		if p.exclusionsUnresolved(id) {
+			n++
+			continue
+		}
+		p.fmu.Lock()
+		delete(p.unresolvedRefused, id)
+		p.fmu.Unlock()
+	}
+	return n
 }
 
 // exclusionsUnresolved is true when some exclusions are keyed by catalog
@@ -372,6 +408,7 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		return id, prov, nil
 	}
 	if p.exclusionsUnresolved(modelID) {
+		p.noteUnresolvedRefusal(modelID)
 		warnf("pool: model %s has no catalog name and name-keyed provider exclusions are set; not opening", modelID)
 		return "", "", ErrNoEligibleProvider
 	}
@@ -528,6 +565,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	// closing anything (and keep the session when the exclusions cannot
 	// be resolved for this model).
 	if p.exclusionsUnresolved(modelID) {
+		p.noteUnresolvedRefusal(modelID)
 		return res, fmt.Errorf("%w (provider exclusions unresolved: no catalog name)", ErrNoAlternate)
 	}
 	exclude := p.avoidSet(modelID)

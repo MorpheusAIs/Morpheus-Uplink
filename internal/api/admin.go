@@ -190,6 +190,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if msg := s.pool.RehydrateError(); msg != "" {
 		status["sessionsError"] = msg
 	}
+	// Models refused because name-keyed provider exclusions cannot be
+	// resolved yet (the GUI warns while non-zero). A count only.
+	status["exclusionsUnresolved"] = s.pool.UnresolvedExclusionRefusals()
 	if health, err := s.router.Healthcheck(); err == nil {
 		status["router"] = health
 	} else {

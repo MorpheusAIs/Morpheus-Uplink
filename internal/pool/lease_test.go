@@ -763,6 +763,13 @@ func TestNameKeyedExclusionUnresolved(t *testing.T) {
 	if lr.closedCount(r.SessionID) != 0 {
 		t.Fatal("failover closed the session")
 	}
+	if n := p.UnresolvedExclusionRefusals(); n != 2 {
+		t.Fatalf("refusals while unresolved = %d, want 2", n)
+	}
+	p.SetProviderExclude(map[string][]string{"some-model": {leaseProv1}}, func(string) string { return "some-model" })
+	if n := p.UnresolvedExclusionRefusals(); n != 0 {
+		t.Fatalf("refusals after resolving = %d, want 0", n)
+	}
 	// Id-keyed exclusions alone never need the name.
 	p.SetProviderExclude(map[string][]string{modelC: {leaseProv2}}, func(string) string { return "" })
 	if l, _, err := p.Acquire(modelC, AcquireOpts{KeyID: "k1"}); err != nil {

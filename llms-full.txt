@@ -1829,7 +1829,8 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   catalog has no name for the requested id (for example the model feed is
   down at boot and the client sends the `0x` id), opens for that model are
   refused with `503` `no_eligible_provider`, failover keeps the session,
-  and on-chain sessions are not adopted, until the name resolves. Entries
+  and on-chain sessions are not adopted, until the name resolves; the
+  console Status page shows a warning while that refusal lasts. Entries
   keyed by model id never need the catalog.
   Bad entries are logged by position and ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,

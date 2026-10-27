@@ -52,6 +52,9 @@ type Pool struct {
 	namer   func(modelID string) string
 	// excludeByName: some exclusions are keyed by catalog name.
 	excludeByName bool
+	// unresolvedRefused: models whose opens were refused because their
+	// name-keyed exclusions could not be resolved (for the console).
+	unresolvedRefused map[string]bool
 
 	// Leases and long-session limits (lease.go), under mu.
 	sess            map[string]*sessState // session id -> lease state
