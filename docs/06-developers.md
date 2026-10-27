@@ -12,14 +12,19 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 
 | Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`, `/node/*`) |
 |---|---|---|---|
-| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA |
+| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA, except the session-only routes below |
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
 GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
 code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
 is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
-token only when `MASTER_KEY_ADMIN=true` (default off).
+token only when `MASTER_KEY_ADMIN=true` (default off); each such request
+writes an `admin_key_use` audit record. The session-only routes
+`POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`
+and `POST /admin/2fa/enroll/confirm` require the admin cookie session: any
+Bearer token there, the Master key included, gets 401 whatever
+`MASTER_KEY_ADMIN` says.
 
 ### Admin 2FA and recovery codes
 

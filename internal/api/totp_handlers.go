@@ -13,18 +13,18 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
-// requireSession is cookie+CSRF without the enrollment gate (for enroll).
+// requireSession is cookie+CSRF without the enrollment gate (for logout,
+// 2FA status and enroll). These routes need an admin cookie session: any
+// Authorization header (Basic or Bearer, including the master key with
+// MASTER_KEY_ADMIN=true) gets the same 401 as an unauthenticated request.
+// requireAdmin keeps the MASTER_KEY_ADMIN Bearer path and its audit record.
 func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := r.BasicAuth(); ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-			if s.cfg.MasterKeyAdmin && keymakerEqual(token, s.masterKey) {
-				next(w, r)
-				return
-			}
+		if _, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

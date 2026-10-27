@@ -108,7 +108,8 @@ There is no separate docs host or MCP for Uplink.
    agents at `active_models.json` / ALL.
 
 10. **Key roles:** Master (`sk-uplink.…`) = inference, plus admin only with
-    `MASTER_KEY_ADMIN=true` (default off); Prompt
+    `MASTER_KEY_ADMIN=true` (default off; never on logout or 2FA
+    status/enroll, which need the admin cookie session); Prompt
     (`sk-prompt.…`) = inference only (default for clients); ephemeral =
     named, export/import across wipes. Built-ins derive from `API_KEY_SEED`.
 
@@ -892,7 +893,7 @@ One topic at a time. You do not need every section on day one.
 
 | Kind | Survives a fresh deploy / volume wipe? | Role |
 |------|---------------------------|------|
-| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off) |
+| **Master** | Yes (`API_KEY_SEED`) | Inference; admin API only with `MASTER_KEY_ADMIN=true` (default off), never on logout or 2FA status/enroll (cookie session only) |
 | **Prompt** | Yes (`API_KEY_SEED`) | Inference only — default for clients |
 | **Ephemeral** | No — export/import (kept across restarts and redeploys on the same data volume) | Named keys for apps/agents |
 
@@ -1186,14 +1187,19 @@ who only want to *run* Uplink can stop at chapters **1–5** and the root
 
 | Key | Derivation | Prompt (`/v1/*`) | Admin (`/admin/*`, `/node/*`) |
 |---|---|---|---|
-| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA |
+| **Master** `sk-uplink.…` | HMAC(seed, master) | yes | only with `MASTER_KEY_ADMIN=true` (default off); then the same power as the admin password, without 2FA, except the session-only routes below |
 | **Prompt** `sk-prompt.…` | HMAC(seed, prompt) | yes | no — default for clients |
 | Generated `sk-…` | random; hash stored | yes | no |
 
 GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
 code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
 is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
-token only when `MASTER_KEY_ADMIN=true` (default off).
+token only when `MASTER_KEY_ADMIN=true` (default off); each such request
+writes an `admin_key_use` audit record. The session-only routes
+`POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`
+and `POST /admin/2fa/enroll/confirm` require the admin cookie session: any
+Bearer token there, the Master key included, gets 401 whatever
+`MASTER_KEY_ADMIN` says.
 
 ### Admin 2FA and recovery codes
 
