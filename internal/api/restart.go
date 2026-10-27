@@ -10,7 +10,8 @@ import "net/http"
 // the same binary started again in place). Neither touches the router.
 
 // SetRestartHook sets the function that restarts the process. It is called
-// once, after the 202 answer is written.
+// once, after the 202 answer is written. Set it before the HTTP server
+// starts: the handler reads it without a lock.
 func (s *Server) SetRestartHook(fn func()) { s.restartHook = fn }
 
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {

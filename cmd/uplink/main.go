@@ -172,6 +172,19 @@ func main() {
 		}
 	}()
 
+	// Console restart (POST /admin/restart): the same graceful HTTP stop as
+	// SIGTERM, then this binary starts again in place (restart.go). Open
+	// sessions are left for the next boot reconcile to adopt; the router is
+	// not touched. Set before the listener starts, so the handler never sees
+	// it unset.
+	restart := make(chan struct{}, 1)
+	srv.SetRestartHook(func() {
+		select {
+		case restart <- struct{}{}:
+		default:
+		}
+	})
+
 	httpServer := api.NewHTTPServer(cfg.Listen, srv.Handler())
 
 	go func() {
@@ -180,18 +193,6 @@ func main() {
 			log.Fatalf("listen: %v", err)
 		}
 	}()
-
-	// Console restart (POST /admin/restart): the same graceful HTTP stop as
-	// SIGTERM, then this binary starts again in place (restart.go). Open
-	// sessions are left for the next boot reconcile to adopt; the router is
-	// not touched.
-	restart := make(chan struct{}, 1)
-	srv.SetRestartHook(func() {
-		select {
-		case restart <- struct{}{}:
-		default:
-		}
-	})
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
