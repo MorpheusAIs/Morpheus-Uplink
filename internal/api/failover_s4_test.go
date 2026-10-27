@@ -477,3 +477,80 @@ func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// Review NIT (omit-path lookup): after an omitProvider open, when the
+// session's provider cannot be read (detail lookup fails or has no
+// provider) and a configured exclusion applies, the session is closed and
+// a fresh open gets 503 with no ids. Without configured exclusions the
+// session is used as before.
+func TestS4OmitOpenProviderUnknownFailsClosed(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	for _, look := range []string{"fail", "empty"} {
+		m := newFakeMarket(t, a40, b40)
+		m.bidsFail, m.sessionLookup = true, look
+		e := newFailoverEnv(t, m, nil)
+		e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
+		code, body := e.chat(t, false)
+		opens, closes := m.snapshot()
+		if code != 503 || strings.Contains(body, "0x") || !strings.Contains(body, "no_eligible_provider") {
+			t.Errorf("lookup=%s: %d %s", look, code, body)
+		}
+		if len(opens) != 1 || opens[0].omit != a40 || len(closes) != 1 {
+			t.Errorf("lookup=%s: opens %+v closes %v", look, opens, closes)
+		}
+		if len(e.srv.pool.Snapshot()) != 0 {
+			t.Errorf("lookup=%s: unverified session pooled", look)
+		}
+	}
+	// No configured exclusion: an unknown provider is not a reason to refuse.
+	m := newFakeMarket(t, a40, b40)
+	m.sessionLookup = "fail"
+	e := newFailoverEnv(t, m, nil)
+	if code, body := e.chat(t, false); code != 200 {
+		t.Fatalf("no exclusions: %d %s", code, body)
+	}
+}
+
+// Review NIT (omit-path lookup), failover side: a pooled session is on a
+// provider that is then configured as excluded; it fails with a 402, the
+// replacement is opened with omitProvider, and its provider cannot be
+// read. The replacement is closed and the caller gets the original
+// upstream error, as when a replacement lands on an excluded provider.
+func TestS4FailoverOmitProviderUnknownRelaysOriginal(t *testing.T) {
+	m := newFakeMarket(t, provA, provB)
+	e := newFailoverEnv(t, m, nil)
+	if code, body := e.chat(t, false); code != 200 {
+		t.Fatalf("warm: %d %s", code, body)
+	}
+	m.mu.Lock()
+	m.behave[provA] = pme402
+	m.sessionLookup = "fail"
+	m.mu.Unlock()
+	e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {provA}}, nil)
+	code, body := e.chat(t, false)
+	opens, closes := m.snapshot()
+	if code != 402 || strings.Contains(body, "0x") {
+		t.Fatalf("got %d %s, want the original 402 with no ids", code, body)
+	}
+	if len(opens) != 2 || opens[1].omit != provA {
+		t.Fatalf("opens %+v", opens)
+	}
+	replacement := ""
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id := range m.sessions {
+		if strings.HasPrefix(id, "0xsess02") {
+			replacement = id
+		}
+	}
+	closed := false
+	for _, c := range closes {
+		closed = closed || c == replacement
+	}
+	if replacement == "" || !closed {
+		t.Fatalf("replacement %q not closed: %v", replacement, closes)
+	}
+	if a := e.failoverAudits(); len(a) != 1 || a[0] != "reopen_failed" {
+		t.Errorf("audits %v", a)
+	}
+}

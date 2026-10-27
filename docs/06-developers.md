@@ -579,7 +579,9 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   cut. When only excluded providers serve the model, the request gets
   `503` `no_eligible_provider` (no ids in the body) and nothing is opened.
   A session the router opened on an excluded provider anyway is closed at
-  once and answered the same way. When the rated bids cannot be read, one
+  once and answered the same way, and so is one whose provider cannot be
+  read back after an `omitProvider` open (on failover the caller gets the
+  original upstream error). When the rated bids cannot be read, one
   exclusion is sent as `omitProvider`; with two or more nothing is opened
   (`502`). An entry keyed by catalog name needs the model's name: while the
   catalog has no name for the requested id (for example the model feed is

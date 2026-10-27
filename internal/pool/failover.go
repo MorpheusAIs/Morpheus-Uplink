@@ -297,9 +297,17 @@ func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string
 		}
 		prov, _ := p.sessionProvider(modelID, id)
 		// Do not rely on the router alone: a session that landed on a
-		// configured exclusion is closed and nothing is handed out.
-		if prov != "" && p.isConfiguredExcluded(modelID, prov) {
-			warnf("pool: open with omitProvider landed on an excluded provider for model %s; closing session %s", modelID, short(id))
+		// configured exclusion is closed and nothing is handed out. When
+		// the provider cannot be read (lookup failed or empty) and any
+		// configured exclusion applies to the model, it cannot be shown
+		// to be safe, so it is closed too (fail closed).
+		unknown := prov == "" && len(p.excludedProviders(modelID)) > 0
+		if unknown || prov != "" && p.isConfiguredExcluded(modelID, prov) {
+			if unknown {
+				warnf("pool: open with omitProvider for model %s: provider of session %s unknown and exclusions are configured; closing session", modelID, short(id))
+			} else {
+				warnf("pool: open with omitProvider landed on an excluded provider for model %s; closing session %s", modelID, short(id))
+			}
 			if err := p.closeBounded(id); err != nil {
 				warnf("pool: close session %s on an excluded provider: %v (left for the sweep)", short(id), err)
 			} else {

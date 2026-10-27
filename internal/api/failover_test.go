@@ -144,6 +144,9 @@ type fakeMarket struct {
 	next        int
 	ignoreOmit  bool // open by model ignores omitProvider (router misbehaving)
 	bidsFail    bool // rated bids answer 500
+	// sessionLookup: "" normal; "fail" session detail answers 500;
+	// "empty" session detail has no provider.
+	sessionLookup string
 }
 
 func newFakeMarket(t *testing.T, providers ...string) *fakeMarket {
@@ -222,6 +225,16 @@ func (m *fakeMarket) server() *httptest.Server {
 		s := m.sessions[r.PathValue("id")]
 		if s == nil {
 			http.Error(w, "not found", 404)
+			return
+		}
+		switch m.sessionLookup {
+		case "fail":
+			http.Error(w, `{"error":"session detail unavailable"}`, http.StatusInternalServerError)
+			return
+		case "empty":
+			rw := row(r.PathValue("id"), s)
+			rw["Provider"] = ""
+			_ = json.NewEncoder(w).Encode(map[string]any{"session": rw})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"session": row(r.PathValue("id"), s)})
