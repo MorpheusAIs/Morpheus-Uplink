@@ -53,6 +53,12 @@ func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 		{"long multibyte", 500, `{"error":` + j(long) + `}`, []string{"10.1.2.3"}},
 		{"big openai-shaped", 429, `{"error":{"message":"slow down ` + addr + `","type":"rate_limit","pad":"` + strings.Repeat("x", 6000) + `"}}`, []string{addr}},
 		{"untouched", 429, `{"error":"rate limited, retry later"}`, nil},
+		{"ipv6 bracketed with port", 502, `{"error":"dial tcp [2001:db8:85a3::8a2e:370:7334]:443: refused"}`, []string{"2001:db8:85a3::8a2e:370:7334"}},
+		{"ipv6 zone id", 502, `{"error":"dial tcp [fe80::1ff:fe23:4567:890a%eth0]:3333 and fe80::abcd%eth1 down"}`, []string{"fe80::1ff:fe23:4567:890a", "fe80::abcd", "eth0", "eth1"}},
+		{"ipv6 compressed", 502, `{"error":"route to 2001:db8::7 and ::1 failed"}`, []string{"2001:db8::7", "::1"}},
+		{"ipv6 full 8 groups", 502, `{"error":"peer 2001:0db8:0000:0000:0000:ff00:0042:8329 reset"}`, []string{"2001:0db8:0000:0000:0000:ff00:0042:8329"}},
+		{"ipv4-mapped ipv6", 502, `{"error":"peer ::ffff:192.0.2.128 reset"}`, []string{"::ffff:192.0.2.128", "192.0.2.128"}},
+		{"clock time kept", 503, `{"error":"provider busy until 15:20:00 or 12:34:56, retry later"}`, nil},
 	}
 	bad := regexp.MustCompile(`(?i)0x[0-9a-f]{40,}|://|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|\[[0-9a-f:]*:[0-9a-f:]*\]|goroutine`)
 	for _, tc := range cases {
@@ -98,8 +104,31 @@ func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 		if tc.name == "untouched" && msg != "rate limited, retry later" {
 			t.Errorf("plain text changed: %q", msg)
 		}
+		if tc.name == "clock time kept" && (!strings.Contains(msg, "15:20:00") || !strings.Contains(msg, "12:34:56")) {
+			t.Errorf("clock time scrubbed: %q", msg)
+		}
 	}
 	if got := truncate("ab"+"é", 3); got != "ab…" || !utf8.ValidString(got) {
 		t.Errorf("truncate split a rune: %q", got)
+	}
+}
+
+// The IP rules: bracketed and bare IPv6 (zone, IPv4 tail, port) run before
+// IPv4 and each address becomes exactly one [ip]; clock times and
+// timestamps stay as they are.
+func TestScrubRouterTextIPRows(t *testing.T) {
+	for _, in := range []string{
+		"[2001:db8::1]:3333", "[::1]:8080", "[fe80::1%eth0]:3333", "fe80::1%eth0", "2001:db8::1", "::1",
+		"2001:db8::", "2001:0db8:0000:0000:0000:ff00:0042:8329", "::ffff:10.0.0.5", "[::ffff:10.0.0.5]:443",
+		"10.0.0.5", "10.0.0.5:8082",
+	} {
+		if got := scrubRouterText("at " + in + " now"); got != "at [ip] now" {
+			t.Errorf("%q -> %q, want one [ip]", in, got)
+		}
+	}
+	for _, keep := range []string{"15:20:00 ET", "2026-10-27T15:20:00Z", "03:04", "1:2:3", "12:34:56"} {
+		if got := scrubRouterText("at " + keep + " now"); got != "at "+keep+" now" {
+			t.Errorf("%q changed to %q", keep, got)
+		}
 	}
 }

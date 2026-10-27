@@ -18,11 +18,14 @@ var routerScrubRules = []struct {
 	{regexp.MustCompile(`(?s)(goroutine \d+ \[|panic: |[\w./-]+\.go:\d+).*$`), "[trace]"},
 	{regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]*://[^\s"'<>]+`), "[url]"},
 	{regexp.MustCompile(`(?i)\b0x[0-9a-f]{40,}\b`), "[id]"},
-	// IPv6 bracketed (with an optional port), then IPv4 with an optional
-	// port, then bare IPv6 with three or more colons or a "::".
-	{regexp.MustCompile(`\[[0-9A-Fa-f:.%]*:[0-9A-Fa-f:.%]*\](?::\d{1,5})?`), "[ip]"},
+	// IP addresses, IPv6 first: bracketed (optional zone and port), then
+	// IPv4-mapped, then bare IPv6 with four or more groups or a "::"
+	// (optional zone; clock times such as 12:34:56 are left alone), then
+	// IPv4 with an optional port.
+	{regexp.MustCompile(`\[[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(?:%[0-9A-Za-z_.\-]+)?\](?::\d{1,5})?`), "[ip]"},
+	{regexp.MustCompile(`(?i)(?:\b[0-9a-f]{1,4}|)(?::[0-9a-f]{0,4}){1,6}:(?:\d{1,3}\.){3}\d{1,3}\b`), "[ip]"},
+	{regexp.MustCompile(`(?i)(?:\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b|\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*\b)?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*\b)(?:%[0-9a-z_.\-]+)?`), "[ip]"},
 	{regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b`), "[ip]"},
-	{regexp.MustCompile(`(?i)\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b|(?i)(?:\b[0-9a-f]{1,4})?(?::[0-9a-f]{1,4})*::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?\b`), "[ip]"},
 	// Host names (labels + an alphabetic TLD) or localhost, optional port.
 	{regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b(?::\d{1,5})?|\blocalhost(?::\d{1,5})?\b`), "[host]"},
 }
