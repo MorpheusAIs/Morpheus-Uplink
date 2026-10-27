@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -97,6 +98,10 @@ func authHeaderCases(master, prompt string) []struct {
 // header gets the same 401 as an unauthenticated request, alone or next to a
 // valid cookie, whatever MASTER_KEY_ADMIN says. Nothing runs: no audit
 // record, no logout, no enrollment.
+//
+// Every case logs in a fresh cookie session and checks it is valid before
+// the request, so a refusal that lets logout run cannot leave later cookie
+// cases without a valid cookie.
 func TestSessionRoutesRefuseAuthorizationHeader(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		name := "MASTER_KEY_ADMIN=false"
@@ -108,8 +113,6 @@ func TestSessionRoutesRefuseAuthorizationHeader(t *testing.T) {
 			cfg.MasterKeyAdmin = on
 			master := keymaker.MasterKey(cfg.APIKeySeed)
 			prompt := keymaker.PromptKey(cfg.APIKeySeed)
-			ac := adminClient(t, ts, cfg)
-			before := len(auditEvents(t, ac, ts))
 
 			for _, rt := range sessionOnlyRoutes {
 				wantCode, wantBody := doReqHdr(t, http.DefaultClient, ts, cfg, rt.method, rt.path, nil)
@@ -118,38 +121,46 @@ func TestSessionRoutesRefuseAuthorizationHeader(t *testing.T) {
 				}
 				for _, tc := range authHeaderCases(master, prompt) {
 					for _, withCookie := range []bool{false, true} {
-						c := http.DefaultClient
-						if withCookie {
-							c = ac
-						}
-						code, body := doReqHdr(t, c, ts, cfg, rt.method, rt.path, tc.set)
-						if code != wantCode || body != wantBody {
-							t.Errorf("%s %s %s (cookie=%v): %d %q, want %d %q",
-								rt.method, rt.path, tc.name, withCookie, code, body, wantCode, wantBody)
-						}
+						sub := fmt.Sprintf("%s %s/%s/cookie=%v", rt.method, rt.path, tc.name, withCookie)
+						t.Run(sub, func(t *testing.T) {
+							ac := adminClient(t, ts, cfg)
+							if code, b := doReqHdr(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", nil); code != http.StatusOK {
+								t.Fatalf("fresh cookie 2fa status: %d %s, want 200", code, b)
+							}
+							before := len(auditEvents(t, ac, ts))
+
+							c := http.DefaultClient
+							if withCookie {
+								c = ac
+							}
+							code, body := doReqHdr(t, c, ts, cfg, rt.method, rt.path, tc.set)
+							if code != wantCode || body != wantBody {
+								t.Errorf("%d %q, want %d %q", code, body, wantCode, wantBody)
+							}
+
+							// The cookie session is untouched (logout did not
+							// run) and no audit record was written.
+							if code, b := doReqHdr(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", nil); code != http.StatusOK {
+								t.Fatalf("cookie 2fa status after refusal: %d %s", code, b)
+							}
+							evs := auditEvents(t, ac, ts)
+							if len(evs) != before {
+								t.Fatalf("audit records: %d before, %d after refusal (%#v)", before, len(evs), evs)
+							}
+							if n := countAudit(evs, "admin_key_use"); n != 0 {
+								t.Fatalf("admin_key_use records: %d, want 0", n)
+							}
+							if n := countAudit(evs, "session_logout"); n != 0 {
+								t.Fatalf("session_logout records: %d, want 0", n)
+							}
+							// enroll/start did not run: there is no pending enrollment.
+							code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"000000"}`)
+							if code != http.StatusBadRequest || !strings.Contains(string(b), "no pending enrollment") {
+								t.Fatalf("cookie confirm after refusal: %d %s, want 400 no pending enrollment", code, b)
+							}
+						})
 					}
 				}
-			}
-
-			// The cookie session is untouched (logout did not run) and no
-			// audit record was written.
-			if code, b := doReqHdr(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", nil); code != http.StatusOK {
-				t.Fatalf("cookie 2fa status after refusals: %d %s", code, b)
-			}
-			evs := auditEvents(t, ac, ts)
-			if len(evs) != before {
-				t.Fatalf("audit records: %d before, %d after refusals (%#v)", before, len(evs), evs)
-			}
-			if n := countAudit(evs, "admin_key_use"); n != 0 {
-				t.Fatalf("admin_key_use records: %d, want 0", n)
-			}
-			if n := countAudit(evs, "session_logout"); n != 0 {
-				t.Fatalf("session_logout records: %d, want 0", n)
-			}
-			// enroll/start did not run: there is no pending enrollment.
-			code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"000000"}`)
-			if code != http.StatusBadRequest || !strings.Contains(string(b), "no pending enrollment") {
-				t.Fatalf("cookie confirm after refusals: %d %s, want 400 no pending enrollment", code, b)
 			}
 		})
 	}
