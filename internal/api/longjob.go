@@ -304,6 +304,11 @@ func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID 
 		writeTypedError(w, http.StatusTooManyRequests, "long_session_limit", "long session limit reached")
 		return nil, res, false
 	}
+	if errors.Is(err, pool.ErrNoEligibleProvider) {
+		// Only providers excluded by UPLINK_PROVIDER_EXCLUDE serve the model.
+		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")
+		return nil, res, false
+	}
 	if err != nil {
 		log.Printf("api: open session for %s (%s): %v", reqModel, modelID, err)
 		writeOpenAIError(w, http.StatusBadGateway, "failed to open session") // detail logged above; it names router internals

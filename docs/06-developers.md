@@ -552,7 +552,7 @@ turns Uplink's failover off: errors are relayed and the session is kept.
 - *Cool-down* (`UPLINK_PROVIDER_COOLDOWN_SECONDS`, default 600): per model
   and provider, in memory (a restart forgets it). New opens and Rehydrate
   avoid cooling providers; if every provider of the model is cooling, a
-  normal open is made. `0` keeps no memory across requests; the immediate
+  normal open is made (it still avoids configured exclusions). `0` keeps no memory across requests; the immediate
   retry still avoids the provider that just failed.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
@@ -574,10 +574,11 @@ turns Uplink's failover off: errors are relayed and the session is kept.
 - *Configured exclusions* (`UPLINK_PROVIDER_EXCLUDE`): providers never
   opened for a model, as `<model>=<provider>[,<provider>]…` with entries
   separated by `;`. The model is a registration id or a catalog name; a
-  provider is its `0x` address. Opens and Rehydrate avoid them like a
-  cooling provider (when every provider of the model is excluded or
-  cooling, a normal open is made). Bad entries are logged by position and
-  ignored.
+  provider is its `0x` address. Opens and Rehydrate never use them, not
+  even in the fallback when every other provider is cooling or was just
+  cut. When only excluded providers serve the model, the request gets
+  `503` `no_eligible_provider` (no ids in the body) and nothing is opened.
+  Bad entries are logged by position and ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short
   address, the status class (`402`, `429`, `5xx`, `stream_cut` for a bare

@@ -306,3 +306,65 @@ func TestS4ProviderExcludeConfig(t *testing.T) {
 		}
 	}
 }
+
+// S4 ruling: the soft avoidances (cool-down, the one-shot after-cut
+// exclusion) fall back to a plain open when nothing else is left; a
+// configured exclusion is never overridden, and when only configured-
+// excluded providers remain the answer is 503 with no ids.
+func TestS4FallbackRules(t *testing.T) {
+	a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
+	type tc struct {
+		name      string
+		providers []string
+		exclude   []string
+		cooling   []string
+		cut       string
+		code      int
+		notOn     string // the open must not land on this provider
+		plain     bool   // the open is a plain open (no omit, no bid)
+	}
+	for _, c := range []tc{
+		{name: "all cooling → plain", providers: []string{a40, b40}, cooling: []string{a40, b40}, code: 200, plain: true},
+		{name: "after-cut only provider → plain", providers: []string{a40}, cut: a40, code: 200, plain: true},
+		{name: "cooling fallback keeps the configured exclusion", providers: []string{a40, b40, c40}, exclude: []string{a40}, cooling: []string{b40, c40}, code: 200, notOn: a40},
+		{name: "after-cut fallback keeps the configured exclusion", providers: []string{a40, b40}, exclude: []string{a40}, cut: b40, code: 200, notOn: a40},
+		{name: "two exclusions, rest cooling", providers: []string{a40, b40, c40}, exclude: []string{a40, b40}, cooling: []string{c40}, code: 200, notOn: a40},
+		{name: "only excluded remain → 503", providers: []string{a40}, exclude: []string{a40}, code: 503},
+		{name: "only excluded remain, two → 503", providers: []string{a40, b40}, exclude: []string{a40, b40}, cooling: []string{a40}, code: 503},
+	} {
+		m := newFakeMarket(t, c.providers...)
+		e := newFailoverEnv(t, m, nil)
+		if len(c.exclude) > 0 {
+			e.srv.pool.SetProviderExclude(map[string][]string{testModelID: c.exclude}, nil)
+		}
+		for _, p := range c.cooling {
+			e.srv.pool.MarkCooling(testModelID, p)
+		}
+		if c.cut != "" {
+			e.srv.pool.MarkStreamCut(testModelID, c.cut)
+		}
+		code, body := e.chat(t, false)
+		if code != c.code {
+			t.Errorf("%s: %d %s", c.name, code, body)
+			continue
+		}
+		opens, _ := m.snapshot()
+		if c.code == 503 {
+			if len(opens) != 0 || strings.Contains(body, "0x") || !strings.Contains(body, "no_eligible_provider") {
+				t.Errorf("%s: opens %d body %s", c.name, len(opens), body)
+			}
+			continue
+		}
+		last := opens[len(opens)-1]
+		if c.notOn != "" {
+			for _, o := range opens {
+				if o.provider == c.notOn || (len(c.exclude) > 1 && o.provider == c.exclude[1]) {
+					t.Errorf("%s: opened on an excluded provider", c.name)
+				}
+			}
+		}
+		if c.plain && (last.omit != "" || last.bid != "") {
+			t.Errorf("%s: want a plain open, got %+v", c.name, last)
+		}
+	}
+}

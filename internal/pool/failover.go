@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -36,6 +37,11 @@ const (
 // ErrNoAlternate means no other provider serves the model right now (or
 // the pool could not tell), so the failed session was kept, not closed.
 var ErrNoAlternate = errors.New("no alternate provider for this model")
+
+// ErrNoEligibleProvider means only providers excluded by
+// UPLINK_PROVIDER_EXCLUDE serve the model: nothing is opened (a configured
+// exclusion is never overridden, unlike a cool-down).
+var ErrNoEligibleProvider = errors.New("no eligible provider for this model")
 
 // SetProviderCooldown sets the per model+provider cool-down. 0 turns off
 // memory across requests; an immediate failover still omits the provider
@@ -297,10 +303,12 @@ func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string
 }
 
 // openAvoidingCooling is the normal open: plain open by model when no
-// provider of this model is cooling, else the exclusion open. When every
-// provider is cooling, or the bids cannot be read, or the exclusion open
-// fails, it falls back to the plain open (best effort: a request needs a
-// session).
+// provider of this model is avoided, else the exclusion open. Cool-downs
+// and the one-shot after-cut exclusion are soft: when every provider is
+// avoided, or the bids cannot be read, or the exclusion open fails, it
+// falls back (best effort: a request needs a session). Exclusions set in
+// UPLINK_PROVIDER_EXCLUDE are hard: the fallback still avoids them, and
+// when only excluded providers remain it returns ErrNoEligibleProvider.
 func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
 	plain := func() (string, string, error) {
 		id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec})
@@ -310,6 +318,25 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		prov, _ := p.sessionProvider(modelID, id)
 		return id, prov, nil
 	}
+	configured := p.excludedProviders(modelID)
+	// fallback drops the soft avoidances and keeps the configured ones.
+	fallback := func(bids []router.RatedBid, bidsOK bool) (string, string, error) {
+		if len(configured) == 0 {
+			return plain()
+		}
+		if !bidsOK {
+			if len(configured) == 1 {
+				// The router's omitProvider keeps the one exclusion.
+				return p.openExcluding(modelID, durationSec, configured, nil, false)
+			}
+			return "", "", fmt.Errorf("open without bids would ignore %d configured exclusions", len(configured))
+		}
+		alts, n := alternates(bids, configured)
+		if n == 0 {
+			return "", "", ErrNoEligibleProvider
+		}
+		return p.openExcluding(modelID, durationSec, configured, alts, len(configured) > 1)
+	}
 	exclude := p.avoidSet(modelID)
 	if len(exclude) == 0 {
 		return plain()
@@ -317,18 +344,28 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 	cut := p.pendingCut(modelID)
 	bids, err := p.client.RatedBids(modelID)
 	if err != nil {
-		log.Printf("pool: rated bids for %s: %v (opening without exclusions)", modelID, err)
-		return plain()
+		slog.Warn("pool: rated bids unavailable; opening without soft exclusions", "model", modelID, "err", err)
+		return fallback(nil, false)
 	}
 	alts, n := alternates(bids, exclude)
 	if n == 0 {
-		log.Printf("pool: every provider of model %s is cooling; opening without exclusions", modelID)
-		return plain()
+		if len(configured) > 0 {
+			if _, m := alternates(bids, configured); m == 0 {
+				slog.Warn("pool: only configured-excluded providers serve this model", "model", modelID)
+				return "", "", ErrNoEligibleProvider
+			}
+		}
+		slog.Warn("pool: every eligible provider is cooling; opening without soft exclusions", "model", modelID)
+		id, prov, err := fallback(bids, true)
+		if err == nil && cut != "" {
+			p.clearCut(modelID)
+		}
+		return id, prov, err
 	}
 	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, cut != "")
 	if err != nil {
-		log.Printf("pool: open avoiding cooling providers for %s: %v (opening without exclusions)", modelID, err)
-		return plain()
+		slog.Warn("pool: open avoiding cooling providers failed; opening without soft exclusions", "model", modelID, "err", err)
+		return fallback(bids, true)
 	}
 	if cut != "" {
 		p.clearCut(modelID)
