@@ -535,8 +535,10 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   Router text is scrubbed before it is relayed: URLs, `0x` values of 40
   or more hex characters, IP addresses and ports, host names and stack
   text are replaced with `[url]`, `[id]`, `[ip]`, `[host]` and `[trace]`.
-  The message is capped at 1000 bytes (never splitting a character) and a
-  relayed JSON body at 4 KiB; the full text goes only to the server log.
+  The message is capped at 1000 bytes (never splitting a character) and
+  the whole response body at 4 KiB (an oversized `providerModelError`
+  becomes the minimal `{"error":{"message"}}` form); the full text goes
+  only to the server log.
 - *Not a provider fault:* Uplink cannot reach its own router (502), or the
   router rejects the session id (the existing reopen on a dead session).
 - *Guardrail:* before closing anything, Uplink lists the model's rated

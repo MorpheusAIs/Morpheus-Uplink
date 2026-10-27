@@ -51,6 +51,8 @@ func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 		{"openai-shaped", 422, `{"error":{"message":"bad input from ` + addr + `","type":"invalid_request_error","param":"http://10.0.0.5:8080/x"}}`, []string{addr, "10.0.0.5"}},
 		{"provider model error", 400, `{"providerModelError":{"error":{"message":"upstream https://llm.internal.example/v1 said no","host":"10.9.8.7:11434"},"owner":"` + addr + `"},"statusCode":400}`, []string{"llm.internal.example", "10.9.8.7", addr}},
 		{"long multibyte", 500, `{"error":` + j(long) + `}`, []string{"10.1.2.3"}},
+		{"oversized providerModelError", 400, `{"providerModelError":{"error":{"message":"bad input at 10.9.8.7 ` + strings.Repeat("m", 3900) + `"}}}`, []string{"10.9.8.7"}},
+		{"providerModelError of escaped bytes", 400, `{"providerModelError":{"error":{"message":"` + strings.Repeat("<", 3000) + ` 10.9.8.6"}}}`, []string{"10.9.8.6"}},
 		{"big openai-shaped", 429, `{"error":{"message":"slow down ` + addr + `","type":"rate_limit","pad":"` + strings.Repeat("x", 6000) + `"}}`, []string{addr}},
 		{"untouched", 429, `{"error":"rate limited, retry later"}`, nil},
 		{"ipv6 bracketed with port", 502, `{"error":"dial tcp [2001:db8:85a3::8a2e:370:7334]:443: refused"}`, []string{"2001:db8:85a3::8a2e:370:7334"}},
@@ -74,7 +76,7 @@ func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 		if bad.MatchString(out) {
 			t.Errorf("%s: router detail reached the client: %s", tc.name, out)
 		}
-		if len(out) > maxRelayBody+1024 {
+		if len(out) > maxRelayBody {
 			t.Errorf("%s: body %d bytes", tc.name, len(out))
 		}
 		var parsed struct {
@@ -130,5 +132,39 @@ func TestScrubRouterTextIPRows(t *testing.T) {
 		if got := scrubRouterText("at " + keep + " now"); got != "at "+keep+" now" {
 			t.Errorf("%q changed to %q", keep, got)
 		}
+	}
+}
+
+// The whole reshaped body fits maxRelayBody: an oversized providerModelError
+// becomes the minimal {error:{message}} form, and that fits too.
+func TestRelayRouterErrorWholeBodyCap(t *testing.T) {
+	for _, msg := range []string{strings.Repeat("m", 3900), strings.Repeat("<", 4000), strings.Repeat("界", 1300)} {
+		body := `{"providerModelError":{"error":{"message":"` + msg + `"},"detail":"x"}}`
+		rec := httptest.NewRecorder()
+		relayRouterError(rec, &router.StatusError{Method: "POST", Path: "/v1/chat/completions", Code: 400, Body: body})
+		if n := rec.Body.Len(); n > maxRelayBody {
+			t.Fatalf("body %d bytes > %d", n, maxRelayBody)
+		}
+		var got struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			PME map[string]json.RawMessage `json:"providerModelError"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body not JSON: %v", err)
+		}
+		if got.Error.Message == "" || !utf8.ValidString(got.Error.Message) {
+			t.Fatalf("message %q", got.Error.Message)
+		}
+		if len(got.PME) != 1 || got.PME["error"] == nil {
+			t.Fatalf("providerModelError not the minimal form: %v", got.PME)
+		}
+	}
+	// A small providerModelError is kept whole.
+	rec := httptest.NewRecorder()
+	relayRouterError(rec, &router.StatusError{Code: 400, Body: `{"providerModelError":{"error":{"message":"bad"},"detail":"x"}}`})
+	if !strings.Contains(rec.Body.String(), `"detail":"x"`) {
+		t.Fatalf("small providerModelError not kept: %s", rec.Body.String())
 	}
 }

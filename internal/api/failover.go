@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -145,17 +146,49 @@ func relayRouterError(w http.ResponseWriter, err error) {
 	if hasPME || code >= 500 || code == http.StatusTooManyRequests {
 		typ = "provider_error"
 	}
-	out := map[string]any{"error": map[string]any{
-		"message": routerErrorMessage(obj, se.Body), "type": typ, "code": code,
-	}}
+	msg := routerErrorMessage(obj, se.Body)
+	var pme any
 	if hasPME {
-		if pme, ok := scrubbedJSON(obj["providerModelError"]); ok {
-			out["providerModelError"] = pme
-		} else {
-			out["providerModelError"] = map[string]any{"error": map[string]any{"message": routerErrorMessage(obj, se.Body)}}
+		if p, ok := scrubbedJSON(obj["providerModelError"]); ok {
+			pme = p
 		}
 	}
-	writeJSON(w, code, out)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(relayBody(msg, typ, code, hasPME, pme))
+}
+
+// relayBody is the final reshaped error body, capped as a whole at
+// maxRelayBody: when the body with the scrubbed providerModelError is too
+// big, the minimal {error:{message}} form replaces it, and the message is
+// shortened until that fits too (JSON escaping can grow it).
+func relayBody(msg, typ string, code int, hasPME bool, pme any) []byte {
+	build := func(msg string, pme any) []byte {
+		out := map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": code}}
+		if hasPME {
+			if pme == nil {
+				pme = map[string]any{"error": map[string]any{"message": msg}}
+			}
+			out["providerModelError"] = pme
+		}
+		var b bytes.Buffer
+		_ = json.NewEncoder(&b).Encode(out)
+		return b.Bytes()
+	}
+	body := build(msg, pme)
+	if len(body) <= maxRelayBody {
+		return body
+	}
+	for {
+		body = build(msg, nil)
+		if len(body) <= maxRelayBody || msg == "" {
+			return body
+		}
+		msg = truncate(strings.TrimSuffix(msg, "…"), len(strings.TrimSuffix(msg, "…"))/2)
+		if msg == "…" {
+			msg = ""
+		}
+	}
 }
 
 // routerErrorMessage pulls a readable message out of a router error body.
