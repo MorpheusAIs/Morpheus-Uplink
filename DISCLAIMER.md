@@ -28,7 +28,8 @@ an API key.
 - A **single-tenant** gateway: one wallet, one session pool. Any Prompt or
   ephemeral API key can open sessions and **escrow / lock MOR** from that
   wallet. Treat every inference key as authority to lock this wallet's MOR.
-- Admin login (and the Master key with `MASTER_KEY_ADMIN=true`) can reach
+- Admin login (and the Master key with `MASTER_KEY_ADMIN=true`, except on
+  the session-only logout and 2FA status/enroll routes) can reach
   `/admin/*` and the `/node/*` router passthrough. The passthrough refuses
   routes that send or approve funds, open sessions, create providers, models
   or bids, change the wallet, router users, permissions or config, or access

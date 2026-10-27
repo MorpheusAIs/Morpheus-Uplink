@@ -23,8 +23,9 @@ token only when `MASTER_KEY_ADMIN=true` (default off); each such request
 writes an `admin_key_use` audit record. The session-only routes
 `POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`
 and `POST /admin/2fa/enroll/confirm` require the admin cookie session: any
-Bearer token there, the Master key included, gets 401 whatever
-`MASTER_KEY_ADMIN` says.
+Authorization header is refused on session-only routes (any scheme or case,
+empty or repeated, the Master key included) with the same 401 as a request
+without credentials, whatever `MASTER_KEY_ADMIN` says.
 
 ### Admin 2FA and recovery codes
 

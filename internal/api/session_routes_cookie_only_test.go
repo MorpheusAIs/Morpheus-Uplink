@@ -21,6 +21,15 @@ var sessionOnlyRoutes = []struct{ method, path string }{
 
 func doReq(t *testing.T, c *http.Client, ts *httptest.Server, cfg *config.Config, method, path, bearer string) (int, string) {
 	t.Helper()
+	return doReqHdr(t, c, ts, cfg, method, path, func(h http.Header) {
+		if bearer != "" {
+			h.Set("Authorization", "Bearer "+bearer)
+		}
+	})
+}
+
+func doReqHdr(t *testing.T, c *http.Client, ts *httptest.Server, cfg *config.Config, method, path string, setAuth func(http.Header)) (int, string) {
+	t.Helper()
 	var body io.Reader
 	if method == http.MethodPost {
 		body = strings.NewReader("{}")
@@ -30,8 +39,8 @@ func doReq(t *testing.T, c *http.Client, ts *httptest.Server, cfg *config.Config
 		req.Header.Set("Content-Type", "application/json")
 	}
 	withCSRF(req, cfg)
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+	if setAuth != nil {
+		setAuth(req.Header)
 	}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -52,10 +61,43 @@ func countAudit(evs []AuditEvent, kind string) int {
 	return n
 }
 
-// Session-only admin routes require a cookie session: the master key as a
-// Bearer token gets the same 401 as an unauthenticated request, whatever
-// MASTER_KEY_ADMIN says, and writes no admin_key_use record.
-func TestSessionRoutesRefuseMasterKeyBearer(t *testing.T) {
+// authHeaderCases are Authorization header forms that session-only routes
+// must refuse: any Authorization header gets the no-credentials 401.
+func authHeaderCases(master, prompt string) []struct {
+	name string
+	set  func(http.Header)
+} {
+	set := func(vals ...string) func(http.Header) {
+		return func(h http.Header) { h["Authorization"] = vals }
+	}
+	return []struct {
+		name string
+		set  func(http.Header)
+	}{
+		{"master Bearer", set("Bearer " + master)},
+		{"prompt Bearer", set("Bearer " + prompt)},
+		{"random Bearer", set("Bearer sk-uplink.not-a-real-key-0000")},
+		{"lowercase bearer", set("bearer " + master)},
+		{"uppercase BEARER", set("BEARER " + master)},
+		{"Bearer tab", set("Bearer\t" + master)},
+		{"bare Bearer", set("Bearer")},
+		{"empty header", set("")},
+		{"Token scheme", set("Token " + master)},
+		{"Basic", func(h http.Header) {
+			r := &http.Request{Header: http.Header{}}
+			r.SetBasicAuth("admin", "adminpass")
+			h["Authorization"] = r.Header["Authorization"]
+		}},
+		{"two headers junk first", set("junk", "Bearer "+master)},
+		{"two headers Bearer first", set("Bearer "+master, "junk")},
+	}
+}
+
+// Session-only admin routes require a cookie session: any Authorization
+// header gets the same 401 as an unauthenticated request, alone or next to a
+// valid cookie, whatever MASTER_KEY_ADMIN says. Nothing runs: no audit
+// record, no logout, no enrollment.
+func TestSessionRoutesRefuseAuthorizationHeader(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		name := "MASTER_KEY_ADMIN=false"
 		if on {
@@ -65,32 +107,41 @@ func TestSessionRoutesRefuseMasterKeyBearer(t *testing.T) {
 			ts, cfg, _ := newTestServer(t)
 			cfg.MasterKeyAdmin = on
 			master := keymaker.MasterKey(cfg.APIKeySeed)
+			prompt := keymaker.PromptKey(cfg.APIKeySeed)
 			ac := adminClient(t, ts, cfg)
+			before := len(auditEvents(t, ac, ts))
 
 			for _, rt := range sessionOnlyRoutes {
-				wantCode, wantBody := doReq(t, http.DefaultClient, ts, cfg, rt.method, rt.path, "")
+				wantCode, wantBody := doReqHdr(t, http.DefaultClient, ts, cfg, rt.method, rt.path, nil)
 				if wantCode != http.StatusUnauthorized {
 					t.Fatalf("%s %s unauthenticated: %d, want 401", rt.method, rt.path, wantCode)
 				}
-				code, body := doReq(t, http.DefaultClient, ts, cfg, rt.method, rt.path, master)
-				if code != wantCode || body != wantBody {
-					t.Fatalf("%s %s master Bearer: %d %q, want %d %q", rt.method, rt.path, code, body, wantCode, wantBody)
-				}
-				// A Bearer header alongside a valid cookie session is refused too.
-				code, body = doReq(t, ac, ts, cfg, rt.method, rt.path, master)
-				if code != wantCode || body != wantBody {
-					t.Fatalf("%s %s cookie+master Bearer: %d %q, want %d %q", rt.method, rt.path, code, body, wantCode, wantBody)
+				for _, tc := range authHeaderCases(master, prompt) {
+					for _, withCookie := range []bool{false, true} {
+						c := http.DefaultClient
+						if withCookie {
+							c = ac
+						}
+						code, body := doReqHdr(t, c, ts, cfg, rt.method, rt.path, tc.set)
+						if code != wantCode || body != wantBody {
+							t.Errorf("%s %s %s (cookie=%v): %d %q, want %d %q",
+								rt.method, rt.path, tc.name, withCookie, code, body, wantCode, wantBody)
+						}
+					}
 				}
 			}
 
 			// The cookie session is untouched (logout did not run) and no
-			// admin_key_use or session_logout record was written.
-			if code, b := doReq(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", ""); code != http.StatusOK {
+			// audit record was written.
+			if code, b := doReqHdr(t, ac, ts, cfg, http.MethodGet, "/admin/2fa/status", nil); code != http.StatusOK {
 				t.Fatalf("cookie 2fa status after refusals: %d %s", code, b)
 			}
 			evs := auditEvents(t, ac, ts)
+			if len(evs) != before {
+				t.Fatalf("audit records: %d before, %d after refusals (%#v)", before, len(evs), evs)
+			}
 			if n := countAudit(evs, "admin_key_use"); n != 0 {
-				t.Fatalf("admin_key_use records: %d, want 0 (%#v)", n, evs)
+				t.Fatalf("admin_key_use records: %d, want 0", n)
 			}
 			if n := countAudit(evs, "session_logout"); n != 0 {
 				t.Fatalf("session_logout records: %d, want 0", n)
