@@ -49,6 +49,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
+	// Console settings that apply on start (env > persisted > default).
+	config.ApplyPersisted(cfg, st.GetSettings().All())
 
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)

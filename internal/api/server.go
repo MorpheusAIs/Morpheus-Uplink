@@ -88,7 +88,7 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 	}
 	var notes []string
 	s.settings, notes = resolveSettings(cfg, persisted)
-	for _, n := range notes {
+	for _, n := range append(notes, cfg.SettingNotes...) {
 		s.auditSystem("setting_ignored", "boot", "ignored", n, true)
 	}
 	s.applySettings()
@@ -137,6 +137,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
 	mux.HandleFunc("GET /admin/settings", s.requireConsoleSession(s.handleSettingsGet))
 	mux.HandleFunc("POST /admin/settings", s.requireConsoleSession(s.handleSettingsSet))
+	mux.HandleFunc("GET /admin/settings/export", s.requireConsoleSession(s.handleSettingsExport))
+	mux.HandleFunc("POST /admin/settings/import", s.requireConsoleSession(s.handleSettingsImport))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))

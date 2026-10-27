@@ -22,9 +22,10 @@ import (
 // effect without a restart.
 var LogLevel = new(slog.LevelVar)
 
-// settingDef is one operator setting (#51). Bounds match the env values.
-// The admin session timeouts, MASTER_KEY_ADMIN and secrets are deliberately
-// not settings: they cannot be changed from an admin session.
+// settingDef is one live operator setting (#51), derived from the
+// config.Settings registry (ScopeLive rows). The admin session timeouts,
+// MASTER_KEY_ADMIN and secrets are deliberately not settable: they cannot be
+// changed from an admin session.
 type settingDef struct {
 	name     string
 	env      string
@@ -33,12 +34,18 @@ type settingDef struct {
 	level    bool // logLevel: a string setting
 }
 
-var settingDefs = []settingDef{
-	{name: "sessionDurationDefault", env: "SESSION_DURATION_SECONDS", min: 600, max: 86400, def: 600},
-	{name: "sessionDurationMax", env: "UPLINK_SESSION_DURATION_MAX", min: 600, max: 86400, def: 1800},
-	{name: "sessionIdleGrace", env: "UPLINK_SESSION_IDLE_GRACE_SECONDS", min: 60, max: 3600, def: 300},
-	{name: "forwardIdle", env: "UPLINK_FORWARD_IDLE_SECONDS", min: 30, max: 600, def: 180},
-	{name: "logLevel", env: "UPLINK_LOG_LEVEL", level: true},
+var settingDefs = liveSettingDefs()
+
+func liveSettingDefs() []settingDef {
+	var out []settingDef
+	for _, d := range config.Settings {
+		if d.Scope != config.ScopeLive {
+			continue
+		}
+		def, _ := strconv.Atoi(d.Default)
+		out = append(out, settingDef{name: d.Name, env: d.Env, min: d.Min, max: d.Max, def: def, level: d.Kind == config.KindEnum})
+	}
+	return out
 }
 
 func settingByName(name string) (settingDef, bool) {
@@ -188,34 +195,6 @@ func (s *Server) forwardIdle() int     { return s.settings.int("forwardIdle") }
 // SessionIdleGrace is the idle-sweep grace in seconds (read on every tick).
 func (s *Server) SessionIdleGrace() int { return s.settings.int("sessionIdleGrace") }
 
-type settingView struct {
-	Name    string   `json:"name"`
-	Value   any      `json:"value"`
-	Default any      `json:"default"`
-	Min     int      `json:"min,omitempty"`
-	Max     int      `json:"max,omitempty"`
-	Options []string `json:"options,omitempty"`
-	Source  string   `json:"source"` // env | persisted | default
-	Env     string   `json:"env"`
-	Pinned  bool     `json:"pinned"` // set by environment: read-only here
-}
-
-func (s *Server) settingsView() map[string]any {
-	s.settings.mu.RLock()
-	defer s.settings.mu.RUnlock()
-	out := make([]settingView, 0, len(settingDefs))
-	for _, d := range settingDefs {
-		v := settingView{Name: d.name, Env: d.env, Source: s.settings.source[d.name], Pinned: s.settings.source[d.name] == "env"}
-		if d.level {
-			v.Value, v.Default, v.Options = s.settings.level, "info", []string{"debug", "info", "warn", "error"}
-		} else {
-			v.Value, v.Default, v.Min, v.Max = s.settings.ints[d.name], d.def, d.min, d.max
-		}
-		out = append(out, v)
-	}
-	return map[string]any{"settings": out}
-}
-
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.settingsView())
 }
@@ -287,7 +266,7 @@ func (s *Server) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	}
 	d, ok := settingByName(req.Name)
 	if !ok {
-		http.Error(w, "unknown setting", http.StatusBadRequest)
+		s.handleRegistrySet(w, r, req.Name, req.Value, req.Reset)
 		return
 	}
 	if !req.Reset && len(req.Value) == 0 {

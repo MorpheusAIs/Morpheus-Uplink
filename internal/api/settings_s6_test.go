@@ -267,12 +267,21 @@ func TestS6AdminTimeoutsAbsent(t *testing.T) {
 		names = append(names, s.Name+"/"+s.Env)
 	}
 	all := strings.ToLower(strings.Join(names, " "))
-	for _, bad := range []string{"admin", "absolute", "master", "password", "seed", "key", "wallet", "cookie"} {
+	for _, bad := range []string{"absolute", "adminsession", "admin_session", "password", "seed", "wallet", "cookie", "eth_node", "rpc_url", "router_auth"} {
 		if strings.Contains(all, bad) {
 			t.Fatalf("settings expose %q: %s", bad, all)
 		}
 	}
-	if len(v.Settings) != 5 {
+	// MASTER_KEY_ADMIN is shown read-only; it can never be set here.
+	for _, s := range v.Settings {
+		if (strings.Contains(strings.ToLower(s.Name), "admin") || strings.Contains(strings.ToLower(s.Name), "master")) && (s.Settable || s.Scope != "env") {
+			t.Fatalf("%s is settable", s.Name)
+		}
+	}
+	if code, _ := e.admin(t, "POST", "/admin/settings", `{"name":"masterKeyAdmin","value":false}`); code != 400 || !e.srv.cfg.MasterKeyAdmin {
+		t.Fatalf("masterKeyAdmin set: %d", code)
+	}
+	if len(v.Settings) != len(config.Settings) {
 		t.Fatalf("settings %v", names)
 	}
 }

@@ -1,0 +1,335 @@
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+)
+
+// Operator settings registry (#51). One row per setting the console shows.
+// Precedence for every Uplink-side setting: env > persisted > default.
+//
+// Scope says when a change takes effect:
+//   - ScopeLive: at once (the API server re-reads it).
+//   - ScopeRestart: on the next Uplink start (read once at boot from Config).
+//   - ScopeRouter: a proxy-router setting. The router reads it from its own
+//     environment (deploy/secretvm: the router_network_env config); Uplink
+//     cannot deliver a value to it, so the console shows it read-only.
+//   - ScopeEnvOnly: a security switch shown read-only; set in .env only.
+//
+// Group tags optional features so each can be dropped by deleting its rows
+// here: "long" (long-session limits), "inflight" (in-flight cap). The
+// settings code names no setting outside this table except the five live
+// ones it applies at once.
+type SettingKind string
+
+const (
+	KindInt    SettingKind = "int"
+	KindBool   SettingKind = "bool"
+	KindEnum   SettingKind = "enum"
+	KindString SettingKind = "string"
+)
+
+type SettingScope string
+
+const (
+	ScopeLive    SettingScope = "live"
+	ScopeRestart SettingScope = "restart"
+	ScopeRouter  SettingScope = "router"
+	ScopeEnvOnly SettingScope = "env"
+)
+
+// SettingDef is one setting.
+type SettingDef struct {
+	Name     string // console and settings-file key
+	Env      string
+	Kind     SettingKind
+	Min, Max int      // KindInt
+	Options  []string // KindEnum
+	Default  string   // canonical form
+	Scope    SettingScope
+	Group    string
+	Help     string // tooltip: what it does and the allowed values
+	Consumer string // where the value is read (docs)
+	// envClamp: an int env value above Max is clamped by FromEnv, so it
+	// still pins the setting.
+	envClamp bool
+	check    func(string) error    // KindString: extra validation
+	get      func(*Config) string  // effective Uplink value
+	set      func(*Config, string) // ScopeRestart: applied at boot
+}
+
+var logLevels = []string{"debug", "info", "warn", "error"}
+var routerLogLevels = []string{"debug", "info", "warn", "error", "dpanic", "panic", "fatal"}
+
+func itoa(n int) string  { return strconv.Itoa(n) }
+func atoi(s string) int  { n, _ := strconv.Atoi(s); return n }
+func btoa(b bool) string { return strconv.FormatBool(b) }
+func atob(s string) bool { b, _ := strconv.ParseBool(s); return b }
+
+// Settings is the registry, in console order.
+var Settings = []SettingDef{
+	{Name: "sessionDurationDefault", Env: "SESSION_DURATION_SECONDS", Kind: KindInt, Min: 600, Max: 86400, Default: "600", Scope: ScopeLive,
+		Help: "Session length for an open without X-Uplink-Session-Duration, in seconds (600–86400, at most the session max).", Consumer: "pool.SetDuration (live)",
+		get: func(c *Config) string { return itoa(c.SessionDurationSec) }},
+	{Name: "sessionDurationMax", Env: "UPLINK_SESSION_DURATION_MAX", Kind: KindInt, Min: 600, Max: 86400, Default: "1800", Scope: ScopeLive,
+		Help: "Longest session any open may ask for, in seconds (600–86400).", Consumer: "pool.SetDurationMax (live)",
+		get: func(c *Config) string { return itoa(c.SessionDurationMax) }},
+	{Name: "sessionIdleGrace", Env: "UPLINK_SESSION_IDLE_GRACE_SECONDS", Kind: KindInt, Min: 60, Max: 3600, Default: "300", Scope: ScopeLive,
+		Help: "Close a pooled session with nothing in flight this long after its last use, in seconds (60–3600).", Consumer: "idle sweep, read every tick (live)",
+		get: func(c *Config) string { return itoa(c.SessionIdleGraceSec) }},
+	{Name: "forwardIdle", Env: "UPLINK_FORWARD_IDLE_SECONDS", Kind: KindInt, Min: 30, Max: 600, Default: "180", Scope: ScopeLive,
+		Help: "Default first-byte and idle timer of an inference call, in seconds (30–600).", Consumer: "inference timers, per request (live)",
+		get: func(c *Config) string { return itoa(c.ForwardIdleSec) }},
+	{Name: "logLevel", Env: "UPLINK_LOG_LEVEL", Kind: KindEnum, Options: logLevels, Default: "info", Scope: ScopeLive,
+		Help: "Uplink log level: debug, info, warn or error. Audit lines are always written.", Consumer: "slog.LevelVar (live)",
+		get: func(c *Config) string { return c.LogLevel }},
+
+	{Name: "sessionFailover", Env: "SESSION_FAILOVER", Kind: KindBool, Default: "true", Scope: ScopeRestart,
+		Help: "Fail over to another provider on a provider error (true or false). Takes effect after an Uplink restart.", Consumer: "api/openai.go (Config.SessionFailover)",
+		get: func(c *Config) string { return btoa(c.SessionFailover) }, set: func(c *Config, v string) { c.SessionFailover = atob(v) }},
+	{Name: "providerCooldown", Env: "UPLINK_PROVIDER_COOLDOWN_SECONDS", Kind: KindInt, Min: 0, Max: MaxProviderCooldownSec, Default: "600", Scope: ScopeRestart, envClamp: true,
+		Help: "How long a failed provider is avoided for that model, in seconds (0–86400; 0 keeps no memory across requests). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderCooldown",
+		get: func(c *Config) string { return itoa(c.ProviderCooldownSec) }, set: func(c *Config, v string) { c.ProviderCooldownSec = atoi(v) }},
+	{Name: "providerExclude", Env: "UPLINK_PROVIDER_EXCLUDE", Kind: KindString, Default: "", Scope: ScopeRestart, check: ValidateProviderExclude,
+		Help: "Providers never opened for a model: <model>=<0x provider>[,<0x provider>]…, entries separated by ';' (empty for none). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderExclude",
+		get: func(c *Config) string { return FormatProviderExclude(c.ProviderExclude) }, set: func(c *Config, v string) { c.ProviderExclude = ParseProviderExclude(v) }},
+	{Name: "inflightMax", Env: "UPLINK_INFLIGHT_MAX", Kind: KindInt, Min: 1, Max: 1024, Default: "32", Scope: ScopeRestart, Group: "inflight",
+		Help: "In-flight inference requests allowed in total (1–1024; 4 per key). Takes effect after an Uplink restart.", Consumer: "api.NewServer newInflightLimiter",
+		get: func(c *Config) string { return itoa(c.InflightMax) }, set: func(c *Config, v string) { c.InflightMax = atoi(v) }},
+	{Name: "longPerKeyModel", Env: "UPLINK_LONG_PER_KEY_MODEL", Kind: KindInt, Min: 0, Max: 16, Default: "1", Scope: ScopeRestart, Group: "long",
+		Help: "Long sessions one key may hold per model (0–16). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
+		get: func(c *Config) string { return itoa(c.LongPerKeyModel) }, set: func(c *Config, v string) { c.LongPerKeyModel = atoi(v) }},
+	{Name: "longPerKey", Env: "UPLINK_LONG_PER_KEY", Kind: KindInt, Min: 0, Max: 64, Default: "2", Scope: ScopeRestart, Group: "long",
+		Help: "Long sessions one key may hold in total (0–64). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
+		get: func(c *Config) string { return itoa(c.LongPerKey) }, set: func(c *Config, v string) { c.LongPerKey = atoi(v) }},
+	{Name: "longSessionsMax", Env: "UPLINK_LONG_SESSIONS_MAX", Kind: KindInt, Min: 0, Max: 256, Default: "3", Scope: ScopeRestart, Group: "long",
+		Help: "Long sessions open at once across all keys (0–256). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
+		get: func(c *Config) string { return itoa(c.LongSessionsMax) }, set: func(c *Config, v string) { c.LongSessionsMax = atoi(v) }},
+	{Name: "opensPerKeyModelHour", Env: "UPLINK_OPENS_PER_KEY_MODEL_HOUR", Kind: KindInt, Min: 0, Max: 120, Default: "2", Scope: ScopeRestart, Group: "long",
+		Help: "Long-session opens one key may make per model per hour (0–120). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
+		get: func(c *Config) string { return itoa(c.OpensPerKeyModelHour) }, set: func(c *Config, v string) { c.OpensPerKeyModelHour = atoi(v) }},
+	{Name: "auditRetentionDays", Env: "AUDIT_RETENTION_DAYS", Kind: KindInt, Min: 1, Max: 3650, Default: "90", Scope: ScopeRestart,
+		Help: "Days the security audit stream is kept (1–3650). Takes effect after an Uplink restart.", Consumer: "api.NewServer openAuditSink",
+		get: func(c *Config) string { return itoa(c.AuditRetentionDays) }, set: func(c *Config, v string) { c.AuditRetentionDays = atoi(v) }},
+	{Name: "housekeeping", Env: "HOUSEKEEPING", Kind: KindBool, Default: "true", Scope: ScopeRestart,
+		Help: "Daily stake reclaim and session housekeeping (true or false). Takes effect after an Uplink restart.", Consumer: "cmd/uplink housekeep.New",
+		get: func(c *Config) string { return btoa(c.Housekeeping) }, set: func(c *Config, v string) { c.Housekeeping = atob(v) }},
+	{Name: "activeModelsUrl", Env: "ACTIVE_MODELS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_models.json", Scope: ScopeRestart, check: validateFeedURL,
+		Help: "Model catalog feed (an https URL). Takes effect after an Uplink restart.", Consumer: "cmd/uplink catalog.New",
+		get: func(c *Config) string { return c.ActiveModelsURL }, set: func(c *Config, v string) { c.ActiveModelsURL = v }},
+	{Name: "gatewayBidsUrl", Env: "GATEWAY_BIDS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_bids.json", Scope: ScopeRestart, check: validateFeedURL,
+		Help: "Rated bids feed (an https URL). Takes effect after an Uplink restart.", Consumer: "cmd/uplink catalog.WithBidsURL",
+		get: func(c *Config) string { return c.GatewayBidsURL }, set: func(c *Config, v string) { c.GatewayBidsURL = v }},
+	{Name: "webPublicUrl", Env: "WEB_PUBLIC_URL", Kind: KindString, Default: "", Scope: ScopeRestart, check: validatePublicOrigin,
+		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only. Takes effect after an Uplink restart.", Consumer: "api CSRF and settings origin checks (Config.WebPublicURL)",
+		get: func(c *Config) string { return c.WebPublicURL }, set: func(c *Config, v string) { c.WebPublicURL = strings.TrimRight(v, "/") }},
+
+	{Name: "masterKeyAdmin", Env: "MASTER_KEY_ADMIN", Kind: KindBool, Default: "false", Scope: ScopeEnvOnly,
+		Help: "Lets the master API key call /admin (true or false). Security switch: set in .env only; takes effect after an Uplink restart.", Consumer: "api requireAdmin (Config.MasterKeyAdmin)",
+		get: func(c *Config) string { return btoa(c.MasterKeyAdmin) }},
+
+	{Name: "proxyStoreChatContext", Env: "PROXY_STORE_CHAT_CONTEXT", Kind: KindBool, Default: "false", Scope: ScopeRouter,
+		Help: "Router: store chat context in its storage (true or false). Router setting: change it in the router's .env and restart the router."},
+	{Name: "proxyForwardChatContext", Env: "PROXY_FORWARD_CHAT_CONTEXT", Kind: KindBool, Default: "false", Scope: ScopeRouter,
+		Help: "Router: prepend the stored history to each prompt (true or false). Router setting: change it in the router's .env and restart the router."},
+	{Name: "routerLogLevelApp", Env: "LOG_LEVEL_APP", Kind: KindEnum, Options: routerLogLevels, Default: "warn", Scope: ScopeRouter,
+		Help: "Router application log level (debug, info, warn, error, dpanic, panic, fatal). Router setting: change it in the router's .env and restart the router."},
+	{Name: "routerLogLevelTcp", Env: "LOG_LEVEL_TCP", Kind: KindEnum, Options: routerLogLevels, Default: "warn", Scope: ScopeRouter,
+		Help: "Router TCP log level (debug, info, warn, error, dpanic, panic, fatal). Router setting: change it in the router's .env and restart the router."},
+	{Name: "routerLogLevelEthRpc", Env: "LOG_LEVEL_ETH_RPC", Kind: KindEnum, Options: routerLogLevels, Default: "warn", Scope: ScopeRouter,
+		Help: "Router chain RPC log level (debug, info, warn, error, dpanic, panic, fatal). Router setting: change it in the router's .env and restart the router."},
+}
+
+// SecretEnv are the secrets that stay in .env only: never a setting,
+// never in a settings file, never in an API answer.
+var SecretEnv = []string{"WALLET_PRIVATE_KEY", "ETH_NODE_ADDRESS", "ETH_RPC_URL", "COOKIE_CONTENT", "ROUTER_AUTH", "ADMIN_PASSWORD", "API_KEY_SEED", "MASTER_KEY"}
+
+var secretNames = []string{"walletprivatekey", "privatekey", "ethnodeaddress", "ethnodeurl", "ethrpcurl", "cookiecontent", "cookie", "routerauth", "adminpassword", "password", "apikeyseed", "seed", "masterkey", "promptkey"}
+
+// IsSecretKey reports whether k names a secret (env or console form, any case).
+func IsSecretKey(k string) bool {
+	n := strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(k))
+	for _, e := range SecretEnv {
+		if strings.EqualFold(k, e) || n == strings.ToLower(strings.ReplaceAll(e, "_", "")) {
+			return true
+		}
+	}
+	for _, s := range secretNames {
+		if n == s {
+			return true
+		}
+	}
+	return false
+}
+
+// SettingByName finds a setting by its console name.
+func SettingByName(name string) (SettingDef, bool) {
+	for _, d := range Settings {
+		if d.Name == name {
+			return d, true
+		}
+	}
+	return SettingDef{}, false
+}
+
+// Settable: the console (and a settings file) may set it.
+func (d SettingDef) Settable() bool { return d.Scope == ScopeLive || d.Scope == ScopeRestart }
+
+// Effective is Uplink's value now ("" for router settings).
+func (d SettingDef) Effective(c *Config) string {
+	if d.get == nil || c == nil {
+		return ""
+	}
+	return d.get(c)
+}
+
+// Validate checks v and returns its canonical form.
+func (d SettingDef) Validate(v string) (string, error) {
+	switch d.Kind {
+	case KindInt:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < d.Min || n > d.Max {
+			return "", fmt.Errorf("%s must be a whole number %d…%d", d.Name, d.Min, d.Max)
+		}
+		return itoa(n), nil
+	case KindBool:
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return "", fmt.Errorf("%s must be true or false", d.Name)
+		}
+		return btoa(b), nil
+	case KindEnum:
+		l := strings.ToLower(strings.TrimSpace(v))
+		if d.Env == "UPLINK_LOG_LEVEL" {
+			l = ParseLogLevel(l)
+		}
+		for _, o := range d.Options {
+			if l == o {
+				return l, nil
+			}
+		}
+		return "", fmt.Errorf("%s must be one of %s", d.Name, strings.Join(d.Options, ", "))
+	case KindString:
+		v = strings.TrimSpace(v)
+		if len(v) > 4096 {
+			return "", fmt.Errorf("%s is too long", d.Name)
+		}
+		if d.check != nil {
+			if err := d.check(v); err != nil {
+				return "", fmt.Errorf("%s: %v", d.Name, err)
+			}
+		}
+		return v, nil
+	}
+	return "", fmt.Errorf("%s cannot be set", d.Name)
+}
+
+// envPins reports whether the env value v pins the setting (env wins). A
+// string pins whenever it is set; others when FromEnv accepts the value.
+func (d SettingDef) envPins(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	switch d.Kind {
+	case KindString:
+		return true
+	case KindInt:
+		if d.envClamp {
+			n, err := strconv.Atoi(v)
+			return err == nil && n >= d.Min
+		}
+	}
+	_, err := d.Validate(v)
+	return err == nil
+}
+
+// ApplyPersisted applies persisted ScopeRestart values (by console name)
+// that the environment does not pin. A value that no longer validates is
+// skipped; the returned notes (names only) go to the ops audit stream.
+func ApplyPersisted(c *Config, vals map[string]string) []string {
+	var notes []string
+	for _, d := range Settings {
+		raw, ok := vals[d.Name]
+		if !ok || d.Scope != ScopeRestart || c.EnvPinned[d.Env] {
+			continue
+		}
+		v, err := d.Validate(raw)
+		if err == nil && d.Name == "webPublicUrl" && !c.DevHTTP && strings.HasPrefix(strings.ToLower(v), "http://") {
+			err = fmt.Errorf("http needs UPLINK_DEV_HTTP")
+		}
+		if err != nil {
+			warnf("config: persisted %s is invalid; ignored", d.Name)
+			notes = append(notes, d.Name+" persisted value invalid; ignored")
+			continue
+		}
+		d.set(c, v)
+	}
+	c.SettingNotes = append(c.SettingNotes, notes...)
+	return notes
+}
+
+func validateFeedURL(v string) error {
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return fmt.Errorf("must be an https URL")
+	}
+	return nil
+}
+
+func validatePublicOrigin(v string) error {
+	if v == "" {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimRight(v, "/"))
+	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("must be https://host[:port]")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" {
+			return nil
+		}
+	}
+	return fmt.Errorf("must be https://host[:port] (http only for localhost)")
+}
+
+// ValidateProviderExclude is ParseProviderExclude without the forgiveness:
+// any bad entry or provider is an error.
+func ValidateProviderExclude(v string) error {
+	for i, ent := range strings.Split(v, ";") {
+		ent = strings.TrimSpace(ent)
+		if ent == "" {
+			continue
+		}
+		model, provs, ok := strings.Cut(ent, "=")
+		model = strings.ToLower(strings.TrimSpace(model))
+		if !ok || (!reModelID.MatchString(model) && (strings.HasPrefix(model, "0x") || !reModelName.MatchString(model))) {
+			return fmt.Errorf("entry %d is not <model>=<provider>[,<provider>]", i+1)
+		}
+		for j, pr := range strings.Split(provs, ",") {
+			if !reProviderAddr.MatchString(strings.TrimSpace(pr)) {
+				return fmt.Errorf("entry %d provider %d is not a 0x address", i+1, j+1)
+			}
+		}
+	}
+	return nil
+}
+
+// FormatProviderExclude is the canonical string form of a parsed exclusion map.
+func FormatProviderExclude(m map[string][]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+strings.Join(m[k], ","))
+	}
+	return strings.Join(parts, ";")
+}

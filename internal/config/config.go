@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
+
+func sortStrings(s []string) { sort.Strings(s) }
 
 type Config struct {
 	// Listen address for the gateway, e.g. ":8080".
@@ -105,6 +108,8 @@ type Config struct {
 	// EnvPinned names the S6 settings whose env var holds a valid value;
 	// those cannot be changed in the admin console.
 	EnvPinned map[string]bool
+	// SettingNotes are persisted settings ignored at boot (names only).
+	SettingNotes []string
 }
 
 func FromEnv() (*Config, error) {
@@ -148,12 +153,11 @@ func FromEnv() (*Config, error) {
 	c.LogLevel = getenvLogLevel("UPLINK_LOG_LEVEL")
 	// S6: settings set in the environment win over the admin console and
 	// show there as "set by environment". Only a valid value pins.
-	c.EnvPinned = map[string]bool{
-		"SESSION_DURATION_SECONDS":          envIntValid("SESSION_DURATION_SECONDS", 600, 86400),
-		"UPLINK_SESSION_DURATION_MAX":       envIntValid("UPLINK_SESSION_DURATION_MAX", 600, 86400),
-		"UPLINK_SESSION_IDLE_GRACE_SECONDS": envIntValid("UPLINK_SESSION_IDLE_GRACE_SECONDS", 60, 3600),
-		"UPLINK_FORWARD_IDLE_SECONDS":       envIntValid("UPLINK_FORWARD_IDLE_SECONDS", 30, 600),
-		"UPLINK_LOG_LEVEL":                  ParseLogLevel(os.Getenv("UPLINK_LOG_LEVEL")) != "",
+	c.EnvPinned = map[string]bool{}
+	for _, d := range Settings {
+		if d.Scope != ScopeRouter && d.envPins(os.Getenv(d.Env)) {
+			c.EnvPinned[d.Env] = true
+		}
 	}
 
 	// The cap wins: the default is clamped down to the max, never the
@@ -409,14 +413,4 @@ func getenvLogLevel(key string) string {
 	}
 	warnf("config: %s is not debug, info, warn or error; using info", key)
 	return "info"
-}
-
-// envIntValid reports whether key holds a whole number in [lo, hi].
-func envIntValid(key string, lo, hi int) bool {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return false
-	}
-	n, err := strconv.Atoi(v)
-	return err == nil && n >= lo && n <= hi
 }
