@@ -334,6 +334,7 @@ func subtleCompare(a, b string) int {
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	s.FlushAudit()
 	writeJSON(w, http.StatusOK, map[string]any{"events": s.audit.Recent(500)})
 }
 

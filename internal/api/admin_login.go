@@ -161,9 +161,20 @@ func (s *Server) auditAggregated(event, key, ip, result, reason string) {
 	s.auditAgg.Record(AuditStreamFor(event, result), key, auditEventOf(event, ip, result, reason))
 }
 
+// writeAudit sends one event to the audit sink. Ended aggregation windows
+// are written first, so summaries keep their order with later events.
 func (s *Server) writeAudit(stream AuditStream, ev AuditEvent) {
+	s.auditAgg.Flush()
 	s.auditSink.WriteAudit(stream, ev)
 }
+
+// FlushAudit writes the summaries of ended aggregation windows. main calls
+// it once per aggregation window; it is also run on every audit write and
+// before the audit list is read.
+func (s *Server) FlushAudit() { s.auditAgg.Flush() }
+
+// AuditFlushInterval is how often FlushAudit should run.
+const AuditFlushInterval = aggWindow
 
 // requireAdmin enforces cookie session (or optional master Bearer) + CSRF + 2FA gate.
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {

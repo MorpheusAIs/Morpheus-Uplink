@@ -66,7 +66,7 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		outflow:   &OutflowAlert{},
 	}
 	s.auditSink = ringSink{ring: s.audit}
-	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, func(st AuditStream, ev AuditEvent) { s.writeAudit(st, ev) })
+	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, func(st AuditStream, ev AuditEvent) { s.auditSink.WriteAudit(st, ev) })
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()
 	return s

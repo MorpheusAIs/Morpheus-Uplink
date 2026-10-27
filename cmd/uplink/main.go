@@ -133,6 +133,20 @@ func main() {
 		}
 	}()
 
+	// Write the summaries of ended admin audit aggregation windows.
+	go func() {
+		t := time.NewTicker(api.AuditFlushInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-hkCtx.Done():
+				return
+			case <-t.C:
+				srv.FlushAudit()
+			}
+		}
+	}()
+
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
