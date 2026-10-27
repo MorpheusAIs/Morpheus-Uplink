@@ -359,7 +359,7 @@ func TestS6IgnoredPersistedValueAuditedOps(t *testing.T) {
 	}
 }
 
-// Josh S-1: the operator settings are cookie-only. Any Authorization
+// Security gate S-1: the operator settings are cookie-only. Any Authorization
 // header (the master Bearer with MASTER_KEY_ADMIN=true included) is 403;
 // a cross-site request is 403; the cookie session is 200.
 func TestS6SettingsCookieOnly(t *testing.T) {
@@ -422,7 +422,7 @@ func TestS6SettingsCookieOnly(t *testing.T) {
 	}
 }
 
-// Josh N-2: the settings body is one JSON object; trailing data is 400.
+// Security gate N-2: the settings body is one JSON object; trailing data is 400.
 func TestS6SettingsRejectsTrailingJSON(t *testing.T) {
 	m := newFakeMarket(t, provA)
 	e := newFailoverEnv(t, m, nil)
@@ -442,7 +442,7 @@ func TestS6SettingsRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
-// Josh S-2: a console log level of warn or error hides runtime info logs
+// Security gate S-2: a console log level of warn or error hides runtime info logs
 // but never audit lines (setting_change included).
 func TestS6AuditLinesIgnoreLogLevel(t *testing.T) {
 	defer LogLevel.Set(slog.LevelInfo)

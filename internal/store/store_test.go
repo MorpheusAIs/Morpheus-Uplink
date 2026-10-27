@@ -224,7 +224,7 @@ func TestAuthStateOn(t *testing.T) {
 	}
 }
 
-// Josh S-3: save writes a fresh temp file (a planted *.tmp, symlinked or
+// Security gate S-3: save writes a fresh temp file (a planted *.tmp, symlinked or
 // world-writable, has no effect), leaves the state file at 0640, and a
 // symlinked state file is refused at open and at save.
 func TestSaveIgnoresPlantedTmp(t *testing.T) {

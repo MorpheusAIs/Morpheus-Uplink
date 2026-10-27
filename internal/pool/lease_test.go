@@ -521,7 +521,7 @@ func TestS5DefaultCallsOpenOneSession(t *testing.T) {
 	}
 }
 
-// Josh N-1: the same calls spread over more than 9 minutes (past the
+// Security gate N-1: the same calls spread over more than 9 minutes (past the
 // 510 s usable life of a 600 s session) give at most one replacement, and
 // at most one open counted in the hourly log.
 func TestS5DefaultCallsOverNineMinutes(t *testing.T) {
@@ -660,7 +660,7 @@ func acquireDone(p *Pool, modelID string, dur int) (AcquireResult, error) {
 	return res, err
 }
 
-// Gary SHOULD-2: the failover replacement comes back leased, taken in the
+// Conformance SHOULD-2: the failover replacement comes back leased, taken in the
 // critical section that pooled it (no window for the sweep to close it).
 func TestS5FailoverReplacementLeased(t *testing.T) {
 	c := newFakeClock()
@@ -688,7 +688,7 @@ func TestS5FailoverReplacementLeased(t *testing.T) {
 	fr2.Lease.Done()
 }
 
-// Gary SHOULD-4 / Josh S-4: a failover reopen at a long duration counts
+// Conformance SHOULD-4 / security gate S-4: a failover reopen at a long duration counts
 // toward the long-session limits (the failed session is not counted
 // against its own replacement), and a refused one closes nothing.
 func TestS5FailoverLongCountsLimits(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Gary SHOULD-3: config warnings are written at slog Warn, so a process
+// Conformance SHOULD-3: config warnings are written at slog Warn, so a process
 // running at log level warn still shows them (std log goes at Info).
 func TestConfigWarningsAtWarnLevel(t *testing.T) {
 	var buf bytes.Buffer
