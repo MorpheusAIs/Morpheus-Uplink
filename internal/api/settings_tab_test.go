@@ -418,3 +418,70 @@ func TestSettingsImportPinnedListed(t *testing.T) {
 		t.Fatalf("%d %s fwd %d", code, body, e.srv.forwardIdle())
 	}
 }
+
+// An http webPublicUrl needs UPLINK_DEV_HTTP: set and import refuse it
+// with DEV_HTTP off and accept it with DEV_HTTP on, and the restart view
+// agrees with what ApplyPersisted does at the next start.
+func TestSettingsWebPublicURLNeedsDevHTTP(t *testing.T) {
+	const origin = "http://localhost:9999"
+	set := `{"name":"webPublicUrl","value":"` + origin + `"}`
+	file := `{"format":"uplink-settings","version":1,"settings":{"webPublicUrl":"` + origin + `"}}`
+	nextStart := func(e *settingsEnv) (string, []string) {
+		c := *e.cfg
+		c.SettingNotes = nil
+		notes := config.ApplyPersisted(&c, e.st.GetSettings().All())
+		return c.WebPublicURL, notes
+	}
+
+	e := newSettingsEnv(t, nil, nil)
+	running := e.cfg.WebPublicURL
+	for path, body := range map[string]string{"/admin/settings": set, "/admin/settings/import": file} {
+		if code, msg := e.do(t, nil, "POST", path, body, nil); code != 400 || !strings.Contains(msg, "http needs UPLINK_DEV_HTTP") {
+			t.Fatalf("%s with DEV_HTTP off: %d %q", path, code, msg)
+		}
+	}
+	if _, ok := e.st.GetSettings().Value("webPublicUrl"); ok {
+		t.Fatal("a refused http origin was saved")
+	}
+	// A value saved before this check (or by hand) is neither shown as the
+	// next-start value nor applied.
+	v := origin
+	if err := e.st.UpdateSettings(func(s *store.Settings) error { return s.SetValue("webPublicUrl", &v) }); err != nil {
+		t.Fatal(err)
+	}
+	row := e.view(t)["webPublicUrl"]
+	got, notes := nextStart(e)
+	// (The harness sets the running origin to the test server, so the
+	// view's default "" differs from it; only the persisted value matters.)
+	if row.Source != "default" || row.Value != "" || got != running || len(notes) != 1 || !strings.Contains(notes[0], "webPublicUrl") {
+		t.Fatalf("DEV_HTTP off: view %+v, next start %q %v", row, got, notes)
+	}
+
+	// DEV_HTTP on: the session cookie name changes, so log in again.
+	e.cfg.DevHTTP = true
+	code, c, _ := login(t, e.ts, e.cfg.AdminPassword, "")
+	if code != http.StatusOK {
+		t.Fatalf("login %d", code)
+	}
+	for path, body := range map[string]string{"/admin/settings": set, "/admin/settings/import": file} {
+		if code, msg := e.do(t, c, "POST", path, body, nil); code != 200 {
+			t.Fatalf("%s with DEV_HTTP on: %d %q", path, code, msg)
+		}
+	}
+	code, body := e.do(t, c, "GET", "/admin/settings", "", nil)
+	var resp struct {
+		Settings []settingView `json:"settings"`
+	}
+	if code != 200 || json.Unmarshal([]byte(body), &resp) != nil {
+		t.Fatalf("GET settings %d", code)
+	}
+	for _, r := range resp.Settings {
+		if r.Name == "webPublicUrl" {
+			row = r
+		}
+	}
+	got, notes = nextStart(e)
+	if row.Source != "persisted" || row.Value != origin || !row.PendingRestart || got != origin || len(notes) != 0 {
+		t.Fatalf("DEV_HTTP on: view %+v, next start %q %v", row, got, notes)
+	}
+}

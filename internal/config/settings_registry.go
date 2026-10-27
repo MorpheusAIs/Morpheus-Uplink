@@ -233,6 +233,21 @@ func (d SettingDef) envPins(v string) bool {
 	return err == nil
 }
 
+// ValidateFor is Validate plus the checks that depend on the running
+// config: an http webPublicUrl needs UPLINK_DEV_HTTP. The console set,
+// import, the restart view and ApplyPersisted all use it, so a value is
+// accepted only if it will apply at the next start.
+func (d SettingDef) ValidateFor(c *Config, v string) (string, error) {
+	v, err := d.Validate(v)
+	if err != nil {
+		return "", err
+	}
+	if d.Name == "webPublicUrl" && !c.DevHTTP && strings.HasPrefix(strings.ToLower(v), "http://") {
+		return "", fmt.Errorf("http needs UPLINK_DEV_HTTP")
+	}
+	return v, nil
+}
+
 // ApplyPersisted applies persisted ScopeRestart values (by console name)
 // that the environment does not pin. A value that no longer validates is
 // skipped; the returned notes (names only) go to the ops audit stream.
@@ -243,10 +258,7 @@ func ApplyPersisted(c *Config, vals map[string]string) []string {
 		if !ok || d.Scope != ScopeRestart || c.EnvPinned[d.Env] {
 			continue
 		}
-		v, err := d.Validate(raw)
-		if err == nil && d.Name == "webPublicUrl" && !c.DevHTTP && strings.HasPrefix(strings.ToLower(v), "http://") {
-			err = fmt.Errorf("http needs UPLINK_DEV_HTTP")
-		}
+		v, err := d.ValidateFor(c, raw)
 		if err != nil {
 			warnf("config: persisted %s is invalid; ignored", d.Name)
 			notes = append(notes, d.Name+" persisted value invalid; ignored")

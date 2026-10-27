@@ -58,7 +58,7 @@ func (s *Server) restartValue(d config.SettingDef, st store.Settings) (string, s
 		return d.Effective(s.cfg), "env"
 	}
 	if raw, ok := st.Value(d.Name); ok {
-		if v, err := d.Validate(raw); err == nil {
+		if v, err := d.ValidateFor(s.cfg, raw); err == nil {
 			return v, "persisted"
 		}
 	}
@@ -157,7 +157,7 @@ func (s *Server) handleRegistrySet(w http.ResponseWriter, r *http.Request, name 
 			http.Error(w, "invalid value", http.StatusBadRequest)
 			return
 		}
-		v, err := d.Validate(t)
+		v, err := d.ValidateFor(s.cfg, t)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -287,7 +287,7 @@ func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, d.Name+": invalid value", http.StatusBadRequest)
 			return
 		}
-		v, err := d.Validate(t)
+		v, err := d.ValidateFor(s.cfg, t)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
