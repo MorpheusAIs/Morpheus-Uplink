@@ -11,9 +11,9 @@ times and prompt count), GET /e2e/catalog (gateway model catalog),
 POST /e2e/catalog-mode?m=normal|empty|braces, POST /e2e/slow-close?sec=N,
 POST /e2e/provider-fail?provider=P&code=N&msg=M (that provider answers
 prompts with a provider model error; code=0 clears), GET /e2e/opens (every
-open request: model, bid, omitProvider, failover, provider picked).
+open request: model, bid, body field names, failover, provider picked).
 Every model has two providers (PROVIDERS, best rated first). Sessions:
-list (/blockchain/sessions/user), open by model (omitProvider honoured),
+list (/blockchain/sessions/user), open by model (best rated provider),
 open by bid, rated bids, close, detail, and POST /v1/chat/completions with
 a session_id header (open sessions only). Any request asking for direct
 payment is refused and counted (stats.direct_payment_requests); an open
@@ -169,7 +169,6 @@ class H(BaseHTTPRequestHandler):
                     path.startswith("/blockchain/models/") or path.startswith("/blockchain/bids/")):
                 by_bid = path.startswith("/blockchain/bids/")
                 ref = path.split("/")[3]
-                omit = str(body.get("omitProvider") or "").lower()
                 if body.get("failover") not in (False, None, "false"):
                     S["stats"]["failover_true_opens"] += 1
                 pick = model = None
@@ -180,8 +179,8 @@ class H(BaseHTTPRequestHandler):
                                 pick, model = p, m
                 else:
                     model = ref
-                    pick = next((p for p in PROVIDERS if p != omit), None)
-                S["opens"].append({"model": model, "bid": ref if by_bid else "", "omitProvider": omit,
+                    pick = PROVIDERS[0] if PROVIDERS else None
+                S["opens"].append({"model": model, "bid": ref if by_bid else "", "fields": sorted(body.keys()),
                                    "failover": body.get("failover"), "provider": pick})
                 if pick is None:
                     return self._json(500, {"error": "no provider accepting session"})

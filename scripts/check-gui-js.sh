@@ -130,11 +130,12 @@ function extract(name) {
 const FULL = 'sk-p' + 'a'.repeat(40) + 'd04f';
 const MASKED = 'sk-p\u2026d04f';
 const WALLET = '0x' + 'ab12'.repeat(10);
-let sent = [], reveals = 0, clip = [];
+let sent = [], reveals = 0, clip = [], stepUpPending = 0, stepUps = 0, stepUpAnswer = true, logins = 0;
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || { value: '', textContent: '', classList: { add() {}, remove() {} } }) };
 Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { clip.push(t); } } }, configurable: true, writable: true });
-global.showLogin = () => {};
+global.showLogin = () => { logins++; };
+global.openStepUp = async () => { stepUps++; if (stepUpAnswer) stepUpPending = 0; return stepUpAnswer; };
 global.flashIconCopied = () => {};
 global.probeDurationSec = () => 600;
 global.baseURL = () => 'https://u.example/v1';
@@ -142,6 +143,7 @@ global.shellSingleQuote = (s) => s;
 global.fetch = async (url, opts = {}) => {
   if (String(url).startsWith('/admin/keys?reveal=1')) {
     reveals++;
+    if (stepUpPending) return { status: 401, ok: false, text: async () => 'step_up_required\n' };
     return { status: 200, ok: true, json: async () => ({ masked: false, masterKey: 'sk-m' + 'b'.repeat(40), promptKey: FULL, keys: [] }) };
   }
   const h = (opts.headers || {}).Authorization;
@@ -153,9 +155,9 @@ global.fetch = async (url, opts = {}) => {
 eval([
   "let realKeys = {}; const KEY_PLACEHOLDER = 'YOUR_API_KEY'; let selectedKeyId = 'prompt'; let selectedModel = 'm'; let curlDirty = false; const MIN_SESSION_DURATION = 600;",
   "let pgKeys = [{ id: 'prompt', secret: '" + MASKED + "' }]; let secrets = { wallet: '' };",
-  ...['isMaskedKey', 'usableKey', 'rememberKeys', 'fullKey', 'selectedKeySecret', 'buildCurl', 'updateCurlPreview',
+  ...['isMaskedKey', 'usableKey', 'rememberKeys', 'revealKeys', 'fullKey', 'selectedKeySecret', 'buildCurl', 'updateCurlPreview',
       'parseCurlCommand', 'postChatCompletion', 'runCurlCommand', 'runPlayground', 'copyText', 'copySecret', 'copyWallet', 'connectKeySecret', 'copyConnectKey'].map(extract),
-  'global.T = { rememberKeys, buildCurl, runPlayground, runCurlCommand, copySecret, copyWallet, copyConnectKey, get realKeys() { return realKeys; }, secrets };',
+  'global.T = { rememberKeys, revealKeys, buildCurl, runPlayground, runCurlCommand, copySecret, copyWallet, copyConnectKey, get realKeys() { return realKeys; }, secrets };',
 ].join('\n'));
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 (async () => {
@@ -183,7 +185,14 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
   await T.copyWallet(null);
   if (clip[2] !== WALLET) fail('wallet copy got ' + JSON.stringify(clip[2]));
   if (reveals !== 1) fail('wallet copy fetched a key reveal');
-  console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key; wallet copy copies the full address');
+  // A stale session (401 step_up_required) asks for step-up once, then retries.
+  stepUpPending = 1; reveals = 0;
+  const ks = await T.revealKeys();
+  if (!ks || ks.promptKey !== FULL || stepUps !== 1 || reveals !== 2 || logins !== 0) fail('step-up retry: ' + JSON.stringify({ ks, stepUps, reveals, logins }));
+  // Cancelled step-up: no keys, no logout, no loop.
+  stepUpPending = 1; stepUpAnswer = false; reveals = 0; stepUps = 0;
+  if ((await T.revealKeys()) !== null || stepUps !== 1 || reveals !== 1 || logins !== 0) fail('cancelled step-up');
+  console.log('OK: masked keys never sent or copied; Probe, curl box, copy and connect use the full key; wallet copy copies the full address; a stale reveal asks for step-up once');
 })().catch((e) => fail(e.stack || e));
 NODE
 
@@ -469,10 +478,16 @@ function extract(name) {
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 const mkEl = () => ({ value: '', classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, contains(c) { return this._s.has(c); } } });
 const els = { alertFilter: mkEl(), alertsNoMatch: mkEl(), securityAlerts: { rows: [], querySelectorAll() { return this.rows; } } };
-global.document = { getElementById: (id) => els[id] || null };
+// DOM stub: nodes record className, textContent and children; there is no
+// innerHTML, so any use of it in alertRowsTable shows up below.
+const mkNode = (tag) => ({ tag, className: '', textContent: '', children: [], appendChild(c) { this.children.push(c); return c; } });
+global.document = { getElementById: (id) => els[id] || null, createElement: mkNode };
 global.T = {};
-eval(['escapeHtml', 'alertTime', 'alertDetail', 'alertRowsHtml', 'filterAlerts'].map(extract).join('\n')
-  + '\nObject.assign(T, { alertRowsHtml, filterAlerts });');
+eval(['alertTime', 'alertDetail', 'alertRowsTable', 'filterAlerts'].map(extract).join('\n')
+  + '\nObject.assign(T, { alertRowsTable, filterAlerts });');
+if (/alertRowsHtml|box\.innerHTML = alert/.test(html)) fail('security alerts must not be rendered through innerHTML');
+if (!html.includes('box.replaceChildren(alertRowsTable(alerts));')) fail('security alerts must use alertRowsTable');
+if (/innerHTML/.test(extract('alertRowsTable'))) fail('alertRowsTable must use textContent only');
 if (!/id="alertFilter"[^>]*type="search"[^>]*oninput="filterAlerts\(\)"/.test(html)) fail('filter box must call filterAlerts on input');
 if (html.indexOf('id="alertFilter"') > html.indexOf('id="securityAlerts"')) fail('filter box must sit above the list');
 if (!/\.alerts-table \.alert-at \{[^}]*monospace/.test(html)) fail('time column must be monospace');
@@ -483,10 +498,19 @@ const alerts = [
   { at: '2026-10-19T23:59:59.5Z', kind: '2fa_enroll', message: 'enrolled (2026-10-19 23:59:59)' },
   { at: '2026-10-19T08:00:00Z', kind: 'key_create', message: 'key created (agent-1)' },
 ];
-const out = T.alertRowsHtml(alerts);
-const rows = [...out.matchAll(/<tr class="alert-row"><td class="alert-at">([^<]*)<\/td><td class="alert-kind"><strong>([^<]*)<\/strong><\/td><td class="alert-detail">([^<]*)<\/td><\/tr>/g)]
-  .map((m) => ({ at: m[1], kind: m[2], detail: m[3] }));
-if (rows.length !== 4) fail('want 4 rows of time | bold action | details: ' + out);
+const out = T.alertRowsTable(alerts);
+if (out.tag !== 'table' || out.className !== 'alerts-table' || out.children[0].tag !== 'tbody') fail('table shape');
+const rows = out.children[0].children.map((tr) => {
+  if (tr.className !== 'alert-row' || tr.children.length !== 3) fail('row shape');
+  const [at, kind, detail] = tr.children;
+  if (at.className !== 'alert-at' || kind.className !== 'alert-kind' || kind.children[0].tag !== 'strong' || detail.className !== 'alert-detail') fail('cell shape');
+  return { at: at.textContent, kind: kind.children[0].textContent, detail: detail.textContent };
+});
+if (rows.length !== 4) fail('want 4 rows of time | bold action | details');
+// Markup in an audit field stays text.
+const evil = T.alertRowsTable([{ at: '2026-10-20T14:05:09Z', kind: '<img src=x onerror=alert(1)>', message: '/admin/<b>x</b>' }]);
+const er = evil.children[0].children[0];
+if (er.children[1].children[0].textContent !== '<img src=x onerror=alert(1)>' || er.children[2].textContent !== '/admin/<b>x</b>') fail('fields must be set as text');
 if (rows.map((r) => r.kind).join(',') !== 'balance_drop,login,2fa_enroll,key_create') fail('rows must be newest first: ' + rows.map((r) => r.kind));
 for (const r of rows) {
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(r.at)) fail('time format YYYY-MM-DD HH:MM:SS: ' + r.at);
@@ -509,7 +533,7 @@ els.alertFilter.value = 'nothing-like-this'; T.filterAlerts();
 if (hidden().join() !== 'true,true,true,true' || els.alertsNoMatch.classList.contains('hidden')) fail('no-match: ' + hidden());
 els.alertFilter.value = '  '; T.filterAlerts();
 if (hidden().join() !== 'false,false,false,false' || !els.alertsNoMatch.classList.contains('hidden')) fail('empty filter shows all');
-console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter');
+console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter, textContent only');
 NODE
 
 # Status warns when the page origin is not WEB_PUBLIC_URL (text only).
@@ -542,9 +566,140 @@ if (html.indexOf('id="originWarn"') < 0 || html.indexOf('id="originWarn"') > htm
 console.log('OK: Status warns when the page origin is not WEB_PUBLIC_URL');
 NODE
 
+# Status warns while name-keyed provider exclusions refuse opens (text only).
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function fn(name) {
+  const m = new RegExp('^function\\s+' + name + '\\s*\\(', 'm').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  return src.slice(m.index, src.indexOf('\n}', m.index) + 2);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const ui = /const UI_COPY = \{[\s\S]*?\n\};/.exec(src);
+if (!ui) fail('UI_COPY not found');
+const el = { textContent: '', classList: { _h: true, toggle(c, on) { this._h = on; } } };
+global.document = { getElementById: (id) => (id === 'exclusionsWarn' ? el : null) };
+eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['exclusionsWarning', 'renderExclusionsWarn'].map(fn).join('\n')
+  + '\nObject.assign(global, { exclusionsWarning, renderExclusionsWarn });');
+if (exclusionsWarning({}) !== '' || exclusionsWarning({ exclusionsUnresolved: 0 }) !== '') fail('no warning without refusals');
+const w = exclusionsWarning({ exclusionsUnresolved: 2 });
+if (!w.includes('2 models') || !w.includes('UPLINK_PROVIDER_EXCLUDE') || /0x/.test(w)) fail('warning text: ' + w);
+const wc = exclusionsWarning({ exclusionsUnresolved: 64, exclusionsUnresolvedCapped: true });
+if (!wc.includes('64 or more models')) fail('capped warning text: ' + wc);
+if (exclusionsWarning({ exclusionsUnresolved: 3, exclusionsUnresolvedCapped: 'true' }).includes('or more')) fail('capped flag must be a real boolean');
+renderExclusionsWarn({ exclusionsUnresolved: 1 });
+if (el.classList._h || !el.textContent.includes('1 model')) fail('exclusions warning not shown');
+renderExclusionsWarn({ exclusionsUnresolved: 0 });
+if (!el.classList._h || el.textContent) fail('exclusions warning not cleared');
+if (html.indexOf('id="exclusionsWarn"') < 0 || html.indexOf('id="exclusionsWarn"') > html.indexOf('id="connectClient"')) fail('exclusionsWarn must be on the Status overview');
+if (!/renderExclusionsWarn\(st\);/.test(src)) fail('status refresh must render the exclusions warning');
+console.log('OK: Status warns while name-keyed provider exclusions refuse opens (capped count shown as N or more)');
+NODE
+
 # API Keys has no reveal button; copy and Export all fetch the full keys.
 if grep -qE 'Reveal full keys|Masked by default|refreshKeys\(true' "$HTML"; then
   echo "FAIL: API Keys still has the reveal button or its note" >&2; exit 1
 fi
-grep -qF "await api('/admin/keys?reveal=1')" "$HTML" || { echo "FAIL: Export all must fetch full keys" >&2; exit 1; }
+grep -qF "const ks = await revealKeys();" "$HTML" || { echo "FAIL: Export all must fetch full keys" >&2; exit 1; }
+grep -qF "fetch('/admin/step-up'" "$HTML" || { echo "FAIL: step-up dialog must post /admin/step-up" >&2; exit 1; }
+grep -qF 'id="enrollPw"' "$HTML" || { echo "FAIL: enrollment needs a password field" >&2; exit 1; }
 echo "OK: no reveal button; copy and Export all fetch the full keys on demand"
+
+# Settings tab: one row per registry setting. Booleans are switches,
+# numbers number fields, strings text fields, enums selects. Env-pinned,
+# router and env-only rows are disabled with their note; others get Save
+# and Reset; the tooltip carries the range or values, the default and the
+# restart note; built with textContent (no innerHTML). Export and import
+# go through the step-up retry.
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function extract(name) {
+  const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = m.index + m[0].length, d = 1;
+  while (i < src.length && d > 0) { const c = src[i++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const mk = (tag) => ({ tag, children: [], style: {}, attrs: {}, disabled: false, value: '', checked: false, textContent: '',
+  setAttribute(k, v) { this.attrs[k] = v; }, appendChild(c) { this.children.push(c); return c; } });
+const box = mk('div');
+global.document = { getElementById: () => box, createElement: mk };
+const names = ['renderSettings', 'settingText', 'settingTip', 'settingNote', 'setTip', 'settingValue'];
+for (const n of ['renderSettings', 'settingTip', 'settingNote']) if (/innerHTML/.test(extract(n))) fail(n + ' must not use innerHTML');
+eval(names.map(extract).join('\n') + '\nObject.assign(global, { renderSettings, settingValue });');
+renderSettings([
+  { name: 'forwardIdle', kind: 'int', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
+  { name: 'logLevel', kind: 'enum', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false, settable: true, scope: 'live', help: 'Log level.' },
+  { name: 'sessionFailover', kind: 'bool', value: false, default: true, source: 'persisted', env: 'SESSION_FAILOVER', pinned: false, settable: true, scope: 'restart', restart: 'uplink', pendingRestart: true, effective: true, help: 'Fail over (true or false). Takes effect after an Uplink restart.' },
+  { name: 'providerExclude', kind: 'string', value: 'm1=0xabc', default: '', source: 'persisted', env: 'UPLINK_PROVIDER_EXCLUDE', pinned: false, settable: true, scope: 'restart', help: 'Excluded providers.' },
+  { name: 'routerLogLevelApp', kind: 'enum', value: null, default: 'warn', options: ['debug', 'warn'], source: 'router', env: 'LOG_LEVEL_APP', pinned: false, settable: false, scope: 'router', help: 'Router log level. Router setting: change it in the router\u2019s .env and restart the router.' },
+  { name: 'masterKeyAdmin', kind: 'bool', value: false, default: false, source: 'default', env: 'MASTER_KEY_ADMIN', pinned: false, settable: false, scope: 'env', help: 'Security switch.' },
+  { name: 'webPublicUrl', kind: 'string', value: 'https://console.example', default: '', source: 'env', env: 'WEB_PUBLIC_URL', pinned: true, settable: false, scope: 'env', help: 'Console origin. Set in .env only.' },
+]);
+const [pinned, free, bool, str, router, envOnly, envOnlySet] = box.children;
+const ctl = (row) => row.children.find((c) => c.id && c.id.startsWith('setting-'));
+const note = (row) => row.children[row.children.length - 1].textContent;
+const buttons = (row) => row.children.filter((c) => c.tag === 'button').length;
+const tipOf = (row) => row.children.find((c) => c.className === 'tip').attrs['data-tip'] || '';
+if (!ctl(pinned).disabled || buttons(pinned)) fail('env-pinned field must be disabled with no Save/Reset');
+if (note(pinned) !== 'set by environment (UPLINK_FORWARD_IDLE_SECONDS) \u2014 remove it from .env to manage it here') fail('env note: ' + note(pinned));
+if (ctl(pinned).type !== 'number' || ctl(pinned).min !== '30' || ctl(pinned).max !== '600') fail('number field');
+if (!tipOf(pinned).includes('30–600') || !tipOf(pinned).includes('Default: 180')) fail('tooltip needs range and default: ' + tipOf(pinned));
+if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || buttons(free) !== 2) fail('enum select with Save and Reset');
+if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false || buttons(bool) !== 2) fail('bool must be a switch');
+if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
+if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
+if (!ctl(router).disabled || buttons(router) || !note(router).includes('router') || !tipOf(router).includes('restart the router')) fail('router row must be read-only with the router note');
+if (!ctl(envOnly).disabled || buttons(envOnly) || !note(envOnly).includes('.env only')) fail('env-only row must be read-only');
+if (!ctl(envOnlySet).disabled || buttons(envOnlySet) || note(envOnlySet) !== 'set in .env only (WEB_PUBLIC_URL)') fail('env-only row set in .env must say .env only, not "remove it": ' + note(envOnlySet));
+if (!/stepUpFetch\('\/admin\/settings'/.test(extract('saveSetting')) || /\bapi\('\/admin\/settings'/.test(extract('saveSetting'))) fail('a single-setting save must use the step-up retry');
+if (settingValue('64', 'int') !== 64 || settingValue(true, 'bool') !== true || settingValue('x', 'string') !== 'x') fail('typed values');
+if (!html.includes('data-tab="settings"') || !html.includes('id="tab-settings"')) fail('Settings must be its own tab');
+const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-keys"'));
+if (sec.includes('settingsList')) fail('settings must leave the Security tab');
+if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
+if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
+console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, env/router/env-only rows read-only, saves, export and import behind step-up');
+NODE
+
+# Sessions page: per-session lease state (opened, ends, in flight, holders)
+# is on the Sessions table; /admin/status has no poolSessions.
+node - "$OUT" "$HTML" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+function extract(name) {
+  const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = m.index + m[0].length, d = 1;
+  while (i < src.length && d > 0) { const c = src[i++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+const head = /<table id="sessTable">\s*<thead><tr>(.*?)<\/tr><\/thead>/s.exec(html);
+if (!head) fail('sessTable header not found');
+const cols = [...head[1].matchAll(/<th>(.*?)<\/th>/g)].map((m) => m[1]);
+const want = ['Model', 'Session', 'Stake', 'Opened', 'Ends', 'In flight', 'Holders', 'Status', ''];
+if (JSON.stringify(cols) !== JSON.stringify(want)) fail('Sessions columns: ' + JSON.stringify(cols));
+const body = { innerHTML: '' };
+global.document = { querySelector: () => body };
+global.escapeHtml = (s) => String(s); global.escapeAttr = (s) => String(s);
+global.shortSecret = (s) => String(s).slice(0, 6); global.fmtMor = () => '1 MOR';
+global.fmtEnds = (iso) => (iso ? 'T:' + iso : '—');
+eval(extract('renderSessions') + '\nglobal.renderSessions = renderSessions;');
+renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', openedAt: 'o1', endsAt: 'e1', pooled: true, usable: true, inFlight: 3, holderCount: 2, holders: ['k1', 'k2'], long: true }], '');
+const cells = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim());
+if (cells.length !== 9) fail('row has ' + cells.length + ' cells');
+if (cells[3] !== 'T:o1' || cells[4] !== 'T:e1' || cells[5] !== '3' || cells[6] !== '2' || cells[7] !== 'reused') fail('cells ' + JSON.stringify(cells));
+if (!body.innerHTML.includes('title="k1, k2"')) fail('holders tooltip');
+renderSessions([], '');
+if (!body.innerHTML.includes('colspan=9')) fail('empty row must span 9 columns');
+if (/\blong\b/i.test(extract('renderSessions')) || body.innerHTML.includes('long')) fail('the Sessions table must not show a long flag');
+if (/poolSessions/.test(src)) fail('the GUI must not read poolSessions');
+console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag)');
+NODE

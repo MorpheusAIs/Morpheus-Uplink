@@ -15,7 +15,7 @@ One topic at a time. You do not need every section on day one.
   a recovery code). Wrong password and missing code get the same answer, so
   the page never reveals whether 2FA is enrolled; lockout and audit apply to
   both steps.
-- Tabs: Status, API Keys, Probe, Sessions & Usage, Security (far right).
+- Tabs: Status, API Keys, Probe, Sessions & Usage, Security, Settings (far right).
 - Status, top to bottom: a status line (health or the reason it is not
   healthy, open sessions, versions), the four MOR numbers below, Connect a
   client, then Add MOR and Support (both collapsed). Hover or focus an &#9432; for help.
@@ -24,7 +24,10 @@ One topic at a time. You do not need every section on day one.
 - Security: the **2FA switch** turns two-factor login on or off. It is off
   by default on every deploy (password-only login), and the tab shows a
   short note recommending turning it on; nothing is forced. Turning it on
-  runs the enrollment (scan the QR code, confirm a code). Until a code is
+  runs the enrollment: enter the admin password, start, scan the QR code,
+  and confirm a code (the password is asked for again on confirm).
+  Confirming signs out every other admin session; this browser stays
+  signed in. Until a code is
   confirmed the tab shows one message, "Finish setup", and switching back
   off cancels the setup (after a reset, below, it cannot be switched off). 2FA is on once the code is confirmed, and 10
   recovery codes are shown once; save them.
@@ -32,7 +35,14 @@ One topic at a time. You do not need every section on day one.
   `DATA_DIR`, so it survives restarts and redeploys.
 - Regenerate recovery codes, reset 2FA or turn it off from the same tab:
   the buttons (and switching off) need both the password and a current
-  code or recovery code.
+  code or recovery code. Regenerate takes only a 6-digit authenticator
+  code, not a recovery code.
+- Admin sessions end after 4 hours without activity and 12 hours after
+  login, whether 2FA is on or off; the Security tab shows both. Background
+  refreshes do not count as activity. These lengths are fixed (no setting).
+- Full API keys (copy, Probe, Export all) need a recent confirmation: within
+  30 minutes of login or of the last confirmation. Otherwise the page asks
+  for the password (and a 6-digit code when 2FA is on) and then continues.
 - Turn off removes the 2FA secret and all recovery codes and signs out
   every session; the next login is password only.
 - Reset wipes the 2FA secret and all recovery codes and signs out every
@@ -47,9 +57,11 @@ One topic at a time. You do not need every section on day one.
   and lockouts, 2FA and key changes, boot session checks, provider
   failovers, balance drops),
   newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
-  (bold) | details. The filter box above the list hides rows that do not
-  contain the typed text (case-insensitive). The list is kept in memory and
-  starts empty after a restart; forward the container logs for history. It
+  (bold) | details, set as plain text. The filter box above the list hides
+  rows that do not contain the typed text (case-insensitive). The list is
+  loaded at boot from the audit files in `DATA_DIR`
+  ([Audit streams](06-developers.md#audit-streams)), so it survives a
+  restart; at least half of it is kept for admin and credential events. It
   loads once 2FA is enrolled or off; while an enrollment is required it says
   so instead.
 
@@ -121,9 +133,20 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a
   dedicated wallet: the boot check and the stop act on every session of
   the wallet.
+- A session with no call in flight and no use for 5 minutes
+  (`UPLINK_SESSION_IDLE_GRACE_SECONDS`) is closed early so its unused stake
+  returns. A session is never closed while a call is still running on it;
+  apps can release their hold when done ([Long jobs](04-clients.md#long-jobs-timeouts-session-length-release)).
+  The **Sessions** table shows, per session, when it opened and ends, the
+  calls in flight and the holders (key ids in the tooltip).
 - **Usage** counters are stored on the Uplink data volume: they survive
   restarts and redeploys, and reset on a fresh deploy or when the volume is
   deleted. Funds do not depend on them.
+- Usage is counted per model registration: a call by name and a call by
+  id to the same model land in one row, shown as `name (0x + 6 hex)`, for
+  example `deepseek-v4-pro (0xb2c4a6)`. An id the catalog no longer lists
+  shows its short id. Rows saved by an older version under a model name
+  join the matching row when the name still resolves.
 
 ---
 
@@ -133,6 +156,29 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 2. Pick a model (fuzzy search) and an API key.
 3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
+
+---
+
+## Settings
+
+- Every operator setting that is not a secret, one row each: a toggle,
+  number field, list or text field, with its default. The tooltip gives
+  the range or values and says whether it applies at once or after an
+  Uplink or router restart. **Save** stores it in `DATA_DIR`; **Reset**
+  returns to the default. Saving a setting that applies after an Uplink
+  restart asks for the password (and 2FA code) again, like key export.
+- A value set in `.env` wins and is read-only, with a note to remove it
+  from `.env` to manage it here. Router settings, `MASTER_KEY_ADMIN`,
+  `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are
+  read-only (set in `.env`).
+- `sessionRelease` turns the apps' session release
+  (`POST /v1/sessions/release`) on or off.
+- **Export settings** / **Import settings** download or load a settings
+  file; both ask for the password (and 2FA code) again, like key export.
+  An import with any invalid, unknown or secret entry changes nothing.
+- Secrets (wallet key, ETH node URL, cookie, admin password, API key
+  seed, master key) never show here: they stay in `.env`.
+- Details: [Operator settings](06-developers.md#operator-settings).
 
 ---
 

@@ -73,16 +73,55 @@ print(client.chat.completions.create(
   provider is available), in the OpenAI error shape (`error.message`,
   `error.type`, `error.code`). `502` means Uplink could not reach its
   router.
-- Streaming: if the provider fails after part of the answer was sent, the
-  stream ends with one `data: {"error":{...,"type":"provider_error"}}`
-  event. Send the request again; the next one goes to another provider
-  (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
+- Streaming: if the provider fails or its stream breaks off (no
+  `data: [DONE]`) after part of the answer was sent, the stream ends with
+  one `data: {"error":{...,"type":"provider_error"}}` event. Send the
+  request again; the next one goes to another provider when the model has
+  one. Closing your own connection is never counted against the provider.
 - See [Provider failover](06-developers.md#provider-failover).
 
 </details>
 
 
 ---
+
+## Long jobs (timeouts, session length, release)
+
+For calls that run for many minutes. All optional; without them nothing
+changes. Any key may ask for a long session; release needs a generated
+`sk-…` key (the master and prompt keys hold no sessions of their own).
+
+```bash
+curl -sS https://YOUR_HOST/v1/chat/completions \
+  -H "Authorization: Bearer sk-…" -H "Content-Type: application/json" \
+  -H "X-Uplink-Session-Duration: 1800" -H "X-Uplink-Idle-Timeout: 300" \
+  -d '{"model":"…","stream":true,"messages":[…]}'
+```
+
+- `X-Uplink-Idle-Timeout` (seconds without bytes, 30…600, default 180),
+  `X-Uplink-Session-Duration` (session length for a new session, 600…max).
+  Whole numbers only, sent once; a bad value is a `400` naming the header.
+  Each call's total timer is 600 s.
+- The response then carries `X-Uplink-Timeouts: idle=…;total=…`.
+- A session is used until it expires or is closed for being idle; the
+  next call opens a new one.
+- A timeout before any answer is a `504` with `"type":"timeout"`. In a
+  stream it ends with an error event, `finish_reason:
+  "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.
+- Uplink adds no limit on long sessions or calls at once; a `429` from
+  the router or provider is passed through.
+- When done, release your hold so unused stake returns early:
+
+```bash
+curl -sS -X POST https://YOUR_HOST/v1/sessions/release \
+  -H "Authorization: Bearer sk-…" -d '{"model":"…"}'
+```
+
+  Answers `{"released":true,"closed":true}`, `…"closed":false,"reason":"shared"`
+  (another key still uses it) or `{"released":false,"reason":"not_held"}`.
+  When the operator turned release off (`sessionRelease` on the Settings
+  tab) the answer is `403` `release_disabled`.
+- Details: [Long jobs](06-developers.md#long-jobs).
 
 ## Usage (`GET /v1/usage`)
 

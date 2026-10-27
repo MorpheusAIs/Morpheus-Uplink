@@ -8,10 +8,10 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -36,7 +36,14 @@ type Server struct {
 	sessions  *adminauth.SessionStore
 	lockout   *adminauth.Lockout
 	audit     *AuditLog
+	auditSink AuditSink
+	auditFile *auditSink
+	auditAgg  *auditAggregator // loopable high-value events
+	opsAgg    *auditAggregator // failure/ops events
 	outflow   *OutflowAlert
+
+	settings   *runtimeSettings // S6: effective operator settings
+	settingsMu sync.Mutex       // serialises setting changes
 
 	walletMu   sync.Mutex
 	lastWallet string // last address the router returned (never blanked)
@@ -44,9 +51,14 @@ type Server struct {
 }
 
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
+	if pl != nil && cat != nil {
+		// The refused-model record behind the console warning checks the
+		// catalog without fetching.
+		pl.SetCatalogLoaded(cat.Loaded)
+	}
 	lo, err := adminauth.NewLockout(cfg.TrustedProxyCIDRs)
 	if err != nil {
-		log.Printf("adminauth: trusted proxy CIDR: %v (using RemoteAddr only)", err)
+		warnf("adminauth: trusted proxy CIDR: %v (using RemoteAddr only)", err)
 		lo, _ = adminauth.NewLockout(nil)
 	}
 	s := &Server{
@@ -63,6 +75,21 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		audit:     NewAuditLog(500),
 		outflow:   &OutflowAlert{},
 	}
+	s.auditFile = openAuditSink(s.audit, cfg.DataDir, time.Duration(auditRetentionDays(cfg))*24*time.Hour)
+	s.auditSink = s.auditFile
+	emit := func(st AuditStream, ev AuditEvent) { s.auditSink.WriteAudit(st, ev) }
+	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, aggMaxKeys*16, emit)
+	s.opsAgg = newAuditAggregator(aggWindow, opsAggMaxKeys, opsAggMaxKeys, emit)
+	var persisted store.Settings
+	if st != nil {
+		persisted = st.GetSettings()
+	}
+	var notes []string
+	s.settings, notes = resolveSettings(cfg, persisted)
+	for _, n := range append(notes, cfg.SettingNotes...) {
+		s.auditSystem("setting_ignored", "boot", "ignored", n, true)
+	}
+	s.applySettings()
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()
 	return s
@@ -76,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/embeddings", s.requireAPIKey(s.handleInference("/v1/embeddings")))
 	mux.HandleFunc("GET /v1/models", s.requireAPIKey(s.handleModels))
 	mux.HandleFunc("GET /v1/usage", s.requireAPIKey(s.handleUsageV1))
+	mux.HandleFunc("POST /v1/sessions/release", s.requireAPIKey(s.handleSessionRelease))
 
 	// Auth (public login; session-gated logout / 2FA enroll).
 	mux.HandleFunc("POST /admin/login", s.handleLogin)
@@ -84,13 +112,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/2fa/status", s.requireSession(s.handleTOTPStatus))
 	mux.HandleFunc("POST /admin/2fa/enroll/start", s.requireSession(s.handleTOTPEnrollStart))
 	mux.HandleFunc("POST /admin/2fa/enroll/confirm", s.requireSession(s.handleTOTPEnrollConfirm))
+	mux.HandleFunc("POST /admin/step-up", s.requireSession(s.handleStepUp))
 	mux.HandleFunc("POST /admin/2fa/remove", s.requireAdmin(s.handleTOTPRemove))
 	mux.HandleFunc("POST /admin/2fa/recovery/regen", s.requireAdmin(s.handleRecoveryRegen))
 	mux.HandleFunc("POST /admin/2fa/reset", s.requireAdmin(s.handleTOTPReset))
 	mux.HandleFunc("GET /admin/audit", s.requireAdmin(s.handleAudit))
 
 	// Admin surface (session cookie).
-	mux.HandleFunc("GET /admin/keys", s.requireAdmin(s.handleListKeys))
+	mux.HandleFunc("GET /admin/keys", s.refuseRevealOverBearer(s.requireAdmin(s.handleListKeys)))
 	mux.HandleFunc("POST /admin/keys", s.requireAdmin(s.handleCreateKey))
 	mux.HandleFunc("POST /admin/keys/import", s.requireAdmin(s.handleImportKey))
 	mux.HandleFunc("DELETE /admin/keys/{id}", s.requireAdmin(s.handleRevokeKey))
@@ -104,6 +133,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/models", s.requireAdmin(s.handleAdminModels))
 	mux.HandleFunc("POST /admin/disk/prune-usage", s.requireAdmin(s.handlePruneUsage))
 	mux.HandleFunc("GET /admin/security", s.requireAdmin(s.handleSecurity))
+	mux.HandleFunc("GET /admin/settings", s.requireConsoleSession(s.handleSettingsGet))
+	mux.HandleFunc("POST /admin/settings", s.requireConsoleSession(s.handleSettingsSet))
+	mux.HandleFunc("GET /admin/settings/export", s.requireConsoleSession(s.handleSettingsExport))
+	mux.HandleFunc("POST /admin/settings/import", s.requireConsoleSession(s.handleSettingsImport))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))
@@ -154,7 +187,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		r.Header.Set("X-Uplink-Key-Id", keyID)
-		next(w, r)
+		next(w, withKeyID(r, keyID))
 	}
 }
 
@@ -190,4 +223,11 @@ func writeOpenAIError(w http.ResponseWriter, status int, message string) {
 			"type":    "invalid_request_error",
 		},
 	})
+}
+
+func auditRetentionDays(cfg *config.Config) int {
+	if cfg == nil || cfg.AuditRetentionDays <= 0 {
+		return 90
+	}
+	return cfg.AuditRetentionDays
 }

@@ -20,12 +20,75 @@ GUI login is `POST /admin/login` with `ADMIN_PASSWORD` (+ TOTP / recovery
 code once 2FA is enrolled), which sets an HttpOnly session cookie; Basic auth
 is rejected on `/admin/*`. The Master key can drive admin APIs as a Bearer
 token only when `MASTER_KEY_ADMIN=true` (default off); each such request
-writes an `admin_key_use` audit record. The session-only routes
-`POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`
-and `POST /admin/2fa/enroll/confirm` require the admin cookie session: any
+writes an `admin_key_use` audit record (aggregated: the first use per
+client address per minute is written at once, repeats become one
+`count=N` line). The session-only routes
+`POST /admin/logout`, `GET /admin/2fa/status`, `POST /admin/2fa/enroll/start`,
+`POST /admin/2fa/enroll/confirm` and `POST /admin/step-up` require the admin cookie session: any
 Authorization header is refused on session-only routes (any scheme or case,
 empty or repeated, the Master key included) with the same 401 as a request
 without credentials, whatever `MASTER_KEY_ADMIN` says.
+
+### Admin sessions and step-up
+
+- **Lengths** are fixed constants: idle 4h, absolute 12h, the same whether
+  2FA is on or off. There is no environment variable or GUI setting for
+  them. The cookie `MaxAge` is 12h; requests with `X-Uplink-Poll: 1` do not
+  extend idle. `/admin/status` reports `adminSession` (`idle`, `idleSec`,
+  `absolute`, `absoluteSec`, `stepUpMaxAgeSec`, and `warnings`, which holds
+  the informational `2FA is off` while 2FA is off).
+- **Step-up**: `POST /admin/step-up {"password", "code"}` (cookie session
+  only, CSRF-checked, under the login lockout, checked before the
+  password). With 2FA enrolled `code` must be a current TOTP code (a step
+  works once); a recovery code is refused without being consumed. With 2FA
+  not enrolled the password alone is checked. Success stamps the session
+  and audits `step_up`. Credentials are read from the POST body only.
+- **Key reveal**: `GET /admin/keys?reveal=1` returns full keys only on a
+  cookie session that logged in or stepped up within 30 minutes; otherwise
+  `401 step_up_required`. With any Authorization header it is `403`,
+  whatever `MASTER_KEY_ADMIN` says; the masked listing over the Bearer is
+  unchanged.
+- **Client address**: a change of client address within a session is
+  audited once per change as `admin_session_ip_change` (aggregated per
+  session per minute). The session is not bound to an address.
+- **Master Bearer lockout**: the Bearer branch of the admin routes has its
+  own per-client-address lockout (5 free failures, then 2^(n-5) s up to
+  15 min), checked before the key compare. It neither reads nor feeds the
+  global login trip, so a password flood does not lock the Master key out
+  from other addresses. Each rejected Bearer is audited as
+  `admin_bearer_reject` (path and address only).
+
+### Audit streams
+
+Two JSON Lines files in `DATA_DIR` (directory 0750), opened append-only
+with `O_NOFOLLOW`, mode 0600:
+
+| File | Holds |
+|---|---|
+| `audit-security.jsonl` | Successful admin and credential events: `login`, `step_up`, `key_reveal`, `key_create` / `key_import` / `key_revoke`, 2FA changes, `setting_change`, `settings_export` / `settings_import`, `pool_close` / `pool_close_all`, `admin_session_ip_change`, `admin_key_use`, `balance_drop` |
+| `audit.jsonl` | Failures and agent or system events: `admin_bearer_reject`, login and step-up failures, other rejects, `session_release`, `setting_ignored`, `provider_failover`, `session_reconcile*` |
+
+- **Aggregation**: unauthenticated failures (`login`, `login_lockout`,
+  `admin_bearer_reject`) are written at most once per minute per (client
+  address, event), and agent events per (key id, event); repeats become
+  one line with `count`. The map holds about 10,000 keys; beyond that new
+  keys share one `other` line per event. `admin_key_use` and
+  `admin_session_ip_change` are aggregated the same way (64 keys per event).
+- **Rotation**: at 5 MiB a file moves to `.1` and `.2`; at most 3 files per
+  stream.
+- **Retention**: `AUDIT_RETENTION_DAYS` (default 90, 1…3650) for
+  `audit-security.jsonl`, 30 days for `audit.jsonl`. Whole rotated files
+  whose newest line is older are deleted at boot and daily; the live file
+  is never rewritten.
+- **Safety**: a symlink, a non-regular file or a file owned by another uid
+  is refused (logged once; the in-memory list only). A write error is
+  logged once and is not fatal.
+- **Content**: `json.Marshal` only. Paths without the query, at most 256
+  printable ASCII bytes; never the User-Agent, a token or any part or hash
+  of one.
+- **Boot**: the last 500 lines of each file are loaded into the in-memory
+  list behind `GET /admin/audit` (same shape, plus `stream` and `count`)
+  and Security alerts. Status `disk.audit` reports the file sizes.
 
 ### Admin 2FA and recovery codes
 
@@ -64,9 +127,12 @@ without credentials, whatever `MASTER_KEY_ADMIN` says.
   `GET /admin/2fa/status` (`on`, `enrolled`, `need2fa`, `recoveryRemaining`),
   `POST /admin/2fa/enroll/start`, `POST /admin/2fa/enroll/confirm`
   (returns the codes), `POST /admin/2fa/recovery/regen`,
-  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Regen, reset and
-  remove need `{"password", "code"}`, where `code` is a TOTP or a recovery
-  code.
+  `POST /admin/2fa/reset`, `POST /admin/2fa/remove`. Enroll start needs
+  `{"password"}` and confirm `{"password", "code"}` (wrong password: 401
+  `invalid password`, counted by the lockout); a confirmed enrollment
+  revokes every admin session and re-issues the caller's cookie. Regen
+  needs `{"password", "code"}` with a TOTP code only. Reset and remove need
+  `{"password", "code"}`, where `code` is a TOTP or a recovery code.
 - **Lifecycle.** Turn on (enroll): Security tab switch, scan the QR code,
   confirm a code; the 10 recovery codes are shown once. Regenerate:
   replaces all codes (password plus a code), shown once. Reset: below.
@@ -131,7 +197,14 @@ everything. Time range defaults to **7d** (UTC day buckets; no hourly precision)
 
 ### `GET /v1/usage` (self-scoped)
 
-Bearer API keys only (`requireAPIKey`). Response `{"usage":[ UsageRow… ]}`.
+Bearer API keys only (`requireAPIKey`). Response `{"usage":[ row… ]}`, the
+same row shape as `GET /admin/usage`:
+`{day, keyId, model, modelId, requests, promptTokens, completionTokens, sessionSeconds}`.
+Usage is recorded by the resolved registration id, so name and id calls
+share a row. `model` is the display label `name (0x + 6 hex)`, or the short
+id when the catalog does not list the id; `modelId` is the full id. Rows
+stored under a model name by older versions are resolved and merged on
+read; a name that no longer resolves is shown as stored with no `modelId`.
 
 | Caller | Scope |
 |--------|--------|
@@ -249,15 +322,22 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | Var | Default | Purpose |
 |---|---|---|
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
-| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
-| `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (stored, not fetched today; not merged into LowestBid) |
+| `SESSION_DURATION_SECONDS` | `600` | Default session length (stake scales), 600…86400; above `UPLINK_SESSION_DURATION_MAX` it is clamped down to the max |
 | `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
-| `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed) |
+| `UPLINK_PROVIDER_EXCLUDE` | (empty) | Providers never opened for a model: `<model>=<provider>[,<provider>]…`, entries separated by `;`; model is an id or a catalog name ([Provider failover](#provider-failover)). Bad entries are warned and ignored |
+| `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed); at most `86400` (larger values are clamped, with a warning) |
+| `UPLINK_SESSION_DURATION_MAX` | `1800` | Longest session a client may ask for with `X-Uplink-Session-Duration`, 600…86400; every open is capped at it, with or without headers; never raised by the default ([Long jobs](#long-jobs)) |
+| `UPLINK_FORWARD_IDLE_SECONDS` | `180` | Default idle timer per inference call (no bytes from upstream), 30…600 |
+| `UPLINK_SESSION_IDLE_GRACE_SECONDS` | `300` | A session with nothing in flight and no use for this long is closed early, 60…3600 |
+| `UPLINK_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error`; also a console setting ([Operator settings](#operator-settings)). Runtime warnings are written at `warn`, so at `error` they are dropped (warnings about the configuration itself still print at boot, before the level applies); audit lines on stdout are always written (pinned at `info`) |
+| `UPLINK_SESSION_RELEASE` | `true` | `POST /v1/sessions/release` on (`true`) or off (`false`: `403` `release_disabled`) ([Long jobs](#long-jobs)) |
 | `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |
 | `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
+| `AUDIT_RETENTION_DAYS` | `90` | Retention of `audit-security.jsonl` rotated files, 1…3650 ([Audit streams](#audit-streams)) |
 | `SESSION_DIRECT_PAYMENT` | ignored | Removed: sessions are always staking-mode (`directPayment:false`); setting `true` only logs a warning |
 | `CLOSE_SESSIONS_ON_EXIT` | `true` | On a graceful stop, close every open session on the wallet (as of the last scan, including uncatalogued models and other clients' sessions); `false` leaves them for the next boot reconcile |
 | `UPLINK_RECONCILE_GATE_SECONDS` | `60` | Boot reconcile: how long session opens wait for the first session list |
@@ -435,7 +515,11 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   of credit or rejects its own key); any 429; any 5xx; and a provider
   model error with 400, 413 or 422 whose text says the provider is
   impaired (rate limit, too many requests, capacity, overloaded, model or
-  service unavailable, or `"statusCode":429` / `503` in the body).
+  service unavailable, or `"statusCode":429` / `503` in the body), or
+  whose text reports a cut of the provider's own stream (`error reading
+  stream`, `unexpected eof`, `connection reset`, `broken pipe`). These cut
+  strings count only inside a provider model error body from the router,
+  never when they come from Uplink's own socket to its client.
 - *Relayed with the router's real status* (not a blanket 502), no
   failover, no cool-down: other 4xx (the request itself is wrong, for
   example a bad parameter), TEE attestation or verification failures, and
@@ -444,6 +528,13 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   `error.code`) with the provider's body kept under `providerModelError`.
   A 401/403 from the router itself (Uplink's router credential) stays a
   502, since it is not the client's key.
+  Router text is scrubbed before it is relayed: URLs, `0x` values of 40
+  or more hex characters, IP addresses and ports, host names and stack
+  text are replaced with `[url]`, `[id]`, `[ip]`, `[host]` and `[trace]`.
+  The message is capped at 1000 bytes (never splitting a character) and
+  the whole response body at 4 KiB (an oversized `providerModelError`
+  becomes the minimal `{"error":{"message"}}` form); the full text goes
+  only to the server log.
 - *Not a provider fault:* Uplink cannot reach its own router (502), or the
   router rejects the session id (the existing reopen on a dead session).
 - *Guardrail:* before closing anything, Uplink lists the model's rated
@@ -452,10 +543,9 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   is open, so a close and reopen onto no other provider only ties up
   liquidity) and relays the original error (`no_alternate`).
 - *Order:* under the model's open lock, Uplink closes the failed session
-  first (synchronously, up to 30 s) and then opens on another provider:
-  with one excluded provider, by model with the router's `omitProvider`;
-  with more, by bid over the rated bids (best score first, at most 3
-  tries, one per provider). A failed close is logged and the session is
+  first (synchronously, up to 30 s) and then opens on another provider by
+  bid over the rated bids (best score first, at most 3 tries, one per
+  provider). Avoiding a provider is never left to the router's own pick. A failed close is logged and the session is
   retired: Rehydrate never adopts it back.
 - *Once:* one failover and one retry per request. A provider failure on the
   retry puts that provider in cool-down too and is relayed. Concurrent
@@ -463,22 +553,221 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   the replacement.
 - *Cool-down* (`UPLINK_PROVIDER_COOLDOWN_SECONDS`, default 600): per model
   and provider, in memory (a restart forgets it). New opens and Rehydrate
-  avoid cooling providers; if every provider of the model is cooling, a
-  normal open is made. `0` keeps no memory across requests; the immediate
-  retry still avoids the provider that just failed.
+  avoid cooling providers. `0` keeps no memory across requests; the
+  immediate retry still avoids the provider that just failed. Values
+  above 86400 are clamped to 86400 (with a config warning).
+- *Fail fast:* a new open never drops an avoidance to get a session. When
+  every eligible provider is cooling or just cut a stream, when each
+  provider the bid walk tried failed to open, or when the rated bids
+  cannot be read while any provider is avoided (cooling, cut or
+  configured), nothing is opened and the request gets `503`
+  `no_available_provider` ("no provider is available for this model right
+  now; retry later", no ids). `Retry-After` is the shortest remaining
+  cool-down of a provider that is in the bids and not configured-excluded,
+  capped at 600 s and rounded up to whole seconds (at least 1); it is left
+  off when no cool-down is known (for example only a stream cut, or a
+  cool-down of `0`). A refusal consumes a pending stream cut. Refusals are
+  audited on the ops stream as `provider_unavailable`, one line per model
+  per minute with a count. In a failover, the retired-session reopen that
+  finds nothing available relays the original error (audit
+  `no_available`). With nothing avoided, the normal open by model is
+  unchanged.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
-  the answer cannot be restarted: the provider's error line is replaced by
-  one `data: {"error":{"message":...,"type":"provider_error","code":N}}`
-  event and the stream ends. The provider goes into cool-down and the
-  session is retired (only when another provider exists), so the next
-  request opens elsewhere (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
+  the answer cannot be restarted. Two upstream events count as a
+  mid-stream provider cut: a provider error line, and the router body
+  ending (or failing to read) without `data: [DONE]` or a `finish_reason`
+  while the request is still live and no Uplink timer ended it. Either
+  way the client gets one
+  `data: {"error":{"message":...,"type":"provider_error","code":N}}`
+  event (`code` 502 for a bare cut) and the stream ends. The provider goes
+  into cool-down and the session is retired (only when another provider
+  exists). The model's next open walks the rated bids by bid without that
+  provider, even when it is the only one cooling or the cool-down is `0`.
+- *Never a provider fault:* the client hanging up, a write error to the
+  client (broken pipe, connection reset, write deadline), a cancelled
+  request, and Uplink's own idle or total timeout. These end the call and
+  are logged; nothing is cooled, retired or failed over, and the pooled
+  session is kept. A client hang-up also cancels the upstream request.
+- *Configured exclusions* (`UPLINK_PROVIDER_EXCLUDE`): providers never
+  opened for a model, as `<model>=<provider>[,<provider>]…` with entries
+  separated by `;`. The model is a registration id or a catalog name; a
+  provider is its `0x` address. Opens and Rehydrate never use them. With
+  any exclusion the open goes by bid over the providers left. When only
+  excluded providers serve the model, the request gets `503`
+  `no_eligible_provider` (no ids in the body, no `Retry-After`) and
+  nothing is opened. When the rated bids cannot be read, nothing is opened
+  (`503` `no_available_provider`, above). An entry keyed by catalog name needs the model's name: while the
+  catalog has no name for the requested id (for example the model feed is
+  down at boot and the client sends the `0x` id), opens for that model are
+  refused with `503` `no_eligible_provider`, failover keeps the session,
+  and on-chain sessions are not adopted, until the name resolves; the
+  console Status page shows a warning while that refusal lasts. The
+  warning counts well-formed model ids (`0x` + 64 hex) refused while the
+  catalog has never loaded, up to 64 ("64 or more" past that); reading it
+  fetches nothing, and it clears once the catalog loads. An id the loaded
+  catalog does not list is still refused but not counted. After a failed
+  catalog fetch no new fetch starts for 10 seconds (stale data is served,
+  or the lookup fails while nothing has loaded), and fetches never hold the
+  catalog lock. Entries
+  keyed by model id never need the catalog.
+  Bad entries are logged by position and ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short
-  address, the status class (`402`, `429`, `5xx`, ...), and the outcome:
+  address, the status class (`402`, `429`, `5xx`, `stream_cut` for a bare
+  upstream cut, ...), and the outcome:
   `retried_ok`, `retry_failed`, `no_alternate`, `reopen_failed`,
   `close_failed` (an extra event when the close did not land), or
   `stream_retired`. No request or response bodies, no keys.
+
+### Long jobs
+
+Calls that run for many minutes (agents, long reasoning) get their own
+timers and session handling. Source: `internal/api/longjob.go`,
+`internal/pool/lease.go`, `internal/router/client.go`.
+
+- *Timers per call.* An **idle** timer (no bytes from upstream; default
+  `UPLINK_FORWARD_IDLE_SECONDS`, 180) and a **total** timer (600 s, not
+  set per call). Before any answer an expiry is a `504`
+  `{"error":{"type":"timeout","code":504,"message":"upstream idle timeout"}}`
+  (or `total`). Mid-stream the client gets an SSE error event, a chunk with
+  `finish_reason: "uplink_idle_timeout"` (or `uplink_total_timeout`) and
+  `data: [DONE]`. A non-stream body is not idle-cut once headers arrive;
+  the total still applies. These cuts are Uplink's own and never cool a
+  provider. A client hang-up cancels the upstream call.
+- *Admin calls* to the router keep a 60 s timeout on a separate HTTP
+  client; inference has no client-level timeout.
+- *Request headers* (all optional; whole numbers, at most 6 digits, sent
+  once; anything else is a `400` that names the header):
+  - `X-Uplink-Session-Duration`: session length for a new session,
+    600…`UPLINK_SESSION_DURATION_MAX`.
+  - `X-Uplink-Idle-Timeout`: idle timer for this call; clamped to 30…600.
+  When either is sent the response carries
+  `X-Uplink-Timeouts: idle=<s>;total=<s>`. Without them responses are
+  unchanged. Other `X-Uplink-` headers are not read.
+- *Session reuse.* A pooled session is reused until it expires (less the
+  90 s buffer) or the idle sweep closes it; the next call then opens a new
+  one at the requested or default length, capped at the max.
+- *Leases.* Every call holds a lease on its session; a session is closed
+  (release, idle sweep, failover) only when no call is in flight.
+  A failover on a session another call is still using retires it and
+  closes it later.
+- *Idle sweep.* Every 30 s, sessions with nothing in flight and unused for
+  `UPLINK_SESSION_IDLE_GRACE_SECONDS` are closed so unused stake returns.
+- *No Uplink limits.* Any key may ask for a session up to
+  `UPLINK_SESSION_DURATION_MAX`, and Uplink caps neither the number of
+  such sessions nor the calls in flight: no inference call gets a `429`
+  from Uplink itself.
+  A `429` from the router or a provider is relayed (and may fail over).
+- *Server deadlines.* `IdleTimeout` 120 s for keep-alive connections; the
+  request body must arrive within 60 s; each response write must finish
+  within 60 s (reset before every write, so a slow upstream is not cut, a
+  client that stops reading is).
+- *`POST /v1/sessions/release`* `{"model":"<name or id>"}` (API key auth;
+  generated keys only; master/prompt → `403` `shared_key`; with
+  `UPLINK_SESSION_RELEASE=false` (console setting `sessionRelease`) →
+  `403` `release_disabled`; body ≤ 1 KiB, unknown
+  fields → `400`; unknown model → `404`). Drops this key's hold on the
+  model's session: `{"released":true,"closed":true}` when it was the last
+  holder, `{"released":true,"closed":false,"reason":"shared"}` (or
+  `in_flight`, or `retry` when the close did not land) and
+  `{"released":false,"reason":"not_held"}` otherwise. No ids in any body.
+  Audited as `session_release` in the ops stream.
+- *Status.* Each row of `sessions` in `/admin/status` (the console
+  Sessions table) carries, for a pooled session, `inFlight`,
+  `holderCount`, `holders` (key ids), `openedAt`, `endsAt` and `opener`.
+  There is no separate `poolSessions` list.
+- *Close endpoints.* `POST /admin/pool/close/{id}` and `close-all` answer
+  fixed text on failure; the router's error text is logged only.
+
+
+### Operator settings
+
+Every operator-tunable, non-secret setting is on the console **Settings**
+tab, backed by one registry (`internal/config/settings_registry.go`; each
+optional feature is tagged with a `Group` so it can be dropped by
+deleting its rows). The tab and `GET` / `POST /admin/settings`, `GET
+/admin/settings/export` and `POST /admin/settings/import` (source
+`internal/api/settings.go`, `internal/api/settings_file.go`) need the
+admin cookie session: any `Authorization` header, the master key Bearer
+with `MASTER_KEY_ADMIN=true` included, is `403`; a request from another
+site is `403` (CSRF check; a `GET` marked cross-site too); the 2FA
+enrolment gate applies as on other admin routes.
+
+| Name | Env | Type | Range / values | Default | Applies | Read by |
+|---|---|---|---|---|---|---|
+| `sessionDurationDefault` | `SESSION_DURATION_SECONDS` | int | 600…86400 | `600` | at once | pool.SetDuration (live) |
+| `sessionDurationMax` | `UPLINK_SESSION_DURATION_MAX` | int | 600…86400 | `1800` | at once | pool.SetDurationMax (live) |
+| `sessionIdleGrace` | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | int | 60…3600 | `300` | at once | idle sweep, read every tick (live) |
+| `forwardIdle` | `UPLINK_FORWARD_IDLE_SECONDS` | int | 30…600 | `180` | at once | inference timers, per request (live) |
+| `logLevel` | `UPLINK_LOG_LEVEL` | enum | `debug` `info` `warn` `error` | `info` | at once | slog.LevelVar (live) |
+| `sessionFailover` | `SESSION_FAILOVER` | bool | `true` `false` | `true` | Uplink restart | api/openai.go (Config.SessionFailover) |
+| `providerCooldown` | `UPLINK_PROVIDER_COOLDOWN_SECONDS` | int | 0…86400 | `600` | Uplink restart | cmd/uplink pool.SetProviderCooldown |
+| `providerExclude` | `UPLINK_PROVIDER_EXCLUDE` | string | text | (empty) | Uplink restart | cmd/uplink pool.SetProviderExclude |
+| `sessionRelease` | `UPLINK_SESSION_RELEASE` | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
+| `auditRetentionDays` | `AUDIT_RETENTION_DAYS` | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
+| `housekeeping` | `HOUSEKEEPING` | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
+| `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | https URL | `https://active.mor.org/gateway_models.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.New |
+| `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | https URL | `https://active.mor.org/gateway_bids.json` | .env (read-only; no effect today) | cmd/uplink catalog.WithBidsURL (stored, not fetched) |
+| `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF and settings origin checks (Config.WebPublicURL) |
+| `masterKeyAdmin` | `MASTER_KEY_ADMIN` | bool | `true` `false` | `false` | .env + Uplink restart (read-only) | api requireAdmin (Config.MasterKeyAdmin) |
+| `proxyStoreChatContext` | `PROXY_STORE_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
+| `proxyForwardChatContext` | `PROXY_FORWARD_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
+| `routerLogLevelApp` | `LOG_LEVEL_APP` | enum | `debug` `info` `warn` `error` `dpanic` `panic` `fatal` | `warn` | router .env + router restart (read-only) | proxy-router |
+| `routerLogLevelTcp` | `LOG_LEVEL_TCP` | enum | `debug` `info` `warn` `error` `dpanic` `panic` `fatal` | `warn` | router .env + router restart (read-only) | proxy-router |
+| `routerLogLevelEthRpc` | `LOG_LEVEL_ETH_RPC` | enum | `debug` `info` `warn` `error` `dpanic` `panic` `fatal` | `warn` | router .env + router restart (read-only) | proxy-router |
+
+- *Precedence* is env > saved > default. A setting whose env var holds a
+  valid value (any value for a text setting) is shown read-only as "set
+  by environment (ENV)" with a note to remove it from `.env`; changing it
+  is `409`.
+- *Controls.* Booleans are toggles, numbers number fields, enums a list,
+  text a text field. Each row shows its default; the tooltip gives the
+  range or values and says when a restart is needed.
+- *Applies.* "at once": new sessions, the next call's timers, the next
+  idle sweep and the log level, no restart. "Uplink restart": saved now,
+  read once at the next start (the row shows the running value until
+  then). Router rows: the router reads them from its own environment
+  (`router_network_env` in the SecretVM compose); Uplink cannot deliver a
+  value, so they are read-only and show the deployed defaults.
+  `.env`-only rows are read-only and show the running value:
+  `MASTER_KEY_ADMIN` (a security switch), `WEB_PUBLIC_URL` (the origin the
+  admin CSRF check is anchored to), `ACTIVE_MODELS_URL` (the catalog feed,
+  which decides the model-id mapping) and `GATEWAY_BIDS_URL` (stored but
+  not fetched today, so it has no effect).
+- *Saving.* `POST {"name":"forwardIdle","value":240}` or
+  `{"name":"forwardIdle","reset":true}` (one JSON object, body ≤ 1 KiB;
+  unknown fields or trailing data → `400`). Saving or resetting an
+  "Uplink restart" row needs a fresh login or step-up, like import
+  (`401` `step_up_required` otherwise); "at once" rows do not. Values are checked against the
+  ranges above, and the default may not exceed the max (`400`). The max
+  always wins: at boot a default above the max (from env or saved) is
+  clamped down to it with a warning, and every session open is capped at
+  the max. A saved value ignored at boot (invalid, or a router or
+  `.env`-only row found in the state file) is logged by name and written
+  to the ops audit stream as `setting_ignored`.
+- *Storage.* Settings are saved in `DATA_DIR` beside the 2FA state in
+  `uplink-state.json` (a fresh temp file in the same directory, fsync,
+  rename, directory fsync; mode 0640; a symlinked state file is refused; at boot, temp files a crash left behind, regular files named `uplink-state.json.<digits>.tmp` directly in `DATA_DIR` whose mtime is at least 10 minutes old (a younger one may be a live save by another process sharing `DATA_DIR`), are removed, and symlinks or anything else are left alone).
+- *Export / import* work like key export and import: a fresh login or
+  step-up is required (`401` `step_up_required` otherwise). Export
+  downloads `{"format":"uplink-settings","version":1,"settings":{…}}` with
+  the saved values. Import (≤ 64 KiB) validates every value first and
+  saves nothing on any error: unknown keys, secrets, router or `.env`-only
+  rows, out-of-range or mistyped values are `400`. A valid file replaces
+  the saved set; values the environment pins are saved but still lose to
+  env and are listed in the answer's `pinned`.
+- *Secrets* (wallet key, ETH node URL, router cookie, admin password, API
+  key seed, master key) are `.env` only: they never appear in the tab, the
+  API answers or the settings file, and naming one is `400`.
+- *Audit.* Each change is a `setting_change` event (`name old→new`; text
+  settings say only `changed`) in the high-value stream, as are
+  `settings_export` and `settings_import`. The log level filters runtime
+  logs only: the audit mirror on stdout is pinned at `info`, so `warn` or
+  `error` never hides an audit line.
+- *Not settable:* the admin session timeouts (fixed 4 h idle, 12 h
+  absolute), `MASTER_KEY_ADMIN`, `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL`,
+  `GATEWAY_BIDS_URL`, the router settings, and every secret.
 
 ## CI/CD and versioning
 

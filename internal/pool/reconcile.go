@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -317,7 +316,7 @@ func (p *Pool) runCloses(res *ReconcileResult, closes []ReconcileDecision, emit 
 	for _, d := range closes {
 		ev := ReconcileEvent{Kind: "session_reconcile_close", Reason: d.Reason, Session: short(d.Session.ID), Result: "ok", Source: "boot"}
 		if err := p.client.CloseSession(d.Session.ID); err != nil {
-			log.Printf("pool: reconcile close (%s) session %s: %v", d.Reason, short(d.Session.ID), err)
+			warnf("pool: reconcile close (%s) session %s: %v", d.Reason, short(d.Session.ID), err)
 			res.Failed++
 			ev.Result = "failed"
 		} else {
@@ -410,7 +409,7 @@ func (p *Pool) StartupReconcile(ctx context.Context, configured ConfiguredModels
 			return
 		}
 		p.reconcileMu.Unlock()
-		log.Printf("pool: boot session reconcile attempt %d: %v", attempts, err)
+		warnf("pool: boot session reconcile attempt %d: %v", attempts, err)
 		wait := delay
 		if gated {
 			if time.Now().Add(wait).After(deadline) {
@@ -459,7 +458,7 @@ func ConfiguredFrom(list func() ([]string, error)) ConfiguredModels {
 	return func() (map[string]bool, bool) {
 		ids, err := list()
 		if err != nil {
-			log.Printf("pool: reconcile: catalog unavailable, treating as unknown: %v", err)
+			warnf("pool: reconcile: catalog unavailable, treating as unknown: %v", err)
 			return nil, false
 		}
 		out := make(map[string]bool, len(ids))
@@ -469,7 +468,7 @@ func ConfiguredFrom(list func() ([]string, error)) ConfiguredModels {
 			}
 		}
 		if len(out) == 0 {
-			log.Printf("pool: reconcile: catalog is empty, treating as unknown")
+			warnf("pool: reconcile: catalog is empty, treating as unknown")
 			return nil, false
 		}
 		return out, true

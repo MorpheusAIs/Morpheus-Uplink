@@ -85,7 +85,8 @@ func TestRefuseWeakAdminPassword(t *testing.T) {
 }
 
 func TestProviderCooldownFallback(t *testing.T) {
-	for v, want := range map[string]int{"": 600, "0": 0, "45": 45, "-5": 600, "ten": 600} {
+	// Above 86400 is clamped to 86400 (with a warning), not reset.
+	for v, want := range map[string]int{"": 600, "0": 0, "45": 45, "-5": 600, "ten": 600, "86400": 86400, "999999999": 86400} {
 		setRequired(t)
 		t.Setenv("ROUTER_AUTH", "admin:secret")
 		t.Setenv("UPLINK_PROVIDER_COOLDOWN_SECONDS", v)
@@ -100,10 +101,10 @@ func TestProviderCooldownFallback(t *testing.T) {
 			t.Errorf("%q: got %d, want %d", v, c.ProviderCooldownSec, want)
 		}
 		warned := strings.Contains(buf.String(), "UPLINK_PROVIDER_COOLDOWN_SECONDS")
-		if bad := v == "-5" || v == "ten"; warned != bad {
+		if bad := v == "-5" || v == "ten" || v == "999999999"; warned != bad {
 			t.Errorf("%q: warned=%v", v, warned)
 		}
-		if strings.Contains(buf.String(), "ten") || strings.Contains(buf.String(), "-5") {
+		if strings.Contains(buf.String(), "ten") || strings.Contains(buf.String(), "-5") || strings.Contains(buf.String(), "999999999") {
 			t.Errorf("%q: warning carries the value: %s", v, buf.String())
 		}
 	}

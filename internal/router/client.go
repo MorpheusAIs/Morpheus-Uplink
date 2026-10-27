@@ -4,6 +4,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,12 @@ import (
 
 type Client struct {
 	BaseURL string
-	// HTTP is long-timeout because chat completions can stream for minutes.
+	// HTTP carries the admin calls (sessions, bids, balance, health): a
+	// fixed 60 s timeout, independent of any inference call.
 	HTTP *http.Client
+	// ForwardHTTP carries inference calls. It has no Client.Timeout: each
+	// call is bounded by its own idle and total timers (ForwardOptions).
+	ForwardHTTP *http.Client
 
 	mu   sync.Mutex
 	user string
@@ -32,13 +37,18 @@ type Client struct {
 	now           func() time.Time
 }
 
+// AdminTimeout bounds every non-inference router call.
+const AdminTimeout = 60 * time.Second
+
 func New(baseURL, user, pass string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		user:    user,
 		pass:    pass,
-		HTTP:    &http.Client{Timeout: 10 * time.Minute},
-		now:     time.Now,
+		HTTP:    &http.Client{Timeout: AdminTimeout},
+		// No Client.Timeout: bounded per call by ForwardOptions.
+		ForwardHTTP: &http.Client{},
+		now:         time.Now,
 	}
 }
 
@@ -213,19 +223,15 @@ func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, er
 // always off ("failover": false).
 type OpenSessionRequest struct {
 	SessionDuration int `json:"sessionDuration"`
-	// OmitProvider, when set, excludes that provider address from the
-	// router's bid selection (one address; the router takes no list).
-	OmitProvider string `json:"omitProvider,omitempty"`
 }
 
 // MarshalJSON pins directPayment and failover to false.
 func (r OpenSessionRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		SessionDuration int    `json:"sessionDuration"`
-		Failover        bool   `json:"failover"`
-		DirectPayment   bool   `json:"directPayment"`
-		OmitProvider    string `json:"omitProvider,omitempty"`
-	}{r.SessionDuration, false, false, strings.TrimSpace(r.OmitProvider)})
+		SessionDuration int  `json:"sessionDuration"`
+		Failover        bool `json:"failover"`
+		DirectPayment   bool `json:"directPayment"`
+	}{r.SessionDuration, false, false})
 }
 
 // ErrDirectPayment is returned instead of sending any router request whose
@@ -296,8 +302,8 @@ func (c *Client) OpenSession(modelID string, req OpenSessionRequest) (string, er
 }
 
 // OpenSessionByBid opens a session on one specific bid (and so one specific
-// provider). Used when more than one provider has to be excluded, which the
-// router's single omitProvider cannot express. Same staking-only body.
+// provider). Used whenever a provider has to be avoided: avoidance is never
+// left to the router's own selection. Same staking-only body.
 func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
 	bidID = strings.TrimSpace(bidID)
 	if bidID == "" {
@@ -399,6 +405,63 @@ type ForwardResult struct {
 	// retires the session for later requests (no retry of this one).
 	MidStreamProviderError bool
 	MidStreamStatus        int
+	// Cut says why a stream ended early (CutNone for a complete stream or
+	// a buffered body). Only CutUpstream is a provider fault.
+	Cut Cut
+	// TimeoutKind names the Uplink timer ("idle" or "total") behind a
+	// CutUplinkTimeout; the stream then ended with sseTimeoutTail.
+	TimeoutKind string
+}
+
+// Cut is the reason a relayed stream ended before its end marker.
+type Cut int
+
+const (
+	// CutNone: the stream ended normally ([DONE] or a finish_reason seen).
+	CutNone Cut = iota
+	// CutUpstream: reading the router body failed, or it ended without
+	// [DONE] or a finish_reason, while the request was still live and no
+	// Uplink timer fired, or the router sent a mid-stream provider model
+	// error. The only provider fault.
+	CutUpstream
+	// CutClient: writing or flushing to our own client failed (hang-up,
+	// broken pipe, connection reset, write deadline).
+	CutClient
+	// CutCanceled: the request context was cancelled (client gone).
+	CutCanceled
+	// CutUplinkTimeout: one of Uplink's own timers ended the call.
+	CutUplinkTimeout
+)
+
+func (c Cut) String() string {
+	return [...]string{"none", "upstream", "client", "canceled", "uplink_timeout"}[c]
+}
+
+// ErrIdleTimeout and ErrTotalTimeout are the context causes Uplink's own
+// per-request timers cancel with; a cut carrying either is ours, never the
+// provider's.
+var (
+	ErrIdleTimeout  = errors.New("uplink idle timeout")
+	ErrTotalTimeout = errors.New("uplink total timeout")
+)
+
+// IsUplinkTimeout reports whether err (or ctx's cause) is one of Uplink's
+// own timers: the two causes above, a context deadline, or the HTTP
+// client's own timeout.
+func IsUplinkTimeout(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		cause := context.Cause(ctx)
+		if errors.Is(cause, ErrIdleTimeout) || errors.Is(cause, ErrTotalTimeout) || errors.Is(cause, context.DeadlineExceeded) {
+			return true
+		}
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrIdleTimeout) || errors.Is(err, ErrTotalTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return strings.Contains(err.Error(), "Client.Timeout exceeded")
 }
 
 // maxErrorBody bounds the router error body kept for classification and
@@ -411,11 +474,130 @@ const maxErrorBody = 64 << 10
 // If probeOnly is true and the router responds with a non-2xx status, the
 // response is NOT written to w and the caller may retry (e.g. with a fresh
 // session) — otherwise everything is relayed as-is.
-func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool) (*ForwardResult, error) {
+//
+// ctx is the request's context: when it ends (client gone, or one of
+// Uplink's timers) the upstream request is cancelled too.
+func (c *Client) Forward(ctx context.Context, w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool) (*ForwardResult, error) {
+	return c.ForwardWith(ctx, w, path, sessionID, header, body, probeOnly, ForwardOptions{})
+}
+
+// ForwardOptions bound one inference call. Zero values switch a timer off.
+type ForwardOptions struct {
+	// Idle is the first-byte and between-reads timer, reset on every read.
+	// For a non-stream call it applies only until the response headers;
+	// after that Total governs (a buffered body has no bytes until the end).
+	Idle time.Duration
+	// Total bounds the whole call.
+	Total time.Duration
+	// Stream is the request's "stream" field.
+	Stream bool
+}
+
+// TimeoutError is an Uplink timer that ended a call before anything was
+// written to the client (the caller answers 504).
+type TimeoutError struct{ Kind string } // "idle" or "total"
+
+func (e *TimeoutError) Error() string { return "upstream " + e.Kind + " timeout" }
+
+// callTimers runs the idle and total timers of one call. Both are
+// time.AfterFunc timers, stopped when the call ends, so no goroutine
+// outlives the request.
+type callTimers struct {
+	idle, total *time.Timer
+	idleDur     time.Duration
+	mu          sync.Mutex
+	idleOff     bool
+}
+
+func startTimers(cancel context.CancelCauseFunc, o ForwardOptions) *callTimers {
+	t := &callTimers{idleDur: o.Idle}
+	if o.Total > 0 {
+		t.total = time.AfterFunc(o.Total, func() { cancel(ErrTotalTimeout) })
+	}
+	if o.Idle > 0 {
+		t.idle = time.AfterFunc(o.Idle, func() { cancel(ErrIdleTimeout) })
+	}
+	return t
+}
+
+// touch resets the idle timer (a read made progress).
+func (t *callTimers) touch() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.idle != nil && !t.idleOff {
+		t.idle.Reset(t.idleDur)
+	}
+}
+
+// idleStop switches the idle timer off (non-stream body after headers).
+func (t *callTimers) idleStop() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.idleOff = true
+	if t.idle != nil {
+		t.idle.Stop()
+	}
+}
+
+func (t *callTimers) stop() {
+	t.idleStop()
+	if t.total != nil {
+		t.total.Stop()
+	}
+}
+
+// timedReader resets the idle timer on every read that returns bytes.
+type timedReader struct {
+	r io.Reader
+	t *callTimers
+}
+
+func (tr timedReader) Read(b []byte) (int, error) {
+	n, err := tr.r.Read(b)
+	if n > 0 {
+		tr.t.touch()
+	}
+	return n, err
+}
+
+// timeoutKind names the Uplink timer that ended ctx ("" when none did).
+func timeoutKind(ctx context.Context) string {
+	switch cause := context.Cause(ctx); {
+	case errors.Is(cause, ErrIdleTimeout):
+		return "idle"
+	case errors.Is(cause, ErrTotalTimeout):
+		return "total"
+	}
+	return ""
+}
+
+// sseTimeoutTail ends a stream that an Uplink timer cut: the fixed error
+// event, a finish_reason chunk naming the timer, and [DONE].
+func sseTimeoutTail(kind string) []byte {
+	ev, _ := json.Marshal(map[string]any{"error": map[string]any{
+		"message": "the response was cut by an Uplink " + kind + " timeout",
+		"type":    "timeout",
+		"code":    http.StatusGatewayTimeout,
+	}})
+	out := append(append([]byte("data: "), ev...), '\n', '\n')
+	out = append(out, []byte(`data: {"choices":[{"index":0,"delta":{},"finish_reason":"uplink_`+kind+`_timeout"}]}`+"\n\n")...)
+	return append(out, []byte("data: [DONE]\n\n")...)
+}
+
+// ForwardWith is Forward with per-call timers.
+func (c *Client) ForwardWith(ctx context.Context, w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool, o ForwardOptions) (*ForwardResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	timers := startTimers(cancel, o)
+	defer timers.stop()
 	req, err := c.newRequest(http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+	req = req.WithContext(ctx)
 	if ct := header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
@@ -424,11 +606,23 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 	}
 	req.Header.Set("session_id", sessionID)
 
-	resp, err := c.HTTP.Do(req)
+	hc := c.ForwardHTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
+		if k := timeoutKind(ctx); k != "" {
+			return nil, &TimeoutError{Kind: k}
+		}
 		return nil, fmt.Errorf("POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	timers.touch()
+	if !o.Stream && !isEventStream(resp.Header.Get("Content-Type")) {
+		timers.idleStop() // buffered body: total governs from here
+	}
+	src := timedReader{r: resp.Body, t: timers}
 
 	res := &ForwardResult{StatusCode: resp.StatusCode}
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -439,7 +633,12 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 	if probeOnly && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		// Nothing is written to w: the caller classifies the typed error and
 		// fails over, retries or relays the status and body itself.
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		raw, rerr := io.ReadAll(io.LimitReader(src, maxErrorBody))
+		if rerr != nil {
+			if k := timeoutKind(ctx); k != "" {
+				return nil, &TimeoutError{Kind: k}
+			}
+		}
 		return res, &StatusError{Method: http.MethodPost, Path: path, Code: resp.StatusCode, Body: string(raw)}
 	}
 
@@ -449,15 +648,27 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 	streaming := isEventStream(contentType)
 	if streaming {
 		w.WriteHeader(resp.StatusCode)
-		st := flushCopy(w, resp.Body)
+		st := flushCopyCtx(ctx, w, src)
 		res.PromptTokens, res.CompletionTokens = st.promptTokens, st.completionTokens
 		res.MidStreamProviderError, res.MidStreamStatus = st.providerError, st.providerStatus
+		res.Cut = st.cut
+		if st.cut == CutUplinkTimeout {
+			if res.TimeoutKind = timeoutKind(ctx); res.TimeoutKind != "" && st.clientWriteErr == nil {
+				_, _ = w.Write(sseTimeoutTail(res.TimeoutKind))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+		}
 		return res, nil
 	}
 
 	// Buffered path: capture the body so we can parse token usage.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	raw, err := io.ReadAll(io.LimitReader(src, 32<<20))
 	if err != nil {
+		if k := timeoutKind(ctx); k != "" {
+			return nil, &TimeoutError{Kind: k}
+		}
 		return nil, fmt.Errorf("read router response: %w", err)
 	}
 	var usage struct {
@@ -482,8 +693,13 @@ func isEventStream(contentType string) bool {
 // streamResult is what flushCopy saw while relaying an SSE stream.
 type streamResult struct {
 	promptTokens, completionTokens int64
-	providerError                  bool // a provider model error replaced the rest of the stream
-	providerStatus                 int
+	providerError                  bool // a provider fault ended the stream (see Cut)
+	providerStatus                 int  // status the provider error carried; 0 for a bare upstream cut
+	sawDone                        bool // a data: [DONE] line arrived
+	sawFinish                      bool // a chunk carried a non-null finish_reason
+	cut                            Cut
+	upstreamReadErr                error // reading the router body failed (not io.EOF)
+	clientWriteErr                 error // writing to our client failed
 }
 
 // flushCopy copies an SSE stream to w line by line, flushing after each
@@ -495,9 +711,28 @@ type streamResult struct {
 // appends it as a bare JSON object ({"providerModelError":...}), which SSE
 // clients would ignore; flushCopy writes an OpenAI-shaped SSE error event
 // in its place and ends the stream.
+//
+// Only the upstream side can be a provider fault: an upstream EOF without
+// [DONE] or a finish_reason while ctx is live (no client hang-up, no
+// Uplink timer) is a cut; a write error to our client, a cancelled ctx or
+// an Uplink timer is never one (see Cut).
 func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
+	return flushCopyCtx(context.Background(), w, src)
+}
+
+func flushCopyCtx(ctx context.Context, w http.ResponseWriter, src io.Reader) streamResult {
 	var out streamResult
 	flusher, _ := w.(http.Flusher)
+	// ours classifies an end that came from our side of the stream.
+	ours := func(err error) Cut {
+		if IsUplinkTimeout(ctx, err) {
+			return CutUplinkTimeout
+		}
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return CutCanceled
+		}
+		return CutNone
+	}
 	buf := make([]byte, 32*1024)
 	var pending []byte
 	passthrough := false // inside an oversized line: relay, do not parse
@@ -505,8 +740,14 @@ func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
 		if len(b) == 0 {
 			return true
 		}
-		_, err := w.Write(b)
-		return err == nil
+		if _, err := w.Write(b); err != nil {
+			out.clientWriteErr = err
+			if out.cut = ours(nil); out.cut == CutNone {
+				out.cut = CutClient
+			}
+			return false
+		}
+		return true
 	}
 	flush := func() {
 		if flusher != nil {
@@ -517,12 +758,17 @@ func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
 	// when the stream must stop (client gone, or provider error replaced).
 	handle := func(line []byte) bool {
 		if status, ok := sseProviderError(line); ok {
-			out.providerError, out.providerStatus = true, status
+			out.providerError, out.providerStatus, out.cut = true, status, CutUpstream
 			_ = write(sseErrorEvent(status))
 			return false
 		}
 		if p, c, ok := sseUsage(line); ok {
 			out.promptTokens, out.completionTokens = p, c
+		}
+		if sseDone(line) {
+			out.sawDone = true
+		} else if !out.sawFinish && sseFinish(line) {
+			out.sawFinish = true
 		}
 		return write(line)
 	}
@@ -570,12 +816,58 @@ func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
 		}
 		if err != nil {
 			if len(pending) > 0 && !passthrough {
-				_ = handle(pending)
+				if !handle(pending) {
+					flush()
+					return out
+				}
+			}
+			if err != io.EOF {
+				out.upstreamReadErr = err
+			}
+			if c := ours(err); c != CutNone {
+				// Our client or our timer ended it: never a provider fault.
+				out.cut = c
+			} else if out.upstreamReadErr != nil || (!out.sawDone && !out.sawFinish) {
+				// The provider side broke off mid-answer.
+				// Tell the client (best effort), then record the cut.
+				_ = write(sseErrorEvent(http.StatusBadGateway))
+				out.providerError, out.providerStatus, out.cut = true, 0, CutUpstream
 			}
 			flush()
 			return out
 		}
 	}
+}
+
+// sseDone reports a "data: [DONE]" line.
+func sseDone(line []byte) bool {
+	t := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(t, []byte("data:")) {
+		return false
+	}
+	return bytes.Equal(bytes.TrimSpace(t[len("data:"):]), []byte("[DONE]"))
+}
+
+// sseFinish reports a data: chunk with a non-null finish_reason.
+func sseFinish(line []byte) bool {
+	t := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(t, []byte("data:")) || !bytes.Contains(t, []byte(`"finish_reason"`)) {
+		return false
+	}
+	var chunk struct {
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(t[len("data:"):]), &chunk) != nil {
+		return false
+	}
+	for _, c := range chunk.Choices {
+		if c.FinishReason != nil && *c.FinishReason != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sseProviderError reports a bare provider model error line (not a data:

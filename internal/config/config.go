@@ -3,8 +3,8 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -69,6 +69,38 @@ type Config struct {
 	TrustedProxyCIDRs []string
 	// UPLINK_RESET_2FA: break-glass wipe of 2FA/sessions/lockouts once per marker cycle.
 	Reset2FA bool
+	// AUDIT_RETENTION_DAYS: retention of the high-value audit stream
+	// (audit-security.jsonl), 1…3650, default 90. The failure/ops stream
+	// keeps a fixed 30 days.
+	AuditRetentionDays int
+	// UPLINK_PROVIDER_EXCLUDE: providers never opened for a model,
+	// "<model>=<provider>[,<provider>]…", entries separated by ";". Model
+	// is a registration id or a catalog name; providers are 0x addresses.
+	// Validated at boot: a bad entry is warned and ignored.
+	ProviderExclude map[string][]string
+
+	// Long-job core (S5).
+	// SessionDurationMax caps X-Uplink-Session-Duration and every open
+	// (UPLINK_SESSION_DURATION_MAX, 600…86400, default 1800).
+	SessionDurationMax int
+	// ForwardIdleSec is the default first-byte/idle timer of an inference
+	// call (UPLINK_FORWARD_IDLE_SECONDS, 30…600, default 180).
+	ForwardIdleSec int
+	// SessionIdleGraceSec: the idle sweep closes a pooled session with
+	// nothing in flight this long after its last use
+	// (UPLINK_SESSION_IDLE_GRACE_SECONDS, 60…3600, default 300).
+	SessionIdleGraceSec int
+	// SessionRelease turns on POST /v1/sessions/release
+	// (UPLINK_SESSION_RELEASE, default true).
+	SessionRelease bool
+
+	// LogLevel is UPLINK_LOG_LEVEL (debug, info, warn, error; default info).
+	LogLevel string
+	// EnvPinned names the S6 settings whose env var holds a valid value;
+	// those cannot be changed in the admin console.
+	EnvPinned map[string]bool
+	// SettingNotes are persisted settings ignored at boot (names only).
+	SettingNotes []string
 }
 
 func FromEnv() (*Config, error) {
@@ -80,9 +112,9 @@ func FromEnv() (*Config, error) {
 		DataDir:              getenv("DATA_DIR", "./data"),
 		ActiveModelsURL:      getenv("ACTIVE_MODELS_URL", "https://active.mor.org/gateway_models.json"),
 		GatewayBidsURL:       getenv("GATEWAY_BIDS_URL", "https://active.mor.org/gateway_bids.json"),
-		SessionDurationSec:   getenvInt("SESSION_DURATION_SECONDS", 600),
+		SessionDurationSec:   getenvRangeInt("SESSION_DURATION_SECONDS", 600, 600, 86400),
 		SessionFailover:      getenvBool("SESSION_FAILOVER", true),
-		ProviderCooldownSec:  getenvNonNegInt("UPLINK_PROVIDER_COOLDOWN_SECONDS", 600),
+		ProviderCooldownSec:  getenvClampInt("UPLINK_PROVIDER_COOLDOWN_SECONDS", 600, 0, MaxProviderCooldownSec),
 		DirectPaymentIgnored: getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit:  getenvBool("CLOSE_SESSIONS_ON_EXIT", true),
 		DiamondAddress:       getenv("DIAMOND_CONTRACT_ADDRESS", "0x6aBE1d282f72B474E54527D93b979A4f64d3030a"),
@@ -96,6 +128,30 @@ func FromEnv() (*Config, error) {
 		DevHTTP:              getenvBool("UPLINK_DEV_HTTP", false),
 		TrustedProxyCIDRs:    splitCSV(os.Getenv("TRUSTED_PROXY_CIDR")),
 		Reset2FA:             getenvBool("UPLINK_RESET_2FA", false),
+		AuditRetentionDays:   getenvRangeInt("AUDIT_RETENTION_DAYS", 90, 1, 3650),
+		ProviderExclude:      ParseProviderExclude(os.Getenv("UPLINK_PROVIDER_EXCLUDE")),
+
+		SessionDurationMax:  getenvRangeInt("UPLINK_SESSION_DURATION_MAX", 1800, 600, 86400),
+		ForwardIdleSec:      getenvRangeInt("UPLINK_FORWARD_IDLE_SECONDS", 180, 30, 600),
+		SessionIdleGraceSec: getenvRangeInt("UPLINK_SESSION_IDLE_GRACE_SECONDS", 300, 60, 3600),
+		SessionRelease:      getenvBool("UPLINK_SESSION_RELEASE", true),
+	}
+
+	c.LogLevel = getenvLogLevel("UPLINK_LOG_LEVEL")
+	// S6: settings set in the environment win over the admin console and
+	// show there as "set by environment". Only a valid value pins.
+	c.EnvPinned = map[string]bool{}
+	for _, d := range Settings {
+		if d.Scope != ScopeRouter && d.envPins(os.Getenv(d.Env)) {
+			c.EnvPinned[d.Env] = true
+		}
+	}
+
+	// The cap wins: the default is clamped down to the max, never the
+	// max raised to the default.
+	if c.SessionDurationSec > c.SessionDurationMax {
+		warnf("config: SESSION_DURATION_SECONDS is above UPLINK_SESSION_DURATION_MAX; using %d", c.SessionDurationMax)
+		c.SessionDurationSec = c.SessionDurationMax
 	}
 
 	// Security switches fall back to their safe value when malformed.
@@ -176,16 +232,81 @@ func getenvInt(key string, def int) int {
 	return def
 }
 
-// getenvNonNegInt is getenvInt for settings that cannot be negative: a
-// malformed or negative value logs a warning (name only) and uses def.
-func getenvNonNegInt(key string, def int) int {
+// MaxProviderCooldownSec caps UPLINK_PROVIDER_COOLDOWN_SECONDS (one day).
+const MaxProviderCooldownSec = 86400
+
+// getenvClampInt reads a whole number at most hi: a larger value is
+// clamped to hi with a warning (name only). Unset: def. Malformed or below
+// lo: a warning and def.
+func getenvClampInt(key string, def, lo, hi int) int {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		log.Printf("config: %s is not a whole number >= 0; using the default %d", key, def)
+	if err != nil {
+		warnf("config: %s is not a whole number; using the default %d", key, def)
+		return def
+	}
+	if n < lo {
+		warnf("config: %s is below %d; using the default %d", key, lo, def)
+		return def
+	}
+	if n > hi {
+		warnf("config: %s is above %d; using %d", key, hi, hi)
+		return hi
+	}
+	return n
+}
+
+// getenvRangeInt reads a whole number in [lo, hi]. Unset: def. Malformed
+// or out of range: a warning (name only) and def.
+var (
+	reProviderAddr = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	reModelID      = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
+	reModelName    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$`)
+)
+
+// ParseProviderExclude parses UPLINK_PROVIDER_EXCLUDE. Entries are
+// "<model>=<provider>[,<provider>]…" separated by ";". An entry with a bad
+// model or provider is logged (by position, not value) and ignored;
+// a bad provider drops only that provider.
+func ParseProviderExclude(v string) map[string][]string {
+	out := map[string][]string{}
+	if strings.TrimSpace(v) == "" {
+		return out
+	}
+	for i, ent := range strings.Split(v, ";") {
+		ent = strings.TrimSpace(ent)
+		if ent == "" {
+			continue
+		}
+		model, provs, ok := strings.Cut(ent, "=")
+		model = strings.ToLower(strings.TrimSpace(model))
+		if !ok || (!reModelID.MatchString(model) && (strings.HasPrefix(model, "0x") || !reModelName.MatchString(model))) {
+			warnf("config: UPLINK_PROVIDER_EXCLUDE entry %d is not <model>=<provider>[,<provider>]; ignored", i+1)
+			continue
+		}
+		for j, pr := range strings.Split(provs, ",") {
+			pr = strings.ToLower(strings.TrimSpace(pr))
+			if !reProviderAddr.MatchString(pr) {
+				warnf("config: UPLINK_PROVIDER_EXCLUDE entry %d provider %d is not a 0x address; ignored", i+1, j+1)
+				continue
+			}
+			out[model] = append(out[model], pr)
+		}
+	}
+	return out
+}
+
+func getenvRangeInt(key string, def, lo, hi int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < lo || n > hi {
+		warnf("config: %s must be a whole number %d…%d; using the default %d", key, lo, hi, def)
 		return def
 	}
 	return n
@@ -252,4 +373,31 @@ func ValidateAdminPassword(adminPass, cookieContent string) error {
 		}
 	}
 	return nil
+}
+
+// ParseLogLevel returns the canonical level name or "" when v is not one.
+func ParseLogLevel(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "debug":
+		return "debug"
+	case "info":
+		return "info"
+	case "warn", "warning":
+		return "warn"
+	case "error":
+		return "error"
+	}
+	return ""
+}
+
+func getenvLogLevel(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return "info"
+	}
+	if l := ParseLogLevel(v); l != "" {
+		return l
+	}
+	warnf("config: %s is not debug, info, warn or error; using info", key)
+	return "info"
 }

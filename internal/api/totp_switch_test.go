@@ -67,10 +67,10 @@ func TestTwoFactorDefaultOff(t *testing.T) {
 func TestTwoFactorOnOnlyAfterConfirm(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
 	ac := adminClient(t, ts, cfg)
-	if code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", "{}"); code != http.StatusOK {
+	if code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", `{"password":"`+cfg.AdminPassword+`"}`); code != http.StatusOK {
 		t.Fatalf("enroll start: %d %s", code, b)
 	}
-	if code, _ := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"000000"}`); code != http.StatusUnauthorized {
+	if code, _ := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"password":"`+cfg.AdminPassword+`","code":"000000"}`); code != http.StatusUnauthorized {
 		t.Fatalf("confirm with a bad code: %d want 401", code)
 	}
 	if st := twoFAStatus(t, ac, ts); st["on"] != false || st["enrolled"] != false {

@@ -145,10 +145,10 @@ func (r *Runner) startupRun(ctx context.Context) {
 			return
 		}
 		if time.Now().Add(delay).After(deadline) {
-			log.Printf("housekeep: startup scan still failing after %d attempt(s); next try on the regular schedule", attempt)
+			warnf("housekeep: startup scan still failing after %d attempt(s); next try on the regular schedule", attempt)
 			return
 		}
-		log.Printf("housekeep: startup scan attempt %d failed (%s); retrying in %s", attempt, res.Message, delay)
+		warnf("housekeep: startup scan attempt %d failed (%s); retrying in %s", attempt, res.Message, delay)
 		select {
 		case <-ctx.Done():
 			return
@@ -209,7 +209,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 	res := Result{At: time.Now().UTC(), Status: "ok"}
 
 	if err := r.pool.RehydrateForce(); err != nil {
-		log.Printf("housekeep: rehydrate/close scan: %v", err)
+		warnf("housekeep: rehydrate/close scan: %v", err)
 		res.Message = "close scan: " + err.Error()
 	} else {
 		res.ClosedViaScan = true
@@ -233,7 +233,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 		res.EthBalanceWei = eth.String()
 		if eth.Cmp(gasThresh) < 0 {
 			res.GasLow = true
-			log.Printf("housekeep: alert gas low (eth wei=%s threshold=%s)", eth.String(), gasThresh.String())
+			warnf("housekeep: alert gas low (eth wei=%s threshold=%s)", eth.String(), gasThresh.String())
 		}
 	}
 
@@ -297,7 +297,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 			}
 			res.MovedWei = moved.String()
 			res.Rounds = len(hashes)
-			log.Printf("housekeep: withdraw error: %v", err)
+			warnf("housekeep: withdraw error: %v", err)
 			return res
 		}
 		hashes = append(hashes, txHash)
@@ -305,7 +305,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 
 		hold, err = r.cfg.Router.UserStakesOnHold(1)
 		if err != nil {
-			log.Printf("housekeep: post-withdraw on-hold read: %v", err)
+			warnf("housekeep: post-withdraw on-hold read: %v", err)
 			break
 		}
 		if hold.Claimable.Cmp(thresh) <= 0 {

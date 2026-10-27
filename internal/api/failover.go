@@ -1,10 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -51,6 +51,15 @@ var noFailoverPatterns = []string{
 	"request cancelled while waiting in queue",
 }
 
+// streamCutPatterns are upstream stream cuts, matched only inside a
+// providerModelError body the router returned.
+var streamCutPatterns = []string{
+	"error reading stream",
+	"unexpected eof",
+	"connection reset",
+	"broken pipe",
+}
+
 // classifyForwardError decides what to do with a failed probe Forward.
 // The order matters (see docs/06-developers.md, Provider failover).
 func classifyForwardError(err error) forwardDecision {
@@ -69,6 +78,15 @@ func classifyForwardError(err error) forwardDecision {
 		}
 	}
 	pme := strings.Contains(body, "providermodelerror")
+	if pme {
+		// The provider's stream to the router broke before the first byte
+		// (text the upstream reported, never our own socket errors) [F1].
+		for _, p := range streamCutPatterns {
+			if strings.Contains(body, p) {
+				return decFailover
+			}
+		}
+	}
 	switch c := se.Code; {
 	case pme && (c == 402 || c == 401 || c == 403 || c == 404):
 		return decFailover
@@ -94,10 +112,13 @@ func relayRouterError(w http.ResponseWriter, err error) {
 	var se *router.StatusError
 	if !errors.As(err, &se) {
 		// Transport detail (router host, URL) stays in the log.
-		log.Printf("api: inference failed: %v", err)
+		warnf("api: inference failed: %v", err)
 		writeOpenAIError(w, http.StatusBadGateway, "inference failed")
 		return
 	}
+	// The full router text goes to the ops log only; the client gets it
+	// scrubbed (scrubRouterText) and capped.
+	warnf("api: router error %d on %s %s: %s", se.Code, se.Method, se.Path, se.Body)
 	code := se.Code
 	if code < 400 || code > 599 {
 		code = http.StatusBadGateway
@@ -111,35 +132,74 @@ func relayRouterError(w http.ResponseWriter, err error) {
 	}
 	if isObj && !hasPME {
 		if raw := obj["error"]; len(raw) > 0 && raw[0] == '{' {
-			// Already OpenAI-shaped.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(code)
-			_, _ = w.Write([]byte(se.Body))
-			return
+			// Already OpenAI-shaped: relayed with every string scrubbed,
+			// when it fits the cap (else reshaped below).
+			if body, ok := scrubbedJSON([]byte(se.Body)); ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(code)
+				_, _ = w.Write(body)
+				return
+			}
 		}
 	}
 	typ := "invalid_request_error"
 	if hasPME || code >= 500 || code == http.StatusTooManyRequests {
 		typ = "provider_error"
 	}
-	out := map[string]any{"error": map[string]any{
-		"message": routerErrorMessage(obj, se.Body), "type": typ, "code": code,
-	}}
+	msg := routerErrorMessage(obj, se.Body)
+	var pme any
 	if hasPME {
-		out["providerModelError"] = obj["providerModelError"]
+		if p, ok := scrubbedJSON(obj["providerModelError"]); ok {
+			pme = p
+		}
 	}
-	writeJSON(w, code, out)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(relayBody(msg, typ, code, hasPME, pme))
+}
+
+// relayBody is the final reshaped error body, capped as a whole at
+// maxRelayBody: when the body with the scrubbed providerModelError is too
+// big, the minimal {error:{message}} form replaces it, and the message is
+// shortened until that fits too (JSON escaping can grow it).
+func relayBody(msg, typ string, code int, hasPME bool, pme any) []byte {
+	build := func(msg string, pme any) []byte {
+		out := map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": code}}
+		if hasPME {
+			if pme == nil {
+				pme = map[string]any{"error": map[string]any{"message": msg}}
+			}
+			out["providerModelError"] = pme
+		}
+		var b bytes.Buffer
+		_ = json.NewEncoder(&b).Encode(out)
+		return b.Bytes()
+	}
+	body := build(msg, pme)
+	if len(body) <= maxRelayBody {
+		return body
+	}
+	for {
+		body = build(msg, nil)
+		if len(body) <= maxRelayBody || msg == "" {
+			return body
+		}
+		msg = truncate(strings.TrimSuffix(msg, "…"), len(strings.TrimSuffix(msg, "…"))/2)
+		if msg == "…" {
+			msg = ""
+		}
+	}
 }
 
 // routerErrorMessage pulls a readable message out of a router error body.
 func routerErrorMessage(obj map[string]json.RawMessage, body string) string {
 	for _, k := range []string{"providerModelError", "error", "message"} {
 		if s := nestedMessage(obj[k], 3); s != "" {
-			return truncate(s, 1000)
+			return truncate(scrubRouterText(s), 1000)
 		}
 	}
 	if s := strings.TrimSpace(body); s != "" {
-		return truncate(s, 1000)
+		return truncate(scrubRouterText(s), 1000)
 	}
 	return "the router returned an error"
 }
@@ -166,13 +226,6 @@ func nestedMessage(raw json.RawMessage, depth int) string {
 	return ""
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
 // statusClass is the audit form of a status: the code itself for 4xx
 // (402 vs 429 matters), "5xx" otherwise.
 func statusClass(err error) string {
@@ -196,6 +249,6 @@ func (s *Server) auditFailover(model, sessionID, provider, class, outcome string
 	}
 	slog.Warn("audit", "event", "provider_failover", "result", outcome, "model", model,
 		"session", sid, "provider", prov, "status", class)
-	s.audit.RecordFull("provider_failover", "system", "", outcome,
-		fmt.Sprintf("provider_failover %s model=%s session=%s provider=%s status=%s", outcome, model, sid, prov, class))
+	s.auditSystem("provider_failover", "system", outcome,
+		fmt.Sprintf("provider_failover %s model=%s session=%s provider=%s status=%s", outcome, model, sid, prov, class), true)
 }

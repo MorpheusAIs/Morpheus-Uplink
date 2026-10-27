@@ -29,7 +29,9 @@ import (
 var version = "dev"
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// Live level (UPLINK_LOG_LEVEL or the persisted setting, S6); info
+	// until the settings are resolved in api.NewServer.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: api.LogLevel})))
 	api.Version = version
 	cfg, err := config.FromEnv()
 	if err != nil {
@@ -47,24 +49,29 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
+	// Console settings that apply on start (env > persisted > default).
+	config.ApplyPersisted(cfg, st.GetSettings().All())
 
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec)
 	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
+	pl.SetProviderExclude(cfg.ProviderExclude, cat.NameByID)
+	pl.SetDurationMax(cfg.SessionDurationMax)
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {
 		detail, sec, err := rc.AwaitActualDuration(sessionID, 8, 2*time.Second)
 		if err != nil {
-			log.Printf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
+			warnf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
 			return
 		}
+		// Usage is keyed by the registration id (#56); the name is for the log.
+		st.RecordSessionClose(sessionID, sec, detail.ModelAgentID)
 		model := cat.NameByID(detail.ModelAgentID)
 		if model == "" {
-			model = detail.ModelAgentID
+			model = pool.ShortID(detail.ModelAgentID)
 		}
-		st.RecordSessionClose(sessionID, sec, model)
 		src := "receipt"
 		if detail.ClosedAt <= 0 {
 			src = "open+now"
@@ -115,6 +122,22 @@ func main() {
 	defer hkCancel()
 	go hk.Start(hkCtx)
 
+	// Idle sweep: close pooled sessions nobody used for the grace period
+	// (never with a request in flight), and retry failed closes.
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-hkCtx.Done():
+				return
+			case <-t.C:
+				// Read every tick: the grace is a live setting (S6).
+				pl.SweepIdle(time.Duration(srv.SessionIdleGrace()) * time.Second)
+			}
+		}
+	}()
+
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()
@@ -129,11 +152,27 @@ func main() {
 		}
 	}()
 
-	httpServer := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	// Write the summaries of ended audit aggregation windows, and apply the
+	// audit retention once a day (it also ran at boot).
+	go func() {
+		t := time.NewTicker(api.AuditFlushInterval)
+		defer t.Stop()
+		lastPrune := time.Now()
+		for {
+			select {
+			case <-hkCtx.Done():
+				return
+			case now := <-t.C:
+				srv.FlushAudit()
+				if now.Sub(lastPrune) >= 24*time.Hour {
+					srv.PruneAudit()
+					lastPrune = now
+				}
+			}
+		}
+	}()
+
+	httpServer := api.NewHTTPServer(cfg.Listen, srv.Handler())
 
 	go func() {
 		log.Printf("uplink %s listening on %s (router: %s)", version, cfg.Listen, cfg.RouterURL)

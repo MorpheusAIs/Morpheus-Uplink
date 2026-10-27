@@ -896,6 +896,7 @@
     <button class="tab" data-tab="playground" onclick="showTab('playground')">Probe</button>
     <button class="tab" data-tab="activity" onclick="showTab('activity')">Sessions &amp; Usage</button>
     <button class="tab" data-tab="security" onclick="showTab('security')">Security</button>
+    <button class="tab" data-tab="settings" onclick="showTab('settings')">Settings</button>
   </nav>
 
   <main>
@@ -907,6 +908,7 @@
         <div class="sys-line" id="stats" role="status"></div>
         <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
         <div class="callout warn hidden" id="originWarn" role="alert"></div>
+        <div class="callout warn hidden" id="exclusionsWarn" role="alert"></div>
         <div class="tiles-head">
           <span data-copy="tilesHead"></span>
           <span class="tip" tabindex="0" data-tip-key="tilesShared">&#9432;</span>
@@ -1023,6 +1025,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <span data-copy="tfSwitchLabel">Require an authenticator code at login (2FA)</span>
         </label>
         <p class="note" style="margin-top:0" id="twoFactorStatus">Loading…</p>
+        <p class="note" style="margin-top:0" id="sessionLengths" role="status"></p>
         <div class="callout compact hidden" id="twoFactorOffNote" role="status" data-copy="tfOffNote" style="margin:0 0 10px"></div>
         <div id="twoFactorEnroll" class="stack" style="gap:8px;display:none">
           <div class="enroll-qr">
@@ -1030,6 +1033,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
             <div id="enrollSecret" class="note"></div>
           </div>
           <div class="row">
+            <input id="enrollPw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px">
             <button type="button" onclick="startTotpEnroll()">Start enrollment</button>
           </div>
           <form id="enrollConfirmForm" class="row" onsubmit="event.preventDefault(); confirmTotpEnroll();" style="display:none">
@@ -1050,6 +1054,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
         <form id="twoFactorManage" class="stack hidden" style="gap:8px;margin-top:12px" onsubmit="event.preventDefault()">
           <p class="note" style="margin:0" data-copy="factorNeeded">Enter your password and a current authenticator code or a recovery code.</p>
+          <p class="note" style="margin:0" data-copy="regenNeedsTotp">Regenerating recovery codes needs a current authenticator code (a recovery code is not accepted).</p>
           <div class="row">
             <input id="managePw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password" style="flex:1;min-width:160px" oninput="updateManageButtons()">
             <input id="manageCode" type="text" autocomplete="one-time-code" placeholder="123456 or recovery code" aria-label="Authenticator code or recovery code" style="flex:1;min-width:160px" oninput="updateManageButtons()">
@@ -1137,7 +1142,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
         <div style="overflow-x:auto">
           <table id="sessTable">
-            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Ends</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Opened</th><th>Ends</th><th>In flight</th><th>Holders</th><th>Status</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -1193,6 +1198,25 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
     </div>
 
     <!-- PROBE -->
+    <div class="panel" id="tab-settings">
+      <section id="settingsSection">
+        <h2>Settings</h2>
+        <p class="note" style="margin-top:0">
+          Saved in DATA_DIR with the admin state. Some apply at once; others say
+          they take effect after an Uplink or router restart. A value set in the
+          environment wins and is read-only here: remove it from .env to manage it
+          in the console. Secrets stay in .env only. Every change is logged.
+        </p>
+        <div class="row" style="margin-bottom:8px">
+          <button class="ghost" type="button" id="settingsExportBtn" onclick="exportSettings()">Export settings</button>
+          <button class="ghost" type="button" id="settingsImportBtn" onclick="document.getElementById('settingsImportFile').click()">Import settings</button>
+          <input type="file" id="settingsImportFile" accept="application/json,.json" class="hidden" onchange="importSettingsFile(this)">
+        </div>
+        <div id="settingsList" class="stack" style="gap:8px;margin-top:10px">Loading…</div>
+        <p id="settingsMsg" class="note" style="margin:6px 0 0" role="status"></p>
+      </section>
+    </div>
+
     <div class="panel" id="tab-playground">
       <section>
         <h2 id="pgHeading">Probe</h2>
@@ -1297,6 +1321,23 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
   </div>
 </div>
 
+<!-- Step-up: confirm the password (and code) before showing full keys -->
+<div id="stepUpModal" class="modal-backdrop hidden" onclick="if(event.target===this)cancelStepUp()">
+  <div class="modal" role="dialog" aria-labelledby="stepUpTitle" style="width:min(420px,100%)">
+    <h2 id="stepUpTitle" data-copy="stepUpTitle">Confirm it's you</h2>
+    <p class="note" style="margin:0" data-copy="stepUpNote">Showing full keys needs your password (and an authenticator code when 2FA is on). It stays confirmed for 30 minutes.</p>
+    <form class="stack" onsubmit="event.preventDefault(); submitStepUp();">
+      <input id="stepUpPw" type="password" autocomplete="current-password" placeholder="admin password" aria-label="Admin password">
+      <input id="stepUpCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" aria-label="6-digit code from authenticator">
+      <div class="row">
+        <button type="submit">Confirm</button>
+        <button class="ghost" type="button" onclick="cancelStepUp()">Cancel</button>
+      </div>
+      <div id="stepUpMsg" class="note" role="status"></div>
+    </form>
+  </div>
+</div>
+
 <!-- Bulk import ephemeral keys -->
 <div id="bulkImportModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeBulkImportModal()">
   <div class="modal" role="dialog" aria-labelledby="bulkImportTitle" style="width:min(560px,100%)">
@@ -1320,6 +1361,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 // Status page and 2FA text. Text only: a copy pass edits these strings and
 // nothing else. Functions take the values they print.
 const UI_COPY = {
+  // Name-keyed provider exclusions not resolved yet: opens refused.
+  exclusionsUnresolved: (n, capped) => 'Opens are being refused for ' + n + (capped ? ' or more' : '') + (n === 1 && !capped ? ' model' : ' models')
+    + ': UPLINK_PROVIDER_EXCLUDE has entries keyed by model name and the model catalog has no name for '
+    + (n === 1 ? 'it' : 'them') + ' yet (is the model feed reachable?). Requests get 503 until the names resolve.',
   // Admin changes are accepted only from WEB_PUBLIC_URL.
   originMismatch: (here, want) => 'This page is open at ' + here + ', but WEB_PUBLIC_URL is ' + want
     + '. Admin changes (keys, 2FA, sessions) are refused until they match: set WEB_PUBLIC_URL to the address you open (scheme and host) and redeploy.',
@@ -1405,6 +1450,15 @@ const UI_COPY = {
   resetConfirm: 'Reset 2FA? This removes the authenticator and all recovery codes and logs out every admin session. You will enroll again after logging in.',
   resetDone: '2FA reset. All sessions were logged out. Log in with your password and enroll again.',
   factorNeeded: 'Enter your password and a current authenticator code or a recovery code.',
+  regenNeedsTotp: 'Regenerating recovery codes needs a current authenticator code (a recovery code is not accepted).',
+  enrollPwNeeded: 'Enter your admin password to start or confirm the enrollment.',
+  stepUpTitle: 'Confirm it\'s you',
+  stepUpNote: 'Showing full keys needs your password (and an authenticator code when 2FA is on). It stays confirmed for 30 minutes.',
+  stepUpNeeded: 'Enter your password and the 6-digit code.',
+  stepUpRejected: 'Password or code not accepted.',
+  stepUpCancelled: 'Full keys need your password first.',
+  sessionLengths: (idle, absolute) => 'Admin sessions end after ' + idle + ' without activity and ' + absolute + ' after login.',
+  twoFactorOffSession: ' 2FA is off.',
 };
 
 let authed = false;
@@ -1446,12 +1500,77 @@ function rememberKeys(ks) {
 async function fullKey(id) {
   if (realKeys[id]) return realKeys[id];
   try {
-    const res = await fetch('/admin/keys?reveal=1', { credentials: 'same-origin' });
-    if (res.status === 401) { showLogin(); return ''; }
-    if (!res.ok) return '';
-    rememberKeys(await res.json());
+    const ks = await revealKeys();
+    if (!ks) return '';
+    rememberKeys(ks);
   } catch (_) { return ''; }
   return realKeys[id] || '';
+}
+
+// revealKeys fetches the full keys (audited reveal). The server answers
+// 401 step_up_required when the login or last step-up is older than 30
+// min: ask for the password (and code) once, then retry. null when
+// unavailable or cancelled.
+async function revealKeys() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch('/admin/keys?reveal=1', { credentials: 'same-origin' });
+    if (res.status === 401) {
+      const t = ((await res.text()) || '').trim();
+      if (t !== 'step_up_required') { showLogin(); return null; }
+      if (attempt > 0 || !(await openStepUp())) return null;
+      continue;
+    }
+    if (!res.ok) return null;
+    return await res.json();
+  }
+  return null;
+}
+
+// Step-up dialog: resolves true after POST /admin/step-up succeeds, false
+// on cancel. Credentials go in the POST body only.
+let stepUpResolve = null;
+function openStepUp() {
+  if (stepUpResolve) stepUpResolve(false);
+  const m = document.getElementById('stepUpModal');
+  const code = document.getElementById('stepUpCode');
+  document.getElementById('stepUpMsg').textContent = '';
+  document.getElementById('stepUpPw').value = '';
+  if (code) { code.value = ''; code.style.display = (tfState && tfState.enrolled) ? '' : 'none'; }
+  m.classList.remove('hidden');
+  setTimeout(() => document.getElementById('stepUpPw').focus(), 0);
+  return new Promise((resolve) => { stepUpResolve = resolve; });
+}
+function closeStepUp(ok) {
+  document.getElementById('stepUpModal').classList.add('hidden');
+  document.getElementById('stepUpPw').value = '';
+  document.getElementById('stepUpCode').value = '';
+  const r = stepUpResolve;
+  stepUpResolve = null;
+  if (r) r(ok);
+}
+function cancelStepUp() { closeStepUp(false); }
+async function submitStepUp() {
+  const pw = document.getElementById('stepUpPw').value || '';
+  const codeEl = document.getElementById('stepUpCode');
+  const needCode = !!(tfState && tfState.enrolled);
+  const code = needCode ? ((codeEl.value || '').trim()) : '';
+  const msg = document.getElementById('stepUpMsg');
+  if (!pw || (needCode && !/^\d{6}$/.test(code))) { msg.textContent = UI_COPY.stepUpNeeded; return; }
+  msg.textContent = 'Checking…';
+  let res;
+  try {
+    res = await fetch('/admin/step-up', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw, code }),
+    });
+  } catch (e) { msg.textContent = e.message; return; }
+  document.getElementById('stepUpPw').value = '';
+  if (codeEl) codeEl.value = '';
+  if (res.ok) { closeStepUp(true); return; }
+  if (res.status === 429) { msg.textContent = 'Too many attempts. Retry after ' + (res.headers.get('Retry-After') || '?') + 's.'; return; }
+  msg.textContent = UI_COPY.stepUpRejected;
 }
 let promptKey = '';
 let allModels = [];
@@ -1514,6 +1633,7 @@ function showTab(id) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
   if (id === 'playground' && allModels.length === 0) loadModels();
+  if (id === 'settings' && authed) loadSettings();
   // Status / Sessions show live wallet + chain state — refresh on every visit.
   if ((id === 'status' || id === 'activity') && authed && !document.getElementById('app').classList.contains('hidden')) {
     refresh({ force: true });
@@ -1533,7 +1653,7 @@ async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   if (res.status === 401) {
     const t = codeCheck ? (await res.text()).trim() : '';
-    if (codeCheck && t === 'invalid code') throw new Error(t);
+    if (codeCheck && (t === 'invalid code' || t === 'invalid password')) throw new Error(t);
     showLogin(); throw new Error('unauthorized');
   }
   if (!res.ok) {
@@ -1545,6 +1665,167 @@ async function api(path, opts = {}) {
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
   return res.text();
+}
+
+/** Operator settings (#51): one row per registry setting. Env-pinned,
+ * router and env-only rows are read-only. */
+async function loadSettings() {
+  const msg = document.getElementById('settingsMsg');
+  try {
+    const v = await api('/admin/settings');
+    renderSettings((v && v.settings) || []);
+    msg.textContent = '';
+  } catch (e) {
+    msg.textContent = 'Could not load settings: ' + e.message;
+  }
+}
+function settingText(v) {
+  if (v === null || v === undefined || v === '') return '(none)';
+  return String(v);
+}
+function settingTip(s) {
+  let t = s.help || s.name;
+  t += ' Default: ' + settingText(s.default) + '.';
+  return t;
+}
+function settingNote(s) {
+  if (s.scope === 'router') return 'router setting: set ' + s.env + ' in the router\u2019s .env and restart the router';
+  if (s.scope === 'env') return 'set in .env only (' + s.env + ')';
+  if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
+  if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
+  if (s.source === 'persisted') return 'saved';
+  return 'default ' + settingText(s.default);
+}
+function renderSettings(list) {
+  const box = document.getElementById('settingsList');
+  box.textContent = '';
+  for (const s of list) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('label');
+    label.textContent = s.name;
+    label.title = s.env;
+    label.style.minWidth = '200px';
+    const tip = document.createElement('span');
+    tip.className = 'tip';
+    tip.tabIndex = 0;
+    setTip(tip, settingTip(s));
+    tip.textContent = '\u24D8';
+    let input;
+    if (s.kind === 'bool') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('role', 'switch');
+      input.checked = s.value === true;
+    } else if (s.kind === 'enum' || (Array.isArray(s.options) && s.options.length)) {
+      input = document.createElement('select');
+      for (const o of (s.options || [])) {
+        const opt = document.createElement('option');
+        opt.value = o; opt.textContent = o;
+        input.appendChild(opt);
+      }
+      input.value = s.value == null ? '' : String(s.value);
+    } else if (s.kind === 'string') {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.style.minWidth = '280px';
+      input.value = s.value == null ? '' : String(s.value);
+    } else {
+      input = document.createElement('input');
+      input.type = 'number';
+      if (s.min != null) input.min = String(s.min);
+      if (s.max != null) input.max = String(s.max);
+      input.style.maxWidth = '140px';
+      input.value = s.value == null ? '' : String(s.value);
+    }
+    input.id = 'setting-' + s.name;
+    input.disabled = !!s.pinned || s.settable === false;
+    row.appendChild(label);
+    row.appendChild(tip);
+    row.appendChild(input);
+    if (!input.disabled) {
+      const save = document.createElement('button');
+      save.type = 'button'; save.className = 'ghost'; save.textContent = 'Save';
+      save.onclick = () => saveSetting(s.name, s.kind === 'bool' ? input.checked : input.value, s.kind);
+      const reset = document.createElement('button');
+      reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'Reset';
+      reset.disabled = s.source !== 'persisted';
+      reset.onclick = () => saveSetting(s.name, null);
+      row.appendChild(save);
+      row.appendChild(reset);
+    }
+    const note = document.createElement('span');
+    note.className = 'note';
+    note.style.margin = '0';
+    note.textContent = settingNote(s);
+    row.appendChild(note);
+    box.appendChild(row);
+  }
+}
+function settingValue(value, kind) {
+  if (kind === 'bool') return !!value;
+  if (kind === 'int') return Number(value);
+  return String(value);
+}
+async function saveSetting(name, value, kind) {
+  const msg = document.getElementById('settingsMsg');
+  const body = value === null ? { name, reset: true } : { name, value: settingValue(value, kind || 'int') };
+  try {
+    // Restart-scope rows need a fresh step-up (like import); live rows never ask.
+    const res = await stepUpFetch('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res) { msg.textContent = name + ' needs your password first.'; return; }
+    if (!res.ok) { msg.textContent = name + ': ' + ((await res.text()) || res.statusText); return; }
+    msg.textContent = value === null ? name + ' reset' : name + ' saved';
+    await loadSettings();
+  } catch (e) {
+    msg.textContent = name + ': ' + e.message;
+  }
+}
+// stepUpFetch is fetch for routes that need a fresh step-up (settings
+// export, import and restart-scope saves): on 401 step_up_required it asks once, then retries.
+// null when cancelled or the session is gone.
+async function stepUpFetch(path, opts) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+    if (res.status === 401) {
+      const t = ((await res.text()) || '').trim();
+      if (t !== 'step_up_required') { showLogin(); return null; }
+      if (attempt > 0 || !(await openStepUp())) return null;
+      continue;
+    }
+    return res;
+  }
+  return null;
+}
+async function exportSettings() {
+  const msg = document.getElementById('settingsMsg');
+  const res = await stepUpFetch('/admin/settings/export');
+  if (!res) { msg.textContent = 'Export needs your password first.'; return; }
+  if (!res.ok) { msg.textContent = 'Export failed: ' + ((await res.text()) || res.statusText); return; }
+  const blob = new Blob([await res.text()], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uplink-settings.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  msg.textContent = 'Settings exported.';
+}
+async function importSettingsFile(input) {
+  const msg = document.getElementById('settingsMsg');
+  const file = input && input.files && input.files[0];
+  if (input) input.value = '';
+  if (!file) return;
+  if (!confirm('Replace the saved settings with this file? Settings not in the file go back to their defaults.')) return;
+  const text = await file.text();
+  const res = await stepUpFetch('/admin/settings/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text });
+  if (!res) { msg.textContent = 'Import needs your password first.'; return; }
+  if (!res.ok) { msg.textContent = 'Import refused: ' + ((await res.text()) || res.statusText); return; }
+  const v = await res.json();
+  renderSettings((v && v.settings) || []);
+  const pinned = (v && v.pinned) || [];
+  msg.textContent = 'Settings imported.' + (pinned.length ? ' Set by environment, so the env value still wins: ' + pinned.join(', ') + '.' : '');
 }
 
 /** Accessible ⓘ: focusable, announced via aria-label, shown via CSS on hover/focus. */
@@ -1768,7 +2049,7 @@ async function refreshSecurity() {
         if (!alerts.length) {
           box.textContent = UI_COPY.alertsNone;
         } else {
-          box.innerHTML = alertRowsHtml(alerts);
+          box.replaceChildren(alertRowsTable(alerts));
         }
       }
     } catch (e) {
@@ -1806,14 +2087,30 @@ function alertDetail(a, when) {
   }
   return t.replace(/\s{2,}/g, ' ').trim();
 }
-function alertRowsHtml(alerts) {
+// alertRowsTable builds the rows with DOM nodes and textContent only:
+// audit fields (paths, messages) are never parsed as HTML.
+function alertRowsTable(alerts) {
   const rows = alerts.slice().sort((x, y) => (Date.parse(y.at) || 0) - (Date.parse(x.at) || 0));
-  return '<table class="alerts-table"><tbody>' + rows.map(a => {
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const table = el('table', 'alerts-table');
+  const tbody = el('tbody');
+  table.appendChild(tbody);
+  for (const a of rows) {
     const when = alertTime(a.at);
-    return '<tr class="alert-row"><td class="alert-at">' + escapeHtml(when) + '</td>'
-      + '<td class="alert-kind"><strong>' + escapeHtml(a.kind || '') + '</strong></td>'
-      + '<td class="alert-detail">' + escapeHtml(alertDetail(a, when)) + '</td></tr>';
-  }).join('') + '</tbody></table>';
+    const tr = el('tr', 'alert-row');
+    tr.appendChild(el('td', 'alert-at', when));
+    const kind = el('td', 'alert-kind');
+    kind.appendChild(el('strong', '', String(a.kind || '')));
+    tr.appendChild(kind);
+    tr.appendChild(el('td', 'alert-detail', alertDetail(a, when)));
+    tbody.appendChild(tr);
+  }
+  return table;
 }
 // filterAlerts: client-side, case-insensitive substring over the whole row.
 function filterAlerts() {
@@ -1854,10 +2151,18 @@ async function startTotpEnroll() {
   const qr = document.getElementById('enrollQr');
   const form = document.getElementById('enrollConfirmForm');
   const codeEl = document.getElementById('enrollCode');
+  const pwEl = document.getElementById('enrollPw');
+  const password = (pwEl && pwEl.value) || '';
   hideRecoveryCodes();
   setEnrollMsg('', '');
+  if (!password) {
+    // The server needs the password first; ask for it, post nothing.
+    setEnrollMsg(UI_COPY.enrollPwNeeded, '');
+    if (pwEl) setTimeout(() => pwEl.focus(), 0);
+    return;
+  }
   try {
-    const data = await api('/admin/2fa/enroll/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await api('/admin/2fa/enroll/start', { codeCheck: true, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
     secretEl.textContent = 'Secret (save offline):\n' + (data.secret || '');
     if (data.qrPngB64 && qr) {
       qr.src = 'data:image/png;base64,' + data.qrPngB64;
@@ -1880,14 +2185,22 @@ async function confirmTotpEnroll() {
     if (codeEl) codeEl.focus();
     return;
   }
+  const pwEl = document.getElementById('enrollPw');
+  const password = (pwEl && pwEl.value) || '';
+  if (!password) {
+    setEnrollMsg(UI_COPY.enrollPwNeeded, 'err');
+    if (pwEl) pwEl.focus();
+    return;
+  }
   setEnrollMsg('Checking…', '');
   try {
     const data = await api('/admin/2fa/enroll/confirm', {
       codeCheck: true,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ password, code }),
     });
+    if (pwEl) pwEl.value = '';
     hideEnrollSecret();
     if (codeEl) codeEl.value = '';
     setTwoFactorHint(true);
@@ -1987,6 +2300,7 @@ async function factorError(res) {
 async function regenerateRecoveryCodes() {
   const f = manageFields();
   if (!f.password || !f.code) { setManageMsg(UI_COPY.factorNeeded, 'err'); return; }
+  if (!/^\d{6}$/.test(f.code)) { setManageMsg(UI_COPY.regenNeedsTotp, 'err'); return; }
   try {
     const res = await postFactor('/admin/2fa/recovery/regen', f);
     if (!res.ok) { setManageMsg(await factorError(res), 'err'); return; }
@@ -2364,6 +2678,21 @@ function renderOriginWarn(st) {
   el.classList.toggle('hidden', !msg);
 }
 
+// exclusionsWarning: '' unless opens are being refused because name-keyed
+// provider exclusions cannot be resolved, else the warning text.
+function exclusionsWarning(st) {
+  const n = Number((st && st.exclusionsUnresolved) || 0);
+  return n > 0 ? UI_COPY.exclusionsUnresolved(n, st.exclusionsUnresolvedCapped === true) : '';
+}
+
+function renderExclusionsWarn(st) {
+  const el = document.getElementById('exclusionsWarn');
+  if (!el) return;
+  const msg = exclusionsWarning(st);
+  el.textContent = msg;
+  el.classList.toggle('hidden', !msg);
+}
+
 function renderRouterBanner(st) {
   const el = document.getElementById('routerAuthBanner');
   if (!el) return;
@@ -2371,6 +2700,18 @@ function renderRouterBanner(st) {
   lastRouterProblem = p;
   el.classList.toggle('hidden', !p);
   el.textContent = p ? p.text : '';
+}
+
+// Security tab: the fixed admin session lengths (status.adminSession) and
+// the informational "2FA is off" note.
+function renderSessionLengths(st) {
+  const el = document.getElementById('sessionLengths');
+  const a = st && st.adminSession;
+  if (!el || !a) return;
+  const h = (sec) => (sec % 3600 === 0 ? (sec / 3600) + 'h' : Math.round(sec / 60) + 'm');
+  let t = UI_COPY.sessionLengths(h(a.idleSec), h(a.absoluteSec));
+  if ((a.warnings || []).includes('2FA is off')) t += UI_COPY.twoFactorOffSession;
+  el.textContent = t;
 }
 
 // Shown on every tab while MASTER_KEY_ADMIN=true (status.twoFactor.masterKeyAdmin).
@@ -2442,6 +2783,8 @@ async function doRefresh() {
     }
     renderRouterBanner(st);
     renderOriginWarn(st);
+    renderExclusionsWarn(st);
+    renderSessionLengths(st);
     renderSessionReconcile(st.sessionReconcile || {});
 
     const rawSessions = st.sessions || [];
@@ -2632,7 +2975,7 @@ function setSessNote(msg) {
 function renderSessions(sessions, sessionsError) {
   const body = document.querySelector('#sessTable tbody');
   if (sessionsError && !sessions.length) {
-    body.innerHTML = `<tr><td colspan=6 class="note">session scan: ${escapeHtml(sessionsError)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan=9 class="note">session scan: ${escapeHtml(sessionsError)}</td></tr>`;
     return;
   }
   body.innerHTML = sessions.map(s => {
@@ -2642,15 +2985,20 @@ function renderSessions(sessions, sessionsError) {
       ? `<span class="model-name">${escapeHtml(name)}</span><code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`
       : `<code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`;
     const sid = s.sessionId || '';
+    const holders = Array.isArray(s.holders) ? s.holders : [];
+    const holderCount = Number(s.holderCount) || holders.length;
     return `<tr>
       <td class="model-cell">${modelCell}</td>
       <td><code title="${escapeAttr(sid)}">${shortSecret(sid)}</code></td>
       <td>${fmtMor(s.stakeWei)}</td>
+      <td>${fmtEnds(s.openedAt)}</td>
       <td>${fmtEnds(s.endsAt)}</td>
+      <td>${s.pooled ? (Number(s.inFlight) || 0) : '—'}</td>
+      <td title="${escapeAttr(holders.join(', '))}">${s.pooled ? holderCount : '—'}</td>
       <td>${status}</td>
       <td><button type="button" class="danger-ghost" data-sid="${escapeAttr(sid)}" onclick="closeSession(this.dataset.sid, this)" ${sid ? '' : 'disabled'}>Close</button></td>
     </tr>`;
-  }).join('') || '<tr><td colspan=6 class="note">none</td></tr>';
+  }).join('') || '<tr><td colspan=9 class="note">none</td></tr>';
 }
 
 async function refreshKeys() {
@@ -3275,7 +3623,8 @@ function closeBulkImportModal() {
 async function exportEphemeralKeys() {
   // The key list is masked: fetch the full keys (audited) for the file.
   try {
-    const ks = await api('/admin/keys?reveal=1');
+    const ks = await revealKeys();
+    if (!ks) { document.getElementById('keysBulkMsg').textContent = UI_COPY.stepUpCancelled; return; }
     rememberKeys(ks);
     renderGeneratedKeys(ks.keys || []);
   } catch (e) {

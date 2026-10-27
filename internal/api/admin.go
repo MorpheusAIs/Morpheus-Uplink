@@ -2,14 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/chain"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
@@ -25,8 +28,24 @@ func recordsForAdminJSON(recs []keymaker.Record) []keymaker.Record {
 	return out
 }
 
+// handleListKeys (GET /admin/keys) lists the keys masked. With reveal=1 it
+// returns the full keys only to a cookie session that logged in or stepped
+// up (POST /admin/step-up) within StepUpMaxAge; otherwise 401
+// step_up_required. It takes no credentials itself. Over a Bearer token
+// reveal is refused earlier (refuseRevealOverBearer).
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
+	reveal := revealRequested(r)
+	if reveal {
+		auth := adminAuthFrom(r)
+		if auth.bearer || auth.session == nil {
+			http.Error(w, "key reveal needs an admin session", http.StatusForbidden)
+			return
+		}
+		if !auth.session.Fresh(s.sessions.Now(), StepUpMaxAge) {
+			http.Error(w, errMsgStepUp, http.StatusUnauthorized)
+			return
+		}
+	}
 	out := map[string]any{
 		"keys":   recordsForAdminJSON(s.store.ListKeys()),
 		"masked": !reveal,
@@ -35,7 +54,8 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		// Explicit reveal only — master key is never returned by default.
 		out["masterKey"] = s.masterKey
 		out["promptKey"] = s.promptKey
-		s.audit.Record("key_reveal", s.lockout.ClientIP(r), "admin revealed master/prompt keys")
+		ip := s.lockout.ClientIP(r)
+		s.writeAudit(AuditStreamFor("key_reveal", "ok"), AuditEvent{Kind: "key_reveal", Actor: ip, IP: ip, Result: "ok", Message: "admin revealed master/prompt keys"})
 	} else {
 		out["masterKey"] = maskSecret(s.masterKey)
 		out["promptKey"] = maskSecret(s.promptKey)
@@ -82,7 +102,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.audit.Record("key_create", s.lockout.ClientIP(r), "created key "+rec.ID)
+	s.auditAdmin(r, "key_create", "created key "+rec.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"key":    full, // shown once; only the hash is stored
 		"record": rec,
@@ -112,6 +132,7 @@ func (s *Server) handleImportKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.auditAdmin(r, "key_import", "imported key "+rec.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{"record": rec})
 }
 
@@ -131,7 +152,7 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
 	}
-	s.audit.Record("key_revoke", s.lockout.ClientIP(r), "revoked key "+id)
+	s.auditAdmin(r, "key_revoke", "revoked key "+id)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
@@ -142,7 +163,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		_ = err
 	}
 
-	sessions := s.pool.ChainOpen()
+	sessions := sessionRows(s.pool.ChainOpen(), s.pool.Snapshot(), time.Now())
 	for i := range sessions {
 		if name := s.catalog.NameByID(sessions[i].ModelID); name != "" {
 			sessions[i].ModelName = name
@@ -150,10 +171,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status := map[string]any{
 		"version":                Version,
-		"sessions":               sessions, // on-chain opens (pooled flagged)
-		"poolSessions":           s.pool.Snapshot(),
-		"sessionDurationSec":     s.cfg.SessionDurationSec,
-		"sessionDurationDefault": s.cfg.SessionDurationSec,
+		"sessions":               sessions, // on-chain opens (pooled flagged) with lease state
+		"sessionDurationSec":     s.durationDefault(),
+		"sessionDurationDefault": s.durationDefault(),
 		// Origin admin changes are accepted from (the GUI warns on a mismatch).
 		"webPublicUrl": webPublicOrigin(s.cfg.WebPublicURL),
 	}
@@ -170,6 +190,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if msg := s.pool.RehydrateError(); msg != "" {
 		status["sessionsError"] = msg
 	}
+	// Models refused because name-keyed provider exclusions cannot be
+	// resolved yet (the GUI warns while non-zero). A capped count only;
+	// reading it makes no catalog fetch.
+	nRefused, capped := s.pool.UnresolvedExclusionRefusals()
+	status["exclusionsUnresolved"] = nRefused
+	status["exclusionsUnresolvedCapped"] = capped
 	if health, err := s.router.Healthcheck(); err == nil {
 		status["router"] = health
 	} else {
@@ -211,7 +237,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Free-space for / and DATA_DIR - never include wallet/cookie/Bearer material.
-	status["disk"] = collectDiskStatus("/", s.cfg.DataDir)
+	disk := collectDiskStatus("/", s.cfg.DataDir)
+	if s.auditFile != nil {
+		disk["audit"] = s.auditFile.diskStatus()
+	}
+	status["disk"] = disk
 	auth := s.store.GetAuthState()
 	status["twoFactor"] = map[string]any{
 		"enrolled":       auth.Enrolled,
@@ -222,6 +252,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"masterKeyAdmin": s.cfg.MasterKeyAdmin,
 		"configWarn":     s.cfg.MalformedBoolVars,
 	}
+	status["adminSession"] = s.adminSessionStatus(auth.On())
 	writeJSON(w, http.StatusOK, status)
 }
 
@@ -309,11 +340,12 @@ func bigStr(n *big.Int) string {
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"usage": s.store.Usage()})
+	writeJSON(w, http.StatusOK, map[string]any{"usage": s.usageViews(s.store.Usage())})
 }
 
 func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
 	res := s.pool.CloseAll()
+	s.auditAdmin(r, "pool_close_all", fmt.Sprintf("pool_close_all attempted=%d closed=%d failed=%d", res.Attempted, res.Closed, res.Failed))
 	status := http.StatusOK
 	if res.Attempted > 0 && res.Closed == 0 {
 		status = http.StatusBadGateway
@@ -335,7 +367,7 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `query "model" required`, http.StatusBadRequest)
 		return
 	}
-	durationSec := s.cfg.SessionDurationSec
+	durationSec := s.durationDefault()
 	if durationSec < 600 {
 		durationSec = 600
 	}
@@ -406,7 +438,7 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 // handleEstimateStakes returns on-chain lock estimates for every catalog model
 // at the given duration, plus liquid wallet MOR for affordability checks.
 func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
-	durationSec := s.cfg.SessionDurationSec
+	durationSec := s.durationDefault()
 	if durationSec < 600 {
 		durationSec = 600
 	}
@@ -481,9 +513,12 @@ func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.pool.CloseSession(id); err != nil {
-		http.Error(w, "close session: "+err.Error(), http.StatusBadGateway)
+		s.auditAdmin(r, "pool_close", "pool_close failed session="+pool.ShortID(id))
+		warnf("api: pool close %s: %v", pool.ShortID(id), err)
+		http.Error(w, "close session failed", http.StatusBadGateway) // fixed text: router text stays in the log
 		return
 	}
+	s.auditAdmin(r, "pool_close", "pool_close session="+pool.ShortID(id))
 	writeJSON(w, http.StatusOK, map[string]any{"closed": true, "sessionId": id})
 }
 
@@ -522,4 +557,84 @@ func fileSizeBestEffort(path string) int64 {
 		return 0
 	}
 	return fi.Size()
+}
+
+// adminSessionStatus reports the admin session lengths (fixed constants,
+// not configurable). The "2FA is off" warning is informational: session
+// validity does not depend on 2FA.
+func (s *Server) adminSessionStatus(twoFactorOn bool) map[string]any {
+	warnings := []string{}
+	if !twoFactorOn {
+		warnings = append(warnings, "2FA is off")
+	}
+	return map[string]any{
+		"idle":            s.sessions.Idle().String(),
+		"idleSec":         int(s.sessions.Idle().Seconds()),
+		"absolute":        s.sessions.Absolute().String(),
+		"absoluteSec":     int(s.sessions.Absolute().Seconds()),
+		"stepUpMaxAgeSec": int(StepUpMaxAge.Seconds()),
+		"warnings":        warnings,
+	}
+}
+
+// auditAdmin writes a high-value admin action by the caller (cookie
+// session or master Bearer).
+func (s *Server) auditAdmin(r *http.Request, kind, message string) {
+	ip := s.lockout.ClientIP(r)
+	s.writeAudit(AuditStreamHighValue, AuditEvent{At: time.Now().UTC(), Kind: kind, Actor: ip, IP: ip, Result: "ok", Message: message})
+}
+
+// sessionRow is one row of the console Sessions table: the on-chain open
+// plus, for a session in the reuse pool, its lease state.
+type sessionRow struct {
+	pool.ChainSession
+	InFlight    int        `json:"inFlight"`
+	HolderCount int        `json:"holderCount"`
+	Holders     []string   `json:"holders"` // key ids
+	OpenedAt    *time.Time `json:"openedAt,omitempty"`
+	Opener      string     `json:"opener,omitempty"`
+}
+
+// sessionRows merges the pool's lease state into the on-chain list by
+// session id. A pooled session the last chain scan has not seen yet is
+// appended. endsAt comes from the chain, else from the lease.
+func sessionRows(chain []pool.ChainSession, snaps []pool.Snapshot, now time.Time) []sessionRow {
+	bySID := make(map[string]pool.Snapshot, len(snaps))
+	for _, sn := range snaps {
+		bySID[strings.ToLower(sn.SessionID)] = sn
+	}
+	out := make([]sessionRow, 0, len(chain)+len(snaps))
+	seen := map[string]bool{}
+	add := func(cs pool.ChainSession, sn pool.Snapshot, ok bool) {
+		r := sessionRow{ChainSession: cs, Holders: []string{}}
+		if ok {
+			r.InFlight, r.HolderCount, r.Opener = sn.InFlight, sn.HolderCount, sn.Opener
+			if sn.Holders != nil {
+				r.Holders = sn.Holders
+			}
+			if !sn.OpenedAt.IsZero() {
+				t := sn.OpenedAt
+				r.OpenedAt = &t
+			}
+			if r.EndsAt.IsZero() {
+				r.EndsAt = sn.EndsAt
+			}
+		}
+		out = append(out, r)
+	}
+	for _, cs := range chain {
+		id := strings.ToLower(cs.SessionID)
+		sn, ok := bySID[id]
+		seen[id] = true
+		add(cs, sn, ok)
+	}
+	for _, sn := range snaps {
+		id := strings.ToLower(sn.SessionID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		add(pool.ChainSession{ModelID: sn.ModelID, SessionID: sn.SessionID, Usable: now.Before(sn.ExpiresAt), Pooled: true}, sn, true)
+	}
+	return out
 }

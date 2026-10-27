@@ -26,7 +26,7 @@ var recoveryFormat = regexp.MustCompile(`^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}$`)
 // recovery codes. The enrollment uses the current TOTP step.
 func enroll2FA(t *testing.T, ac *http.Client, ts *httptest.Server, cfg *config.Config) (string, []string) {
 	t.Helper()
-	code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", "{}")
+	code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", `{"password":"`+cfg.AdminPassword+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("enroll start: %d %s", code, b)
 	}
@@ -40,7 +40,7 @@ func enroll2FA(t *testing.T, ac *http.Client, ts *httptest.Server, cfg *config.C
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, b = postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"`+otp+`"}`)
+	code, b = postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"password":"`+cfg.AdminPassword+`","code":"`+otp+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("enroll confirm: %d %s", code, b)
 	}

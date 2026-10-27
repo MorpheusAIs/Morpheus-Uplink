@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,7 +31,7 @@ type OnSessionClosed func(sessionID string)
 
 type Pool struct {
 	client   *router.Client
-	duration int
+	duration atomic.Int64 // default session length (s); S6 settings change it live
 
 	mu      sync.Mutex
 	entries map[string]entry       // normModel(modelID) -> session
@@ -42,6 +43,26 @@ type Pool struct {
 	cooldown time.Duration        // 0: no memory across requests
 	cooling  map[string]time.Time // normModel|provider -> until
 	retired  map[string]time.Time // session id -> on-chain end (never re-adopted)
+	// cutNext: a provider that cut a stream; the model's next open walks
+	// the bids excluding it, whatever the cool-down (one-shot).
+	cutNext map[string]string // normModel -> provider
+	// exclude: UPLINK_PROVIDER_EXCLUDE, model id or lowercased name ->
+	// providers never opened for it. namer maps an id to its name.
+	exclude map[string]map[string]bool
+	namer   func(modelID string) string
+	// excludeByName: some exclusions are keyed by catalog name.
+	excludeByName bool
+	// unresolvedRefused: models whose opens were refused because their
+	// name-keyed exclusions could not be resolved (for the console).
+	unresolvedRefused map[string]bool
+	unresolvedCapped  bool        // an id was dropped at MaxUnresolvedRefusals
+	catalogLoaded     func() bool // no network; see SetCatalogLoaded
+
+	// Leases (lease.go), under mu.
+	sess          map[string]*sessState // session id -> lease state
+	clock         func() time.Time
+	durMax        int
+	testHookLease func(sessionID string, inflight int)
 
 	onClosed OnSessionClosed
 
@@ -80,24 +101,34 @@ type ChainSession struct {
 // direct payment), and the router's own in-prompt failover is always off:
 // provider failover is run by the pool (Failover).
 func New(client *router.Client, durationSec int) *Pool {
-	return &Pool{
+	p := &Pool{
 		client:   client,
-		duration: durationSec,
 		entries:  map[string]entry{},
 		opening:  map[string]*sync.Mutex{},
 		cooldown: DefaultProviderCooldown,
 		cooling:  map[string]time.Time{},
 		retired:  map[string]time.Time{},
+		cutNext:  map[string]string{},
+
+		sess:   map[string]*sessState{},
+		durMax: 1800,
 	}
+	p.duration.Store(int64(durationSec))
+	return p
 }
 
 // DurationSec is the configured default session length.
-func (p *Pool) DurationSec() int { return p.duration }
+func (p *Pool) DurationSec() int { return int(p.duration.Load()) }
+
+// SetDuration changes the default session length (S6 settings). Open
+// sessions keep their own end time.
+func (p *Pool) SetDuration(sec int) { p.duration.Store(int64(sec)) }
 
 // SetOnSessionClosed registers a hook run after each successful close.
 func (p *Pool) SetOnSessionClosed(fn OnSessionClosed) { p.onClosed = fn }
 
 func (p *Pool) notifyClosed(sessionID string) {
+	p.forget(sessionID)
 	if p.onClosed == nil || sessionID == "" {
 		return
 	}
@@ -130,67 +161,6 @@ func (p *Pool) emitRescan(ev ReconcileEvent) {
 	}
 }
 
-// EnsureResult is returned by EnsureDuration.
-type EnsureResult struct {
-	SessionID   string
-	Opened      bool // true when a new on-chain session was opened
-	DurationSec int
-}
-
-// Ensure returns an open session for the model, opening one if needed.
-func (p *Pool) Ensure(modelID string) (string, error) {
-	res, err := p.EnsureDuration(modelID, 0)
-	if err != nil {
-		return "", err
-	}
-	return res.SessionID, nil
-}
-
-// EnsureDuration returns an open session. durationSec <= 0 uses the pool default.
-// Reuse order: in-memory pool → adopt a still-open on-chain session → open new.
-func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, error) {
-	if durationSec <= 0 {
-		durationSec = p.duration
-	}
-	key := normModel(modelID)
-	p.mu.Lock()
-	if e, ok := p.entries[key]; ok && time.Now().Before(e.expiresAt) {
-		p.mu.Unlock()
-		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
-	}
-	p.mu.Unlock()
-	lock := p.openLock(key)
-
-	p.waitGate()
-	lock.Lock()
-	defer lock.Unlock()
-
-	if res, ok := p.cachedSession(modelID, durationSec); ok {
-		return res, nil
-	}
-
-	// Memory miss (restart, invalidate after a bad prompt, etc.): prefer the
-	// already-staked on-chain session over opening another and double-locking MOR.
-	if err := p.RehydrateForce(); err != nil {
-		log.Printf("pool: rehydrate before open for %s: %v", modelID, err)
-		if p.gated.Load() && !p.stateKnown.Load() {
-			return EnsureResult{}, ErrSessionStateUnknown
-		}
-	}
-	if res, ok := p.cachedSession(modelID, durationSec); ok {
-		log.Printf("pool: adopted on-chain session %s for model %s", short(res.SessionID), modelID)
-		return res, nil
-	}
-
-	sessionID, provider, err := p.openAvoidingCooling(modelID, durationSec)
-	if err != nil {
-		return EnsureResult{}, err
-	}
-	p.store(key, sessionID, provider, durationSec)
-	log.Printf("pool: opened session %s for model %s (duration %ds)", short(sessionID), modelID, durationSec)
-	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
-}
-
 // openLock returns the per-model open lock.
 func (p *Pool) openLock(key string) *sync.Mutex {
 	p.mu.Lock()
@@ -203,39 +173,30 @@ func (p *Pool) openLock(key string) *sync.Mutex {
 	return lock
 }
 
-// store pools a session this pool just opened.
-func (p *Pool) store(key, sessionID, provider string, durationSec int) {
-	p.mu.Lock()
-	p.entries[key] = entry{
-		sessionID: sessionID,
-		expiresAt: time.Now().Add(time.Duration(durationSec)*time.Second - expiryBuffer),
-		provider:  provider,
-	}
-	p.mu.Unlock()
-}
-
-func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	e, ok := p.entries[normModel(modelID)]
-	if !ok || !time.Now().Before(e.expiresAt) {
-		return EnsureResult{}, false
-	}
-	return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, true
-}
-
 // Invalidate drops the pooled session for a model (e.g. after a failed
 // prompt) so the next request opens a fresh one.
 func (p *Pool) Invalidate(modelID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.entries, normModel(modelID))
+	key := normModel(modelID)
+	if e, ok := p.entries[key]; ok {
+		delete(p.sess, e.sessionID) // the router already dropped it
+	}
+	delete(p.entries, key)
 }
 
+// Snapshot is one pooled session for the admin status. Holders are key
+// ids (admin only, never sent to API keys).
 type Snapshot struct {
-	ModelID   string    `json:"modelId"`
-	SessionID string    `json:"sessionId"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	ModelID     string    `json:"modelId"`
+	SessionID   string    `json:"sessionId"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	InFlight    int       `json:"inFlight"`
+	HolderCount int       `json:"holderCount"`
+	Holders     []string  `json:"holders"`
+	OpenedAt    time.Time `json:"openedAt"`
+	EndsAt      time.Time `json:"endsAt"`
+	Opener      string    `json:"opener,omitempty"`
 }
 
 func (p *Pool) Snapshot() []Snapshot {
@@ -243,7 +204,15 @@ func (p *Pool) Snapshot() []Snapshot {
 	defer p.mu.Unlock()
 	out := make([]Snapshot, 0, len(p.entries))
 	for modelID, e := range p.entries {
-		out = append(out, Snapshot{ModelID: modelID, SessionID: e.sessionID, ExpiresAt: e.expiresAt})
+		sn := Snapshot{ModelID: modelID, SessionID: e.sessionID, ExpiresAt: e.expiresAt, Holders: []string{}}
+		if st := p.sess[e.sessionID]; st != nil {
+			sn.InFlight, sn.HolderCount, sn.OpenedAt, sn.EndsAt, sn.Opener = st.inflight, len(st.holders), st.openedAt, st.endsAt, st.opener
+			for k := range st.holders {
+				sn.Holders = append(sn.Holders, k)
+			}
+			sort.Strings(sn.Holders)
+		}
+		out = append(out, sn)
 	}
 	return out
 }
@@ -320,7 +289,7 @@ func (p *Pool) rehydrate(force bool) error {
 		return err
 	}
 
-	now := time.Now()
+	now := p.now()
 	nowUnix := now.Unix()
 	best := map[string]router.Session{} // model -> farthest-ending usable
 	display := make([]ChainSession, 0, len(open))
@@ -334,7 +303,7 @@ func (p *Pool) rehydrate(force bool) error {
 		if p.isClosing(s.ID) {
 			continue // the boot reconcile is closing it
 		}
-		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider)
+		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider) || p.isExcluded(s.ModelAgentID, s.Provider)
 		if !usable {
 			// Past end (or inside buffer): ask router to close so unused
 			// returns and used moves to the daylock queue.
@@ -342,7 +311,7 @@ func (p *Pool) rehydrate(force bool) error {
 			if err := p.client.CloseSession(s.ID); err != nil {
 				ev.Result = "failed"
 				p.emitRescan(ev)
-				log.Printf("pool: close expired session %s: %v", short(s.ID), err)
+				warnf("pool: close expired session %s: %v", short(s.ID), err)
 				// Still show it — close failed, stake remains active.
 				display = append(display, ChainSession{
 					ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stakeStr,
@@ -375,11 +344,18 @@ func (p *Pool) rehydrate(force bool) error {
 			// Keep a fresher local open.
 			continue
 		}
+		if st := p.sess[s.ID]; st != nil && (st.retired || st.closing) {
+			continue // retired by a failover, release or sweep: never handed out again
+		}
 		p.entries[modelID] = entry{
 			sessionID: s.ID,
 			expiresAt: usableUntil,
 			stake:     s.Stake,
 			provider:  s.Provider,
+		}
+		if p.sess[s.ID] == nil {
+			// Adopted: opener unknown.
+			p.newStateLocked(modelID, s.ID, time.Unix(s.OpenedAt, 0), ends, "")
 		}
 		adopted++
 	}
@@ -459,11 +435,11 @@ func (p *Pool) CloseAll() CloseAllResult {
 		res.Attempted++
 		if err := p.client.CloseSession(sessionID); err != nil {
 			res.Failed++
-			msg := label + ": " + err.Error()
+			msg := label + ": close failed" // fixed text; the router's text is logged only
 			if len(res.Errors) < 5 {
 				res.Errors = append(res.Errors, msg)
 			}
-			log.Printf("pool: close session %s: %v", short(sessionID), err)
+			warnf("pool: close session %s: %v", short(sessionID), err)
 			return
 		}
 		res.Closed++
@@ -510,7 +486,7 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 		if left <= 0 {
 			for _, r := range targets[i:] {
 				res.Left++
-				log.Printf("pool: session %s (%s) left for boot reconcile (shutdown deadline)", short(r.id), r.label)
+				warnf("pool: session %s (%s) left for boot reconcile (shutdown deadline)", short(r.id), r.label)
 			}
 			break
 		}
@@ -526,9 +502,9 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 			if err != nil {
 				res.Failed++
 				if len(res.Errors) < 5 {
-					res.Errors = append(res.Errors, t.label+": "+err.Error())
+					res.Errors = append(res.Errors, t.label+": close failed")
 				}
-				log.Printf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
+				warnf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
 				continue
 			}
 			res.Closed++
@@ -536,7 +512,7 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 			p.notifyClosed(t.id)
 		case <-time.After(wait):
 			res.Left++
-			log.Printf("pool: session %s (%s) left for boot reconcile (close timed out after %s)", short(t.id), t.label, wait)
+			warnf("pool: session %s (%s) left for boot reconcile (close timed out after %s)", short(t.id), t.label, wait)
 		}
 	}
 	return res

@@ -99,7 +99,7 @@ func TestEnsureDurationAdoptsChainBeforeOpen(t *testing.T) {
 	p := New(rc, 600)
 	// Simulate invalidate after a bad prompt while chain session remains open.
 	p.Invalidate(modelID)
-	res, err := p.EnsureDuration(modelID, 600)
+	res, err := acquireDone(p, modelID, 600)
 	if err != nil {
 		t.Fatal(err)
 	}

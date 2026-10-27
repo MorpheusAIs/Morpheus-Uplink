@@ -23,9 +23,9 @@ func (s *Server) AuditSessionReconcile(r pool.ReconcileResult) {
 	slog.Info("audit", "event", "session_reconcile", "result", result,
 		"open", r.Open, "adopted", r.Adopted, "closed", r.Closed, "failed", r.Failed,
 		"skipped", r.Skipped, "deferred", r.Deferred, "attempts", r.Attempts, "late", r.Late, "catalog", r.Catalog)
-	s.audit.RecordFull("session_reconcile", "system", "", result,
+	s.auditSystem("session_reconcile", "system", result,
 		fmt.Sprintf("session_reconcile %s open=%d adopted=%d closed=%d failed=%d skipped=%d deferred=%d",
-			result, r.Open, r.Adopted, r.Closed, r.Failed, r.Skipped, r.Deferred))
+			result, r.Open, r.Adopted, r.Closed, r.Failed, r.Skipped, r.Deferred), true)
 }
 
 // AuditSessionReconcileEvent writes one audit event per adopt, per close and
@@ -45,7 +45,7 @@ func (s *Server) AuditSessionReconcileEvent(ev pool.ReconcileEvent) {
 		msg += fmt.Sprintf(" deferred=%d", ev.Count)
 	}
 	slog.Info("audit", attrs...)
-	s.audit.RecordFull(ev.Kind, "system", "", ev.Result, msg)
+	s.auditSystem(ev.Kind, "system", ev.Result, msg, true)
 }
 
 // AuditSessionReconcileDeferred records that opens were un-gated before the
@@ -56,7 +56,7 @@ func (s *Server) AuditSessionReconcileDeferred(err error) {
 		kind = router.ErrorKind(err)
 	}
 	slog.Warn("audit", "event", "session_reconcile", "result", "deferred", "reason", kind)
-	s.audit.RecordFull("session_reconcile", "system", "", "deferred", "session_reconcile deferred "+kind)
+	s.auditSystem("session_reconcile", "system", "deferred", "session_reconcile deferred "+kind, true)
 }
 
 // WriteReconcileStatus writes the reconcile state to DATA_DIR atomically

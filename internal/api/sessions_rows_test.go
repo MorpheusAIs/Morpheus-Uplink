@@ -1,0 +1,80 @@
+package api
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
+)
+
+// Sessions page: lease state (in flight, holders, long, opened, ends) is
+// merged into the on-chain rows by session id; a pooled session the chain
+// scan has not seen yet is appended; ends falls back to the lease.
+func TestSessionRowsMerge(t *testing.T) {
+	now := time.Now()
+	opened, ends := now.Add(-time.Minute), now.Add(time.Hour)
+	chain := []pool.ChainSession{
+		{ModelID: "0xm1", SessionID: "0xAA", StakeWei: "1", EndsAt: ends, Usable: true, Pooled: true},
+		{ModelID: "0xm2", SessionID: "0xbb", StakeWei: "2", Usable: true},
+	}
+	snaps := []pool.Snapshot{
+		{ModelID: "0xm1", SessionID: "0xaa", ExpiresAt: ends, InFlight: 2, HolderCount: 1, Holders: []string{"k1"}, OpenedAt: opened, EndsAt: ends.Add(time.Second), Opener: "k1"},
+		{ModelID: "0xm3", SessionID: "0xcc", ExpiresAt: now.Add(time.Minute), OpenedAt: opened, EndsAt: now.Add(2 * time.Minute)},
+	}
+	rows := sessionRows(chain, snaps, now)
+	if len(rows) != 3 {
+		t.Fatalf("%d rows", len(rows))
+	}
+	a, b, c := rows[0], rows[1], rows[2]
+	if a.InFlight != 2 || a.HolderCount != 1 || len(a.Holders) != 1 || a.Opener != "k1" || a.OpenedAt == nil || !a.EndsAt.Equal(ends) || a.StakeWei != "1" {
+		t.Errorf("merged row %+v", a)
+	}
+	if b.InFlight != 0 || b.OpenedAt != nil || b.Holders == nil || !b.EndsAt.IsZero() {
+		t.Errorf("chain-only row %+v", b)
+	}
+	if c.SessionID != "0xcc" || !c.Pooled || !c.Usable || !c.EndsAt.Equal(snaps[1].EndsAt) || c.OpenedAt == nil {
+		t.Errorf("pool-only row %+v", c)
+	}
+	raw, _ := json.Marshal(a)
+	for _, k := range []string{`"modelId"`, `"sessionId"`, `"stakeWei"`, `"endsAt"`, `"usable"`, `"pooled"`, `"inFlight"`, `"holderCount"`, `"holders"`, `"openedAt"`, `"opener"`} {
+		if !strings.Contains(string(raw), k) {
+			t.Errorf("row JSON lacks %s: %s", k, raw)
+		}
+	}
+}
+
+// /admin/status carries the lease state on "sessions" only; the separate
+// poolSessions list is gone.
+func TestStatusSessionsCarryLeaseState(t *testing.T) {
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, nil)
+	if code, body := e.chat(t, false); code != 200 {
+		t.Fatalf("chat %d %s", code, body)
+	}
+	code, body := e.admin(t, "GET", "/admin/status", "")
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	var st map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st["poolSessions"]; ok {
+		t.Fatal("poolSessions still in /admin/status")
+	}
+	var rows []sessionRow
+	if err := json.Unmarshal(st["sessions"], &rows); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Pooled && r.OpenedAt != nil && !r.EndsAt.IsZero() && r.Holders != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no pooled row with lease state: %s", st["sessions"])
+	}
+}

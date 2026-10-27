@@ -58,7 +58,7 @@ func TestTwoFactorOnNotEnrolledAllowsEnrollPath(t *testing.T) {
 	}
 
 	// Enroll start must work with CSRF.
-	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/admin/2fa/enroll/start", strings.NewReader("{}"))
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/admin/2fa/enroll/start", strings.NewReader(`{"password":"`+cfg.AdminPassword+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	withCSRF(req, cfg)
 	resp, err = ac.Do(req)

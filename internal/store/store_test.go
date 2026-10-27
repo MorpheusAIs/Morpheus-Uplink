@@ -223,3 +223,169 @@ func TestAuthStateOn(t *testing.T) {
 		}
 	}
 }
+
+// Security gate S-3: save writes a fresh temp file (a planted *.tmp, symlinked or
+// world-writable, has no effect), leaves the state file at 0640, and a
+// symlinked state file is refused at open and at save.
+func TestSaveIgnoresPlantedTmp(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "uplink-state.json")
+	if err := os.Symlink(victim, statePath+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, "uplink-state.json.x.tmp")
+	if err := os.WriteFile(planted, []byte("planted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(planted, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSettings(func(st *Settings) error { st.LogLevel = "warn"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("symlinked tmp followed: victim now %q", b)
+	}
+	if b, _ := os.ReadFile(planted); string(b) != "planted" {
+		t.Fatalf("planted tmp reused: %q", b)
+	}
+	fi, err := os.Lstat(statePath)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || fi.Mode().Perm() != 0o640 {
+		t.Fatalf("state file %v %v", fi.Mode(), err)
+	}
+	if s2, err := Open(dir); err != nil || s2.GetSettings().LogLevel != "warn" {
+		t.Fatalf("reopen: %v", err)
+	}
+	// No temp file of ours is left behind.
+	m, _ := filepath.Glob(filepath.Join(dir, "uplink-state.json.*.tmp"))
+	if len(m) != 1 || m[0] != planted {
+		t.Fatalf("temp files left: %v", m)
+	}
+}
+
+func TestSymlinkedStateFileRefused(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere.json")
+	if err := os.WriteFile(target, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "uplink-state.json")
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("open accepted a symlinked state file")
+	}
+	// A symlink swapped in after open is refused at save too.
+	dir2 := t.TempDir()
+	s, err := Open(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir2, "uplink-state.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSettings(func(st *Settings) error { st.LogLevel = "warn"; return nil }); err == nil {
+		t.Fatal("save accepted a symlinked state file")
+	}
+	if b, _ := os.ReadFile(target); string(b) != `{"keys":[]}` {
+		t.Fatalf("target written: %q", b)
+	}
+}
+
+// Conformance NIT-3 / security gate: orphan temp files from a crash are
+// removed at boot — only regular files matching the save pattern directly
+// in DATA_DIR, with an mtime at least orphanTempMinAge old. A matching symlink, a matching directory, a non-matching
+// file and anything in a subdirectory are left alone.
+func TestOpenRemovesOnlyOrphanTemps(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(dir, "uplink-state.json.123456.tmp")
+	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-orphanTempMinAge - time.Minute)
+	if err := os.Chtimes(orphan, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh temp file may be a live save (another process sharing
+	// DATA_DIR): left alone, as is one with a future mtime.
+	fresh := filepath.Join(dir, "uplink-state.json.424242.tmp")
+	future := filepath.Join(dir, "uplink-state.json.515151.tmp")
+	for _, f := range []string{fresh, future} {
+		if err := os.WriteFile(f, []byte("in flight"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	almost := time.Now().Add(-orphanTempMinAge + time.Minute)
+	if err := os.Chtimes(fresh, almost, almost); err != nil {
+		t.Fatal(err)
+	}
+	ahead := time.Now().Add(time.Hour)
+	if err := os.Chtimes(future, ahead, ahead); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chtimes(victim, old, old); err != nil { // an old target
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "uplink-state.json.777.tmp")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	subdir := filepath.Join(dir, "uplink-state.json.55.tmp")
+	if err := os.Mkdir(subdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(subdir, "uplink-state.json.66.tmp")
+	keep := []string{
+		fresh, future,
+		filepath.Join(dir, "uplink-state.json.abc.tmp"),
+		filepath.Join(dir, "uplink-state.json.tmp"),
+		filepath.Join(dir, "other.123.tmp"),
+		nested,
+	}
+	for _, k := range keep[2:] {
+		if err := os.WriteFile(k, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(k, old, old); err != nil { // old, so only name/type keeps them
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(subdir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan temp not removed: %v", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("matching symlink touched: %v", err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("symlink target touched: %q", b)
+	}
+	if fi, err := os.Lstat(subdir); err != nil || !fi.IsDir() {
+		t.Fatalf("matching directory touched: %v", err)
+	}
+	for _, k := range keep {
+		if _, err := os.Lstat(k); err != nil {
+			t.Fatalf("%s removed: %v", filepath.Base(k), err)
+		}
+	}
+}

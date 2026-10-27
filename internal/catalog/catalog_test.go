@@ -1,7 +1,10 @@
 package catalog
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -101,4 +104,111 @@ func TestSendableID(t *testing.T) {
 	if got := m.SendableID(true); got != cheapID {
 		t.Fatalf("shared name: %s", got)
 	}
+}
+
+// Security gate SHOULD-2 (c)(d): a failed fetch starts a pause in which
+// lookups make no new fetch (no fetch storm while the feed is down and
+// nothing has ever loaded); after the pause one fetch is tried again.
+func TestFailedFetchPausesRefetch(t *testing.T) {
+	var fetches atomic.Int32
+	var up atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		if !up.Load() {
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[{"Name":"m","Id":"0xabc"}]}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	c.SetRetryAfter(200 * time.Millisecond)
+	for i := 0; i < 30; i++ {
+		if n := c.NameByID("0xabc"); n != "" {
+			t.Fatalf("name while down: %q", n)
+		}
+		if _, err := c.Resolve("m"); err == nil {
+			t.Fatal("resolve while down succeeded")
+		}
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("fetches while down within the pause = %d, want 1", got)
+	}
+	if c.Loaded() {
+		t.Fatal("Loaded with no data")
+	}
+	up.Store(true)
+	time.Sleep(250 * time.Millisecond)
+	if n := c.NameByID("0xabc"); n != "m" || !c.Loaded() {
+		t.Fatalf("after the pause: %q loaded=%v", n, c.Loaded())
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetches = %d, want 2", got)
+	}
+}
+
+// Security gate SHOULD-2 (c): the catalog lock is not held during a
+// fetch, a caller with no data waits for the running fetch instead of
+// starting another, and stale data is served at once while a refresh runs.
+func TestFetchRunsOutsideLock(t *testing.T) {
+	var fetches atomic.Int32
+	var gate atomic.Pointer[chan struct{}]
+	release := make(chan struct{})
+	gate.Store(&release)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		if g := gate.Load(); g != nil {
+			<-*g
+		}
+		_, _ = w.Write([]byte(`{"models":[{"Name":"m","Id":"0xabc"}]}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	done := make(chan string, 2)
+	go func() { done <- c.NameByID("0xabc") }()
+	for fetches.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	go func() { done <- c.NameByID("0xabc") }()
+	lockFree := make(chan bool, 1)
+	go func() { lockFree <- c.Loaded() }()
+	select {
+	case l := <-lockFree:
+		if l {
+			t.Fatal("Loaded during the first fetch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("catalog lock held during a fetch")
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	for i := 0; i < 2; i++ {
+		if n := <-done; n != "m" {
+			t.Fatalf("waiter %d got %q", i, n)
+		}
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("fetches = %d, want 1 (the second caller waits)", got)
+	}
+	// Stale data while a refresh hangs: served at once.
+	c.mu.Lock()
+	c.fetchedAt = time.Now().Add(-time.Hour)
+	c.mu.Unlock()
+	rel2 := make(chan struct{})
+	gate.Store(&rel2)
+	go c.NameByID("0xabc") // starts the refresh, which hangs
+	for fetches.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	got := make(chan string, 1)
+	go func() { got <- c.NameByID("0xabc") }()
+	select {
+	case n := <-got:
+		if n != "m" {
+			t.Fatalf("stale lookup %q", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale lookup blocked behind a running refresh")
+	}
+	close(rel2)
 }

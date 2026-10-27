@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -73,12 +70,17 @@ func validateInferenceBody(body []byte, requireMessages bool) (model string, err
 // embeddings) through the session pool to the router.
 func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		keyID := r.Header.Get("X-Uplink-Key-Id")
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
+		keyID := keyIDFrom(r)
+
+		body, err := readBodyWithDeadline(w, r, maxRequestBody)
 		if err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "failed to read request body")
 			return
 		}
+		dw := newDeadlineWriter(w)
+		defer dw.clear()
+		w = dw
+
 		requireMessages := routerPath == "/v1/chat/completions"
 		reqModel, errMsg := validateInferenceBody(body, requireMessages)
 		if errMsg != "" {
@@ -92,59 +94,67 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			return
 		}
 
-		durationSec := 0
-		if v := r.Header.Get("X-Uplink-Session-Duration"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				if n < 600 {
-					writeOpenAIError(w, http.StatusBadRequest, "X-Uplink-Session-Duration must be >= 600 seconds (protocol floor)")
-					return
-				}
-				durationSec = n
-			}
-		}
-		ensured, err := s.pool.EnsureDuration(modelID, durationSec)
-		if err != nil {
-			log.Printf("api: open session for %s (%s): %v", reqModel, modelID, err)
-			writeOpenAIError(w, http.StatusBadGateway, "failed to open session") // detail logged above; it names router internals
+		cl, msg := s.parseCallLimits(r)
+		if msg != "" {
+			writeOpenAIError(w, http.StatusBadRequest, msg)
 			return
 		}
-		if ensured.Opened {
-			s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
+		durationSec := cl.durationSec
+		stream := bodyStream(body)
+
+		lease, ensured, ok := s.acquireSession(w, keyID, reqModel, modelID, cl)
+		if !ok {
+			return
+		}
+		// The lease ends however the handler exits (panic, cancel, retry).
+		defer func() { lease.Done() }()
+		if h := testHookAfterLease.Load(); h != nil {
+			(*h)()
 		}
 		sessionID := ensured.SessionID
+		setTimeoutHeaders(w, cl)
+		fo := forwardOpts(cl, stream)
 
 		// First attempt probes: a non-2xx is not written to the client, so
 		// it can be classified (see classifyForwardError) and either fail
 		// over to another provider, reopen a dead session, or be relayed
 		// with the router's real status.
-		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
+		res, err := s.router.ForwardWith(r.Context(), w, routerPath, sessionID, r.Header, body, true, fo)
 		if err != nil {
-			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+			warnf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+			var te *router.TimeoutError
 			switch dec := classifyForwardError(err); {
+			case errors.As(err, &te):
+				writeTimeout504(w, te.Kind)
+				return
 			case dec == decTransport:
 				writeOpenAIError(w, http.StatusBadGateway, "inference failed") // detail logged above
 				return
 			case dec == decSessionDead:
+				lease.Done()
 				s.pool.Invalidate(modelID)
-				ensured, err = s.pool.EnsureDuration(modelID, durationSec)
-				if err != nil {
-					log.Printf("api: reopen session for %s (%s): %v", reqModel, modelID, err)
-					writeOpenAIError(w, http.StatusBadGateway, "failed to reopen session")
+				var ok bool
+				lease, ensured, ok = s.acquireSession(w, keyID, reqModel, modelID, cl)
+				if !ok {
 					return
 				}
-				if ensured.Opened {
-					s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
-				}
 				sessionID = ensured.SessionID
-				res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
+				res, err = s.router.ForwardWith(r.Context(), w, routerPath, sessionID, r.Header, body, false, fo)
 				if err != nil {
-					log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+					warnf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+					if errors.As(err, &te) {
+						writeTimeout504(w, te.Kind)
+						return
+					}
 					writeOpenAIError(w, http.StatusBadGateway, "inference failed") // detail logged above
 					return
 				}
 			case dec == decFailover && s.cfg.SessionFailover:
+				// Our own lease on the failed session ends first, so the
+				// failover sees only other requests' in-flight [C9].
+				lease.Done()
 				var retryID string
-				res, retryID, err = s.failoverAndRetry(w, r, routerPath, body, keyID, reqModel, modelID, sessionID, durationSec, err)
+				res, retryID, lease, err = s.failoverAndRetry(w, r, routerPath, body, keyID, reqModel, modelID, sessionID, durationSec, fo, err)
 				if err != nil {
 					return // already answered
 				}
@@ -156,10 +166,16 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				return
 			}
 		}
-		if res.MidStreamProviderError {
+		switch {
+		case res.MidStreamProviderError:
+			// Only an upstream cut is a provider fault: cool-down + retire.
 			s.afterStreamProviderError(reqModel, modelID, sessionID, durationSec, res.MidStreamStatus)
+		case res.Cut != router.CutNone:
+			// Our client or our own timer ended it: logged, never a
+			// provider fault (no cool-down, retire or failover).
+			warnf("api: stream ended early (model %s, session %s): %s", reqModel, pool.ShortID(sessionID), res.Cut)
 		}
-		s.store.RecordUsage(keyID, reqModel, res.PromptTokens, res.CompletionTokens)
+		s.store.RecordUsage(keyID, modelID, res.PromptTokens, res.CompletionTokens) // by resolved id (#56)
 	}
 }
 
@@ -171,26 +187,43 @@ var errAnswered = errors.New("answered")
 // that provider too and is relayed, with no second failover. On success it
 // returns the session the retry ran on.
 func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
-	keyID, reqModel, modelID, failedID string, durationSec int, firstErr error) (*router.ForwardResult, string, error) {
+	keyID, reqModel, modelID, failedID string, durationSec int, fo router.ForwardOptions, firstErr error) (*router.ForwardResult, string, *pool.Lease, error) {
 	class := statusClass(firstErr)
-	fr, ferr := s.pool.Failover(modelID, failedID, durationSec, true)
+	fr, ferr := s.pool.Failover(modelID, failedID, pool.FailoverOpts{KeyID: keyID, DurationSec: durationSec, Reopen: true})
 	if fr.CloseFailed {
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "close_failed")
 	}
 	if ferr != nil {
 		outcome := "reopen_failed"
-		if errors.Is(ferr, pool.ErrNoAlternate) {
+		switch {
+		case errors.Is(ferr, pool.ErrNoAlternate):
 			outcome = "no_alternate"
+		case errors.Is(ferr, pool.ErrNoAvailableProvider):
+			outcome = "no_available" // every eligible provider is avoided; nothing opened
 		}
-		log.Printf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
+		warnf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
 		relayRouterError(w, firstErr) // the original status and body
-		return nil, "", errAnswered
+		return nil, "", nil, errAnswered
 	}
 	if fr.Opened {
-		s.store.TrackSessionOpen(fr.SessionID, keyID, reqModel)
+		s.store.TrackSessionOpen(fr.SessionID, keyID, modelID)
 	}
-	res, err := s.router.Forward(w, routerPath, fr.SessionID, r.Header, body, true)
+	lease := fr.Lease // taken with the replacement, in one critical section
+	if lease == nil {
+		// The replacement is already closing (released or swept).
+		relayRouterError(w, firstErr)
+		return nil, "", nil, errAnswered
+	}
+	res, err := s.router.ForwardWith(r.Context(), w, routerPath, fr.SessionID, r.Header, body, true, fo)
+	if err != nil {
+		var te *router.TimeoutError
+		if errors.As(err, &te) {
+			lease.Done()
+			writeTimeout504(w, te.Kind)
+			return nil, "", nil, errAnswered
+		}
+	}
 	if fr.Replaced {
 		// Another request did the failover (and its audit); this one only
 		// retried on the replacement.
@@ -198,22 +231,24 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 			if classifyForwardError(err) == decFailover {
 				s.pool.MarkSessionCooling(modelID, fr.SessionID)
 			}
+			lease.Done()
 			relayRouterError(w, err)
-			return nil, "", errAnswered
+			return nil, "", nil, errAnswered
 		}
-		return res, fr.SessionID, nil
+		return res, fr.SessionID, lease, nil
 	}
 	if err != nil {
-		log.Printf("api: forward retry after failover (model %s, session %s): %v", reqModel, pool.ShortID(fr.SessionID), err)
+		warnf("api: forward retry after failover (model %s, session %s): %v", reqModel, pool.ShortID(fr.SessionID), err)
 		if classifyForwardError(err) == decFailover {
 			s.pool.MarkSessionCooling(modelID, fr.SessionID)
 		}
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "retry_failed")
+		lease.Done()
 		relayRouterError(w, err)
-		return nil, "", errAnswered
+		return nil, "", nil, errAnswered
 	}
 	s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "retried_ok")
-	return res, fr.SessionID, nil
+	return res, fr.SessionID, lease, nil
 }
 
 // afterStreamProviderError handles a provider failure after part of an
@@ -226,11 +261,14 @@ func (s *Server) afterStreamProviderError(reqModel, modelID, sessionID string, d
 		return
 	}
 	class := fmt.Sprint(status)
-	if status >= 500 {
+	switch {
+	case status == 0:
+		class = "stream_cut" // upstream ended without [DONE] or finish_reason
+	case status >= 500:
 		class = "5xx"
 	}
 	go func() {
-		fr, err := s.pool.Failover(modelID, sessionID, durationSec, false)
+		fr, err := s.pool.Failover(modelID, sessionID, pool.FailoverOpts{DurationSec: durationSec})
 		if fr.Replaced {
 			return
 		}
@@ -279,7 +317,7 @@ func isSessionDeadError(err error) bool {
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.catalog.List()
 	if err != nil {
-		log.Printf("api: model catalog: %v", err)
+		warnf("api: model catalog: %v", err)
 		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable")
 		return
 	}
@@ -302,7 +340,7 @@ func (s *Server) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeModelList(w http.ResponseWriter, models []catalog.Model) {
-	defaultDur := s.cfg.SessionDurationSec
+	defaultDur := s.durationDefault()
 	if defaultDur <= 0 {
 		defaultDur = 600
 	}
@@ -344,7 +382,7 @@ func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
 	caller := r.Header.Get("X-Uplink-Key-Id")
 	if caller == "" {
 		// Fail closed: never fall back to unfiltered store.Usage().
-		log.Printf("api: /v1/usage missing X-Uplink-Key-Id after auth")
+		warnf("api: /v1/usage missing X-Uplink-Key-Id after auth")
 		writeOpenAIError(w, http.StatusUnauthorized, "missing key identity")
 		return
 	}
@@ -358,5 +396,5 @@ func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = filtered
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"usage": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"usage": s.usageViews(rows)})
 }

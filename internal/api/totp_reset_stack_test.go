@@ -92,7 +92,7 @@ func TestTOTPResetThroughStack(t *testing.T) {
 	}
 
 	// New enrollment: fresh secret; the old secret is rejected.
-	c, b = postJSON(t, fresh, ts, cfg, "/admin/2fa/enroll/start", "{}")
+	c, b = postJSON(t, fresh, ts, cfg, "/admin/2fa/enroll/start", `{"password":"`+cfg.AdminPassword+`"}`)
 	if c != http.StatusOK {
 		t.Fatalf("enroll start after reset: %d %s", c, b)
 	}
@@ -106,11 +106,11 @@ func TestTOTPResetThroughStack(t *testing.T) {
 	oldNow, _ := totp.GenerateCode(oldSecret, time.Now())
 	newNow, _ := totp.GenerateCode(start.Secret, time.Now())
 	if oldNow != newNow {
-		if c, _ := postJSON(t, fresh, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"`+oldNow+`"}`); c != http.StatusUnauthorized {
+		if c, _ := postJSON(t, fresh, ts, cfg, "/admin/2fa/enroll/confirm", `{"password":"`+cfg.AdminPassword+`","code":"`+oldNow+`"}`); c != http.StatusUnauthorized {
 			t.Fatalf("old secret at enroll confirm: %d want 401", c)
 		}
 	}
-	c, b = postJSON(t, fresh, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"`+newNow+`"}`)
+	c, b = postJSON(t, fresh, ts, cfg, "/admin/2fa/enroll/confirm", `{"password":"`+cfg.AdminPassword+`","code":"`+newNow+`"}`)
 	if c != http.StatusOK {
 		t.Fatalf("enroll confirm with new secret: %d %s", c, b)
 	}

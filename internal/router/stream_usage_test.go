@@ -1,9 +1,13 @@
 package router
 
 import (
+	"context"
+	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -115,5 +119,83 @@ func TestFlushCopyProviderErrorWordInContent(t *testing.T) {
 	st := flushCopy(rec, strings.NewReader(s))
 	if st.providerError || rec.Body.String() != s {
 		t.Fatalf("content mention treated as error: %+v %q", st, rec.Body.String())
+	}
+}
+
+type errWriter struct {
+	*httptest.ResponseRecorder
+	n   int
+	err error
+}
+
+func (w *errWriter) Write(b []byte) (int, error) {
+	w.n++
+	if w.n > 1 {
+		return 0, w.err
+	}
+	return w.ResponseRecorder.Write(b)
+}
+
+type errReader struct {
+	s    string
+	done bool
+	err  error
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		return copy(p, r.s), nil
+	}
+	return 0, r.err
+}
+
+// S4: only the upstream side of a stream is a provider fault.
+func TestFlushCopyCutClassification(t *testing.T) {
+	chunk := "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
+	cases := []struct {
+		name string
+		ctx  func() context.Context
+		w    func() http.ResponseWriter
+		src  io.Reader
+		cut  Cut
+		prov bool
+	}{
+		{"eof_no_done", context.Background, nil, strings.NewReader(chunk), CutUpstream, true},
+		{"done", context.Background, nil, strings.NewReader(chunk + "data: [DONE]\n\n"), CutNone, false},
+		{"finish", context.Background, nil, strings.NewReader(chunk + "data: {\"choices\":[{\"finish_reason\":\"length\"}]}\n\n"), CutNone, false},
+		{"finish_null", context.Background, nil, strings.NewReader("data: {\"choices\":[{\"finish_reason\":null}]}\n\n"), CutUpstream, true},
+		{"read_error", context.Background, nil, &errReader{s: chunk, err: errors.New("unexpected EOF")}, CutUpstream, true},
+		{"client_epipe", context.Background, func() http.ResponseWriter {
+			return &errWriter{ResponseRecorder: httptest.NewRecorder(), err: syscall.EPIPE}
+		}, strings.NewReader(chunk + chunk), CutClient, false},
+		{"client_reset", context.Background, func() http.ResponseWriter {
+			return &errWriter{ResponseRecorder: httptest.NewRecorder(), err: syscall.ECONNRESET}
+		}, strings.NewReader(chunk + chunk), CutClient, false},
+		{"canceled", func() context.Context { c, f := context.WithCancel(context.Background()); f(); return c }, nil, &errReader{s: chunk, err: context.Canceled}, CutCanceled, false},
+		{"total", func() context.Context {
+			c, f := context.WithCancelCause(context.Background())
+			f(ErrTotalTimeout)
+			return c
+		}, nil, &errReader{s: chunk, err: context.Canceled}, CutUplinkTimeout, false},
+		{"idle", func() context.Context {
+			c, f := context.WithCancelCause(context.Background())
+			f(ErrIdleTimeout)
+			return c
+		}, nil, &errReader{s: chunk, err: context.Canceled}, CutUplinkTimeout, false},
+		{"client_timeout", context.Background, nil, &errReader{s: chunk, err: errors.New("context deadline exceeded (Client.Timeout exceeded while reading body)")}, CutUplinkTimeout, false},
+	}
+	for _, c := range cases {
+		var w http.ResponseWriter = httptest.NewRecorder()
+		if c.w != nil {
+			w = c.w()
+		}
+		st := flushCopyCtx(c.ctx(), w, c.src)
+		if st.cut != c.cut || st.providerError != c.prov {
+			t.Fatalf("%s: cut=%v provider=%v, want %v %v", c.name, st.cut, st.providerError, c.cut, c.prov)
+		}
+		if c.prov && st.providerStatus != 0 {
+			t.Fatalf("%s: status %d, want 0 for a bare cut", c.name, st.providerStatus)
+		}
 	}
 }
