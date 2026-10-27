@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"sort"
@@ -109,7 +110,21 @@ func (a *auditSink) logLine(stream AuditStream, ev AuditEvent) {
 		attrs = append(attrs, "count", ev.Count)
 	}
 	attrs = append(attrs, "stream", string(stream))
-	slog.Info("audit", attrs...)
+	slog.New(auditLevelHandler{slog.Default().Handler()}).Info("audit", attrs...)
+}
+
+// auditLevelHandler pins the audit stdout mirror at info: the console log
+// level (warn or error) filters runtime logs, never audit lines.
+type auditLevelHandler struct{ slog.Handler }
+
+func (h auditLevelHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= slog.LevelInfo }
+
+func (h auditLevelHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	return auditLevelHandler{h.Handler.WithAttrs(as)}
+}
+
+func (h auditLevelHandler) WithGroup(name string) slog.Handler {
+	return auditLevelHandler{h.Handler.WithGroup(name)}
 }
 
 // openAuditSink opens the two streams in dataDir (ring only when dataDir is

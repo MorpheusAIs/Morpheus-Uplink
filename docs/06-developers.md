@@ -330,7 +330,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `UPLINK_SESSION_DURATION_MAX` | `1800` | Longest session a client may ask for with `X-Uplink-Session-Duration`, 600…86400; every open is capped at it, with or without headers; never raised by the default ([Long jobs](#long-jobs)) |
 | `UPLINK_FORWARD_IDLE_SECONDS` | `180` | Default idle timer per inference call (no bytes from upstream), 30…600 |
 | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | `300` | A session with nothing in flight and no use for this long is closed early, 60…3600 |
-| `UPLINK_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error`; also a console setting ([Operator settings](#operator-settings)) |
+| `UPLINK_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error`; also a console setting ([Operator settings](#operator-settings)). Audit lines on stdout are always written (pinned at `info`) |
 | `UPLINK_INFLIGHT_MAX` | `32` | In-flight inference requests across all keys, 1…1024 (4 per key, fixed) |
 | `UPLINK_LONG_PER_KEY_MODEL` | `1` | Long sessions one generated key may hold per model, 0…16 |
 | `UPLINK_LONG_PER_KEY` | `2` | Long sessions one generated key may hold in total, 0…64 |
@@ -685,7 +685,9 @@ cross-site too); the 2FA enrolment gate applies as on other admin routes.
   new sessions, the next call's idle timer, the next idle sweep and the
   log level, no restart.
 - *Audit.* Each change is a `setting_change` event (`name old→new`) in the
-  high-value stream.
+  high-value stream. The log level filters runtime logs only: the audit
+  mirror on stdout is pinned at `info`, so `warn` or `error` never hides
+  an audit line.
 - *Not settable:* the admin session timeouts (fixed 4 h idle, 12 h
   absolute), `MASTER_KEY_ADMIN`, and every secret.
 

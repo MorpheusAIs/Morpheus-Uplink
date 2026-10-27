@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/absgrafx/morpheus-uplink/internal/config"
@@ -438,5 +439,39 @@ func TestS6SettingsRejectsTrailingJSON(t *testing.T) {
 	}
 	if code, _ := e.admin(t, "POST", "/admin/settings", `{"name":"forwardIdle","value":240}`+"\n"); code != 200 {
 		t.Fatalf("trailing newline: %d", code)
+	}
+}
+
+// Josh S-2: a console log level of warn or error hides runtime info logs
+// but never audit lines (setting_change included).
+func TestS6AuditLinesIgnoreLogLevel(t *testing.T) {
+	defer LogLevel.Set(slog.LevelInfo)
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(lockedWriter{&buf, &mu}, &slog.HandlerOptions{Level: LogLevel})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, nil)
+	for _, lvl := range []string{"warn", "error"} {
+		if code, _ := e.admin(t, "POST", "/admin/settings", `{"name":"logLevel","value":"`+lvl+`"}`); code != 200 {
+			t.Fatalf("set %s: %d", lvl, code)
+		}
+		mu.Lock()
+		buf.Reset()
+		mu.Unlock()
+		slog.Info("runtime info line")
+		if code, _ := e.admin(t, "POST", "/admin/settings", `{"name":"forwardIdle","reset":true}`); code != 200 {
+			t.Fatalf("reset: %d", code)
+		}
+		mu.Lock()
+		out := buf.String()
+		mu.Unlock()
+		if strings.Contains(out, "runtime info line") {
+			t.Errorf("%s: info line not filtered", lvl)
+		}
+		if !strings.Contains(out, "event=setting_change") || !strings.Contains(out, "msg=audit") {
+			t.Errorf("%s: audit line hidden: %q", lvl, out)
+		}
 	}
 }
