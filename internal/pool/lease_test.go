@@ -344,164 +344,34 @@ func TestS5FailoverWithInflightRetires(t *testing.T) {
 	waitUntil(t, "deferred close", func() bool { return lr.closedCount(r.SessionID) == 1 })
 }
 
-// S5-11: per-key held limits (1 per model, 2 in total).
-func TestS5PerKeyHeldLimits(t *testing.T) {
+// Long sessions have no per-key, global or hourly limits: any key (the
+// shared ones included) opens sessions up to the duration max, and
+// reopen-by-remaining is never refused.
+func TestS5NoLongSessionLimits(t *testing.T) {
 	c := newFakeClock()
 	_, p := newLeaseRouter(t, c)
-	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 2, Global: 10, OpensPerHour: 10})
-	for _, m := range []string{modelA, modelB} {
-		l, _ := mustAcquire(t, p, m, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-		l.Done()
-	}
-	if _, _, err := p.Acquire(modelC, AcquireOpts{KeyID: "k1", DurationSec: 1200}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("third model: %v", err)
-	}
-	// Another key is not affected.
-	l, _ := mustAcquire(t, p, modelC, AcquireOpts{KeyID: "k2", DurationSec: 1200})
-	l.Done()
-	// Per model: k1 still holds its long session on A (displaced from the
-	// pool entry by an adopted one); a second long open on A is refused.
-	p.mu.Lock()
-	p.entries[modelA] = entry{sessionID: "0xadopted", expiresAt: p.now().Add(100 * time.Second)}
-	p.mu.Unlock()
-	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 5, Global: 10, OpensPerHour: 10})
-	if _, _, err := p.Acquire(modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200, TotalSec: 600}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("second long on one model: %v", err)
-	}
-}
-
-// S5-16: the third counted open within an hour → refused; release does not refund.
-func TestS5HourlyOpenLimit(t *testing.T) {
-	c := newFakeClock()
-	_, p := newLeaseRouter(t, c)
-	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 2, Global: 3, OpensPerHour: 2})
-	// open → release → open loop.
-	for i := 0; i < 2; i++ {
-		l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-		if !r.Opened || !r.Long {
-			t.Fatalf("loop %d: %+v", i, r)
+	for i, m := range []string{modelA, modelB, modelC, modelD} {
+		for _, k := range []string{"k1", "master"} {
+			l, r := mustAcquire(t, p, m, AcquireOpts{KeyID: k, DurationSec: 1200})
+			if i == 0 && k == "k1" && (!r.Opened || r.DurationSec != 1200) {
+				t.Fatalf("long open %+v", r)
+			}
+			l.Done()
 		}
-		l.Done()
-		if out := p.Release(modelA, "k1"); !out.Closed {
+		if out := p.Release(m, "k1"); !out.Released {
 			t.Fatalf("release %+v", out)
 		}
 	}
-	if _, _, err := p.Acquire(modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("third open in the hour: %v", err)
-	}
-	// A long header on every call (total 1680 → reopen whenever under 1710 s left).
-	l, _ := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k2", TotalSec: 1680})
-	l.Done()
-	c.Advance(100 * time.Second)
-	l, _ = mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k2", TotalSec: 1680})
-	l.Done()
-	c.Advance(100 * time.Second)
-	if _, _, err := p.Acquire(modelB, AcquireOpts{KeyID: "k2", TotalSec: 1680}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("third long-header reopen: %v", err)
-	}
-	// After the hour the count is free again.
-	c.Advance(time.Hour)
-	l, _ = mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-	l.Done()
-}
-
-// S5-25: reopen-by-remaining at normal length counts too.
-func TestS5NormalLengthReopenCounted(t *testing.T) {
-	c := newFakeClock()
-	_, p := newLeaseRouter(t, c)
-	l, _ := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"}) // plain open: not counted
-	l.Done()
-	for i := 0; i < 2; i++ {
-		c.Advance(200 * time.Second) // 400 s left → 590+30 does not fit
-		l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", TotalSec: 590})
-		if !r.Reopened || r.DurationSec != 710 {
-			t.Fatalf("reopen %d: %+v", i, r)
-		}
+	for i := 0; i < 5; i++ { // open → release loop on one model
+		l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k2", DurationSec: 1200})
 		l.Done()
-		c.Advance(320 * time.Second) // 710-s session: 390 s left next round
+		p.Release(modelA, "k2")
+		_ = r
 	}
-	c.Advance(200 * time.Second)
-	if _, _, err := p.Acquire(modelA, AcquireOpts{KeyID: "k1", TotalSec: 590}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("third reopen: %v", err)
-	}
-}
-
-// S5-17: a fourth concurrent long session across keys → refused; shared
-// keys never open long sessions.
-func TestS5GlobalLongCapAndSharedKeys(t *testing.T) {
-	c := newFakeClock()
-	_, p := newLeaseRouter(t, c)
-	for i, m := range []string{modelA, modelB, modelC} {
-		l, _ := mustAcquire(t, p, m, AcquireOpts{KeyID: fmt.Sprintf("k%d", i), DurationSec: 1200})
+	for i := 0; i < 4; i++ { // reopen-by-remaining every round
+		c.Advance(200 * time.Second)
+		l, _ := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k3", TotalSec: 1680})
 		l.Done()
-	}
-	if _, _, err := p.Acquire(modelD, AcquireOpts{KeyID: "k9", DurationSec: 1200}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("fourth long: %v", err)
-	}
-	if _, _, err := p.Acquire(modelD, AcquireOpts{KeyID: "master", Shared: true, DurationSec: 1200}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("shared key long: %v", err)
-	}
-	// A default-size open is unaffected.
-	l, _ := mustAcquire(t, p, modelD, AcquireOpts{KeyID: "master", Shared: true})
-	l.Done()
-}
-
-// S5-26: a retired session that is draining does not count toward its
-// opener's held caps, but does toward the global cap.
-func TestS5DrainingRetiredCountsGlobalOnly(t *testing.T) {
-	c := newFakeClock()
-	lr, p := newLeaseRouter(t, c)
-	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 1, Global: 2, OpensPerHour: 10})
-	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-	if _, err := p.Failover(modelA, r.SessionID, FailoverOpts{DurationSec: 600}); err != nil && !errors.Is(err, ErrNoAlternate) {
-		t.Fatal(err)
-	}
-	// k1's long session is retired and draining (l still in flight).
-	l2, r2 := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-	if !r2.Long {
-		t.Fatalf("%+v", r2)
-	}
-	l2.Done()
-	if p.LongOpen() != 2 {
-		t.Fatalf("long open %d", p.LongOpen())
-	}
-	if _, _, err := p.Acquire(modelC, AcquireOpts{KeyID: "k2", DurationSec: 1200}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("global cap with a draining session: %v", err)
-	}
-	l.Done()
-	waitUntil(t, "drained close", func() bool { return lr.closedCount(r.SessionID) == 1 })
-	l3, _ := mustAcquire(t, p, modelC, AcquireOpts{KeyID: "k2", DurationSec: 1200})
-	l3.Done()
-}
-
-// S5-27: long sessions adopted at boot count toward the global cap; a new
-// pool (restart) starts with zero hourly counters.
-func TestS5AdoptedLongCountsGlobalAndRestartResets(t *testing.T) {
-	c := newFakeClock()
-	lr, p := newLeaseRouter(t, c)
-	now := c.Now()
-	lr.addChain("0xboot1", modelA, now.Add(-time.Minute), now.Add(30*time.Minute))
-	lr.addChain("0xboot2", modelB, now.Add(-time.Minute), now.Add(30*time.Minute))
-	lr.addChain("0xboot3", modelC, now.Add(-time.Minute), now.Add(30*time.Minute))
-	if err := p.RehydrateForce(); err != nil {
-		t.Fatal(err)
-	}
-	if p.LongOpen() != 3 {
-		t.Fatalf("adopted long %d", p.LongOpen())
-	}
-	if _, _, err := p.Acquire(modelD, AcquireOpts{KeyID: "k1", DurationSec: 1200}); !errors.Is(err, ErrLongSessionLimit) {
-		t.Fatalf("over global with adopted: %v", err)
-	}
-	// Restart: a fresh pool has no hourly history.
-	_, p2 := newLeaseRouter(t, c)
-	p2.SetLimits(Limits{PerKeyModel: 1, PerKey: 2, Global: 3, OpensPerHour: 1})
-	l, _ := mustAcquire(t, p2, modelD, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-	l.Done()
-	p2.mu.Lock()
-	n := len(p2.opensLog)
-	p2.mu.Unlock()
-	if n != 1 {
-		t.Fatalf("fresh pool counters %d", n)
 	}
 }
 
@@ -522,8 +392,7 @@ func TestS5DefaultCallsOpenOneSession(t *testing.T) {
 }
 
 // Security gate N-1: the same calls spread over more than 9 minutes (past the
-// 510 s usable life of a 600 s session) give at most one replacement, and
-// at most one open counted in the hourly log.
+// 510 s usable life of a 600 s session) give at most one replacement.
 func TestS5DefaultCallsOverNineMinutes(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)
@@ -539,12 +408,8 @@ func TestS5DefaultCallsOverNineMinutes(t *testing.T) {
 	if span := c.Now().Sub(start); span <= 9*time.Minute {
 		t.Fatalf("span %v", span)
 	}
-	o, _ := lr.snapshot()
-	p.mu.Lock()
-	counted := len(p.opensLog["k1|"+normModel(modelA)])
-	p.mu.Unlock()
-	if len(o) > 2 || counted > 1 {
-		t.Fatalf("opens %d counted %d", len(o), counted)
+	if o, _ := lr.snapshot(); len(o) > 2 {
+		t.Fatalf("opens %d", len(o))
 	}
 }
 
@@ -688,53 +553,27 @@ func TestS5FailoverReplacementLeased(t *testing.T) {
 	fr2.Lease.Done()
 }
 
-// Conformance SHOULD-4 / security gate S-4: a failover reopen at a long duration counts
-// toward the long-session limits (the failed session is not counted
-// against its own replacement), and a refused one closes nothing.
-func TestS5FailoverLongCountsLimits(t *testing.T) {
+// A failover replacement keeps the opener, is leased for the caller and
+// never opens above the duration max.
+func TestS5FailoverReplacementCapped(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)
-	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 2, Global: 2, OpensPerHour: 10})
 	l1, r1 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
 	l1.Done()
-	// Replacing its own long session is allowed and stays long.
 	fr, err := p.Failover(modelA, r1.SessionID, FailoverOpts{KeyID: "k1", DurationSec: 1200, Reopen: true})
-	if err != nil || !fr.Long || fr.Lease == nil {
-		t.Fatalf("own long failover %+v %v", fr, err)
+	if err != nil || fr.Lease == nil || fr.DurationSec != 1200 {
+		t.Fatalf("failover %+v %v", fr, err)
 	}
 	fr.Lease.Done()
 	p.mu.Lock()
-	st := p.sess[fr.SessionID]
-	long, opener := st.long, st.opener
+	opener := p.sess[fr.SessionID].opener
 	p.mu.Unlock()
-	if !long || opener != "k1" {
-		t.Fatalf("replacement long=%v opener=%q", long, opener)
+	if opener != "k1" {
+		t.Fatalf("replacement opener=%q", opener)
 	}
-	// k2 fills the global limit; a long failover for k3 is then refused
-	// before anything is closed.
-	l2, _ := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k2", DurationSec: 1200})
-	defer l2.Done()
-	l3, r3 := mustAcquire(t, p, modelC, AcquireOpts{KeyID: "k3"})
-	l3.Done()
-	_, before := lr.snapshot()
-	fr3, err := p.Failover(modelC, r3.SessionID, FailoverOpts{KeyID: "k3", DurationSec: 1200, Reopen: true})
-	if !errors.Is(err, ErrLongSessionLimit) || fr3.Lease != nil || fr3.Opened {
-		t.Fatalf("long failover over the limit: %+v %v", fr3, err)
-	}
-	if _, after := lr.snapshot(); len(after) != len(before) {
-		t.Fatalf("refused failover closed a session: %v", after)
-	}
-	// The same failover at the default duration is not long and proceeds.
-	fr4, err := p.Failover(modelC, r3.SessionID, FailoverOpts{KeyID: "k3", Reopen: true})
-	if err != nil || fr4.Long || fr4.Lease == nil {
-		t.Fatalf("default failover %+v %v", fr4, err)
-	}
-	fr4.Lease.Done()
-	// A failover never opens above the duration max.
 	p.SetDurationMax(1800)
 	l5, r5 := mustAcquire(t, p, modelD, AcquireOpts{KeyID: "k4"})
 	l5.Done()
-	p.SetLimits(Limits{PerKeyModel: 5, PerKey: 5, Global: 5, OpensPerHour: 10})
 	fr5, err := p.Failover(modelD, r5.SessionID, FailoverOpts{KeyID: "k4", DurationSec: 7200, Reopen: true})
 	if err != nil || fr5.DurationSec != 1800 {
 		t.Fatalf("capped failover %+v %v", fr5, err)

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,8 +16,8 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
-// Long-job core (S5): per-call timeout headers, in-flight caps, server
-// read/write deadlines and the owner-scoped release.
+// Long-job core (S5): per-call timeout headers, server read/write
+// deadlines and the owner-scoped release.
 
 // Test seams: production values. Tests shrink them.
 var (
@@ -34,14 +33,12 @@ var (
 )
 
 const (
-	perKeyInflight     = 4
-	defaultInflightMax = 32
-	requestTimeoutDef  = 600 // seconds: the router call total without the header
-	idleTimeoutMin     = 30
-	idleTimeoutMax     = 600
-	requestTimeoutMin  = 30
-	releaseBodyMax     = 1 << 10
-	headerDigitsMax    = 6
+	requestTimeoutDef = 600 // seconds: the router call total without the header
+	idleTimeoutMin    = 30
+	idleTimeoutMax    = 600
+	requestTimeoutMin = 30
+	releaseBodyMax    = 1 << 10
+	headerDigitsMax   = 6
 )
 
 // NewHTTPServer is Uplink's listener configuration: header read 10 s and
@@ -73,42 +70,6 @@ func keyIDFrom(r *http.Request) string {
 
 func isSharedKey(keyID string) bool {
 	return keyID == keymaker.MasterKeyID || keyID == keymaker.PromptKeyID
-}
-
-// inflightLimiter caps in-flight inference requests per key and in total.
-type inflightLimiter struct {
-	mu     sync.Mutex
-	perKey map[string]int
-	total  int
-	max    int
-	keyMax int
-}
-
-func newInflightLimiter(max int) *inflightLimiter {
-	if max < 1 || max > 1024 {
-		max = defaultInflightMax
-	}
-	return &inflightLimiter{perKey: map[string]int{}, max: max, keyMax: perKeyInflight}
-}
-
-func (l *inflightLimiter) acquire(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.total >= l.max || l.perKey[key] >= l.keyMax {
-		return false
-	}
-	l.total++
-	l.perKey[key]++
-	return true
-}
-
-func (l *inflightLimiter) release(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.total--
-	if l.perKey[key]--; l.perKey[key] <= 0 {
-		delete(l.perKey, key)
-	}
 }
 
 func writeTypedError(w http.ResponseWriter, status int, typ, message string) {
@@ -254,6 +215,10 @@ func (s *Server) handleSessionRelease(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusUnauthorized, "missing key identity")
 		return
 	}
+	if !s.cfg.SessionRelease {
+		writeTypedError(w, http.StatusForbidden, "release_disabled", "session release is turned off")
+		return
+	}
 	if isSharedKey(keyID) {
 		writeTypedError(w, http.StatusForbidden, "shared_key", "shared keys hold no sessions of their own")
 		return
@@ -291,18 +256,13 @@ func (s *Server) handleSessionRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// acquireSession wraps pool.Acquire with the long-session answers.
+// acquireSession wraps pool.Acquire with its typed error answers.
 func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID string, cl callLimits) (*pool.Lease, pool.AcquireResult, bool) {
-	o := pool.AcquireOpts{KeyID: keyID, Shared: isSharedKey(keyID), DurationSec: cl.durationSec}
+	o := pool.AcquireOpts{KeyID: keyID, DurationSec: cl.durationSec}
 	if cl.totalSet {
 		o.TotalSec = cl.totalSec
 	}
 	lease, res, err := s.pool.Acquire(modelID, o)
-	if errors.Is(err, pool.ErrLongSessionLimit) {
-		s.auditAgent("session_open_long", keyID, "", "refused", s.modelLabel(modelID))
-		writeTypedError(w, http.StatusTooManyRequests, "long_session_limit", "long session limit reached")
-		return nil, res, false
-	}
 	if errors.Is(err, pool.ErrNoEligibleProvider) {
 		// Only providers excluded by UPLINK_PROVIDER_EXCLUDE serve the model.
 		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")
@@ -321,10 +281,6 @@ func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID 
 	}
 	if res.Opened {
 		s.store.TrackSessionOpen(res.SessionID, keyID, modelID)
-		if res.Long {
-			s.auditSystem("session_open_long", keyID, "ok",
-				fmt.Sprintf("session_open_long ok %s %ds", s.modelLabel(modelID), res.DurationSec), false)
-		}
 	}
 	return lease, res, true
 }

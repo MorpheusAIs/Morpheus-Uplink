@@ -58,12 +58,6 @@ func main() {
 	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
 	pl.SetProviderExclude(cfg.ProviderExclude, cat.NameByID)
 	pl.SetDurationMax(cfg.SessionDurationMax)
-	pl.SetLimits(pool.Limits{
-		PerKeyModel:  cfg.LongPerKeyModel,
-		PerKey:       cfg.LongPerKey,
-		Global:       cfg.LongSessionsMax,
-		OpensPerHour: cfg.OpensPerKeyModelHour,
-	})
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {

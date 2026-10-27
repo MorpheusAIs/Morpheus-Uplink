@@ -41,7 +41,6 @@ type Server struct {
 	auditAgg  *auditAggregator // loopable high-value events
 	opsAgg    *auditAggregator // failure/ops events
 	outflow   *OutflowAlert
-	inflight  *inflightLimiter
 
 	settings   *runtimeSettings // S6: effective operator settings
 	settingsMu sync.Mutex       // serialises setting changes
@@ -74,7 +73,6 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		sessions:  adminauth.NewSessionStore(),
 		lockout:   lo,
 		audit:     NewAuditLog(500),
-		inflight:  newInflightLimiter(cfg.InflightMax),
 		outflow:   &OutflowAlert{},
 	}
 	s.auditFile = openAuditSink(s.audit, cfg.DataDir, time.Duration(auditRetentionDays(cfg))*24*time.Hour)

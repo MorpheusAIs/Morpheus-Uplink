@@ -538,7 +538,6 @@ type FailoverResult struct {
 	CloseFailed    bool   // the failed session's close did not land (it stays retired)
 	CloseDeferred  bool   // still in flight on another request: closes when that ends
 	DurationSec    int
-	Long           bool // the replacement was opened long (counted in Limits)
 	// Lease is the caller's hold on SessionID, taken in the same critical
 	// section that pooled it (nil when reopen was false, or the
 	// replacement is already retiring).
@@ -548,7 +547,6 @@ type FailoverResult struct {
 // FailoverOpts describe the request that hit the failure.
 type FailoverOpts struct {
 	KeyID       string
-	Shared      bool // master or prompt key: never opens long sessions
 	DurationSec int  // 0: pool default; capped at the duration max
 	Reopen      bool // open a replacement and lease it (false: mid-stream cut)
 }
@@ -569,7 +567,6 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	if mx := p.DurationMax(); mx > 0 && durationSec > mx {
 		durationSec = mx
 	}
-	long := durationSec > p.DurationSec()
 	res := FailoverResult{DurationSec: durationSec}
 	key := normModel(modelID)
 	lock := p.openLock(key)
@@ -591,7 +588,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		return res, nil
 	}
 	p.mu.Unlock()
-	ao := AcquireOpts{KeyID: o.KeyID, Shared: o.Shared}
+	ao := AcquireOpts{KeyID: o.KeyID}
 	if p.isRetired(failedID) {
 		// Already failed over, but its replacement is gone (open failed or
 		// expired): open normally, avoiding cooling providers.
@@ -599,14 +596,8 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		if !o.Reopen {
 			return res, nil
 		}
-		p.mu.Lock()
-		stamp, err := p.reserveLocked(key, ao, long, long, "")
-		p.mu.Unlock()
-		if err != nil {
-			return res, err
-		}
 		id, prov, err := p.openAvoidingCooling(modelID, durationSec)
-		p.finishFailoverOpen(key, ao, long, stamp, id, prov, durationSec, err, &res)
+		p.finishFailoverOpen(key, ao, id, prov, durationSec, err, &res)
 		return res, err
 	}
 
@@ -637,18 +628,6 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	if n == 0 {
 		return res, ErrNoAlternate
 	}
-	// A long replacement counts toward the long-session limits like any
-	// long open; the failed session itself is not counted against it.
-	var stamp time.Time
-	if o.Reopen {
-		p.mu.Lock()
-		stamp, err = p.reserveLocked(key, ao, long, long, failedID)
-		p.mu.Unlock()
-		if err != nil {
-			return res, err
-		}
-	}
-
 	// 4. Retire and close the failed session synchronously (bounded), so
 	// our own close and open never race on the wallet nonce.
 	// A session another request is still streaming on is retired, not
@@ -673,7 +652,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 
 	// 5. Open on another provider. 6. Pool it with its provider, leased.
 	id, prov, err := p.openExcluding(modelID, durationSec, alts)
-	p.finishFailoverOpen(key, ao, long, stamp, id, prov, durationSec, err, &res)
+	p.finishFailoverOpen(key, ao, id, prov, durationSec, err, &res)
 	if err != nil {
 		return res, err
 	}
@@ -681,23 +660,19 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	return res, nil
 }
 
-// finishFailoverOpen ends the reservation and, when the open worked, pools
-// the replacement and leases it for the caller in one critical section.
-func (p *Pool) finishFailoverOpen(key string, ao AcquireOpts, long bool, stamp time.Time, id, prov string, durationSec int, err error, res *FailoverResult) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.unreserveLocked(ao.KeyID, key, long)
+// finishFailoverOpen, when the open worked, pools the replacement and
+// leases it for the caller in one critical section.
+func (p *Pool) finishFailoverOpen(key string, ao AcquireOpts, id, prov string, durationSec int, err error, res *FailoverResult) {
 	if err != nil {
-		if long {
-			p.refundLocked(key, ao.KeyID, stamp)
-		}
 		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	now := p.now()
 	p.entries[key] = entry{sessionID: id, expiresAt: now.Add(time.Duration(durationSec)*time.Second - expiryBuffer), provider: prov}
-	st := p.newStateLocked(key, id, now, now.Add(time.Duration(durationSec)*time.Second), ao.KeyID, long)
+	st := p.newStateLocked(key, id, now, now.Add(time.Duration(durationSec)*time.Second), ao.KeyID)
 	res.Lease = p.leaseLocked(id, st, ao.KeyID)
-	res.SessionID, res.Provider, res.Opened, res.Long = id, prov, true, long
+	res.SessionID, res.Provider, res.Opened = id, prov, true
 }
 
 // closeBounded closes a session, giving up waiting after

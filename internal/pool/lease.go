@@ -1,15 +1,13 @@
 package pool
 
 import (
-	"errors"
 	"log"
 	"sort"
 	"sync"
 	"time"
 )
 
-// Leases, holders, release, the idle sweep and long-session limits
-// (long-job design S5). Every state change below runs under p.mu, the same
+// Leases, holders, release and the idle sweep (long-job design S5). Every state change below runs under p.mu, the same
 // lock that hands a pooled session out, so a lease can never land on a
 // session that is retired or closing:
 //
@@ -20,23 +18,8 @@ import (
 //	     --failover / remaining too short--> RETIRED (not handed out)
 //	RETIRED --inflight==0--> CLOSING --ok--> CLOSED | --fail--> RETIRED (sweep retries, max 3)
 
-// ErrLongSessionLimit: a long open (or a counted reopen) is over a limit.
-var ErrLongSessionLimit = errors.New("long session limit")
-
 // maxCloseRetries bounds the sweep's retries of a failed close.
 const maxCloseRetries = 3
-
-// Limits are the long-session limits. A long session is one opened for
-// longer than the pool's default duration.
-type Limits struct {
-	PerKeyModel  int // long sessions held by a key for one model (1)
-	PerKey       int // long sessions held by a key in total (2)
-	Global       int // long sessions open in total, all keys (3)
-	OpensPerHour int // counted opens per key per model per rolling hour (2)
-}
-
-// DefaultLimits are the design defaults.
-var DefaultLimits = Limits{PerKeyModel: 1, PerKey: 2, Global: 3, OpensPerHour: 2}
 
 type sessState struct {
 	model      string // normModel
@@ -46,8 +29,7 @@ type sessState struct {
 	openedAt   time.Time
 	endsAt     time.Time // on-chain end
 	opener     string    // key id that opened it ("" adopted or failover)
-	long       bool
-	retired    bool // not handed out any more; closed when inflight reaches 0
+	retired    bool      // not handed out any more; closed when inflight reaches 0
 	closing    bool
 	closeFails int
 }
@@ -64,13 +46,6 @@ func (p *Pool) now() time.Time {
 		return c()
 	}
 	return time.Now()
-}
-
-// SetLimits sets the long-session limits.
-func (p *Pool) SetLimits(l Limits) {
-	p.mu.Lock()
-	p.limits = l
-	p.mu.Unlock()
 }
 
 // SetDurationMax sets UPLINK_SESSION_DURATION_MAX (seconds).
@@ -104,9 +79,9 @@ func (p *Pool) stateLocked(key string, e entry) *sessState {
 }
 
 // newStateLocked records a session this pool just opened or adopted.
-func (p *Pool) newStateLocked(key, sessionID string, openedAt, endsAt time.Time, opener string, long bool) *sessState {
+func (p *Pool) newStateLocked(key, sessionID string, openedAt, endsAt time.Time, opener string) *sessState {
 	st := &sessState{model: key, holders: map[string]time.Time{}, lastUse: p.now(), openedAt: openedAt,
-		endsAt: endsAt, opener: opener, long: long}
+		endsAt: endsAt, opener: opener}
 	p.sess[sessionID] = st
 	return st
 }
@@ -196,9 +171,8 @@ func (p *Pool) LeaseSession(sessionID, keyID string) *Lease {
 // AcquireOpts describe one request.
 type AcquireOpts struct {
 	KeyID       string
-	Shared      bool // master or prompt key: never opens long sessions
-	DurationSec int  // X-Uplink-Session-Duration (0: pool default)
-	TotalSec    int  // clamped X-Uplink-Request-Timeout (0: header absent)
+	DurationSec int // X-Uplink-Session-Duration (0: pool default)
+	TotalSec    int // clamped X-Uplink-Request-Timeout (0: header absent)
 }
 
 // AcquireResult says what Acquire handed out.
@@ -206,7 +180,6 @@ type AcquireResult struct {
 	SessionID   string
 	Opened      bool
 	Reopened    bool // a reopen-by-remaining replaced a pooled session
-	Long        bool // the opened session is long
 	DurationSec int
 	Remaining   time.Duration // usable on-chain life left (end − now)
 }
@@ -241,8 +214,7 @@ func (p *Pool) tryPooledLocked(key string, o AcquireOpts, dur int) (l *Lease, re
 // is declared) → adopt an on-chain session → open. With a declared total
 // a fresh session is sized to fit it (total + 120 s, at most the max); a
 // pooled session too short for it is replaced (reopen-by-remaining) and
-// retired, closing when its in-flight reaches 0. Long opens and every
-// reopen-by-remaining are checked against Limits.
+// retired, closing when its in-flight reaches 0.
 func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, error) {
 	dur := o.DurationSec
 	if dur <= 0 {
@@ -294,19 +266,12 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 	if mx := p.DurationMax(); mx > 0 && openDur > mx {
 		openDur = mx
 	}
-	long := openDur > p.DurationSec()
-	counted := long || short
-
 	p.mu.Lock()
 	var replacing string
 	if short {
 		replacing = p.entries[key].sessionID
 	}
-	stamp, err := p.reserveLocked(key, o, long, counted, replacing)
 	p.mu.Unlock()
-	if err != nil {
-		return nil, AcquireResult{}, err
-	}
 
 	id, prov, err := p.openAvoidingCooling(modelID, openDur)
 	if err == nil && replacing != "" {
@@ -321,17 +286,12 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 		p.retire(replacing, oldEnds)
 	}
 	now := p.now()
-	p.mu.Lock()
-	p.unreserveLocked(o.KeyID, key, long)
 	if err != nil {
-		if counted {
-			p.refundLocked(key, o.KeyID, stamp)
-		}
-		p.mu.Unlock()
 		return nil, AcquireResult{}, err
 	}
+	p.mu.Lock()
 	p.entries[key] = entry{sessionID: id, expiresAt: now.Add(time.Duration(openDur)*time.Second - expiryBuffer), provider: prov}
-	st := p.newStateLocked(key, id, now, now.Add(time.Duration(openDur)*time.Second), o.KeyID, long)
+	st := p.newStateLocked(key, id, now, now.Add(time.Duration(openDur)*time.Second), o.KeyID)
 	l = p.leaseLocked(id, st, o.KeyID)
 	closeOld := ""
 	if ost := p.sess[replacing]; replacing != "" && replacing != id && ost != nil {
@@ -345,88 +305,11 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 		go p.closeState(closeOld)
 	}
 	log.Printf("pool: opened session %s for model %s (duration %ds)", short_(id), modelID, openDur)
-	return l, AcquireResult{SessionID: id, Opened: true, Reopened: short, Long: long, DurationSec: openDur,
+	return l, AcquireResult{SessionID: id, Opened: true, Reopened: short, DurationSec: openDur,
 		Remaining: time.Duration(openDur) * time.Second}, nil
 }
 
 func short_(id string) string { return short(id) }
-
-// reserveLocked checks and counts one open against the limits in one step
-// (p.mu held). It returns the stamp counted in the hourly log.
-func (p *Pool) reserveLocked(key string, o AcquireOpts, long, counted bool, replacing string) (time.Time, error) {
-	lim := p.limits
-	now := p.now()
-	if long {
-		if o.Shared || o.KeyID == "" {
-			return time.Time{}, ErrLongSessionLimit
-		}
-		perModel, perKey, global := 0, 0, p.pendingGlobal
-		perKey += p.pendingKey[o.KeyID]
-		for id, st := range p.sess {
-			if !st.long || id == replacing || !now.Before(st.endsAt) {
-				continue
-			}
-			global++ // retired-but-draining sessions still count here
-			if st.retired || st.closing || st.opener != o.KeyID {
-				continue
-			}
-			perKey++
-			if st.model == key {
-				perModel++
-			}
-		}
-		if perModel+p.pendingKeyModel[o.KeyID+"|"+key] >= lim.PerKeyModel || perKey >= lim.PerKey || global >= lim.Global {
-			return time.Time{}, ErrLongSessionLimit
-		}
-	}
-	if counted {
-		hk := o.KeyID + "|" + key
-		kept := p.opensLog[hk][:0]
-		for _, t := range p.opensLog[hk] {
-			if now.Sub(t) < time.Hour {
-				kept = append(kept, t)
-			}
-		}
-		if len(kept) >= lim.OpensPerHour {
-			p.opensLog[hk] = kept
-			return time.Time{}, ErrLongSessionLimit
-		}
-		p.opensLog[hk] = append(kept, now)
-	}
-	if long {
-		p.pendingGlobal++
-		p.pendingKey[o.KeyID]++
-		p.pendingKeyModel[o.KeyID+"|"+key]++
-	}
-	return now, nil
-}
-
-func (p *Pool) unreserveLocked(keyID, key string, long bool) {
-	if !long {
-		return
-	}
-	p.pendingGlobal--
-	if p.pendingKey[keyID]--; p.pendingKey[keyID] <= 0 {
-		delete(p.pendingKey, keyID)
-	}
-	if k := keyID + "|" + key; p.pendingKeyModel[k] > 0 {
-		if p.pendingKeyModel[k]--; p.pendingKeyModel[k] == 0 {
-			delete(p.pendingKeyModel, k)
-		}
-	}
-}
-
-// refundLocked removes a counted open whose open failed (it is not an open).
-func (p *Pool) refundLocked(key, keyID string, stamp time.Time) {
-	hk := keyID + "|" + key
-	l := p.opensLog[hk]
-	for i := len(l) - 1; i >= 0; i-- {
-		if l[i].Equal(stamp) {
-			p.opensLog[hk] = append(l[:i], l[i+1:]...)
-			return
-		}
-	}
-}
 
 // closeState closes a session marked closing; a failure puts it back to
 // retired for the sweep to retry (at most maxCloseRetries times).
@@ -597,19 +480,6 @@ func (p *Pool) TotalInFlight() int {
 	n := 0
 	for _, st := range p.sess {
 		n += st.inflight
-	}
-	return n
-}
-
-// LongOpen counts long sessions still open (global cap view).
-func (p *Pool) LongOpen() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now, n := p.now(), 0
-	for _, st := range p.sess {
-		if st.long && now.Before(st.endsAt) {
-			n++
-		}
 	}
 	return n
 }

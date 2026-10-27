@@ -17,8 +17,7 @@ type AuditStream string
 
 const (
 	// AuditStreamHighValue (audit-security.jsonl): admin and credential
-	// events. Nothing an API key alone can trigger at request speed, except
-	// a successful long-session open (bounded by the long-session limits).
+	// events. Nothing an API key alone can trigger at request speed.
 	AuditStreamHighValue AuditStream = "security"
 	// AuditStreamOps (audit.jsonl): failure noise and agent-triggerable
 	// events.

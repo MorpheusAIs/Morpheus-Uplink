@@ -123,13 +123,13 @@ func TestS2StreamTable(t *testing.T) {
 		{"login", "ok"}, {"step_up", "ok"}, {"key_reveal", "ok"}, {"key_create", "ok"},
 		{"key_import", "ok"}, {"key_revoke", "ok"}, {"2fa_enroll", "ok"}, {"2fa_remove", "ok"},
 		{"2fa_reset", "ok"}, {"recovery_codes_regenerated", "ok"}, {"setting_change", "ok"},
-		{"session_open_long", "ok"}, {"pool_close", "ok"}, {"pool_close_all", "ok"},
+		{"pool_close", "ok"}, {"pool_close_all", "ok"},
 		{"admin_session_ip_change", "ok"}, {"admin_key_use", "ok"}, {"admin_key_use", "blocked"},
 	}
 	ops := [][2]string{
 		{"admin_bearer_reject", "fail"}, {"admin_bearer_reject", "blocked"}, {"login", "fail"},
 		{"login_lockout", "blocked"}, {"step_up", "fail"}, {"session_release", "ok"},
-		{"session_release", "fail"}, {"session_open_long", "refused"}, {"node_passthrough_block", "denied"},
+		{"session_release", "fail"}, {"node_passthrough_block", "denied"},
 		{"provider_failover", "ok"}, {"session_reconcile", "ok"},
 	}
 	for _, c := range hv {
@@ -249,7 +249,7 @@ func TestS2AuditFlood(t *testing.T) {
 	if testing.Short() {
 		t.Skip("flood")
 	}
-	ts, srv, cfg, clk := s1Server(t, func(c *config.Config) { c.MasterKeyAdmin = true })
+	ts, srv, cfg, clk := s1Server(t, func(c *config.Config) { c.MasterKeyAdmin, c.SessionRelease = true, true })
 	srv.opsAgg.now = clk.Now
 	srv.auditAgg.now = clk.Now
 	srv.lockout.SetClock(clk.Now)

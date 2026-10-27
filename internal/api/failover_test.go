@@ -323,7 +323,7 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	t.Cleanup(cat.Close)
 	cfg := &config.Config{RouterURL: rt.URL, RouterUser: "admin", RouterPass: "routerpass", AdminPassword: "adminpass",
 		APIKeySeed: "failover-seed", DataDir: t.TempDir(), ActiveModelsURL: cat.URL,
-		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600}
+		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600, SessionRelease: true}
 	if edit != nil {
 		edit(cfg)
 	}
@@ -561,8 +561,7 @@ func TestFailoverCooldownZero(t *testing.T) {
 	}
 }
 
-// 7. Concurrent 402s on A: one close, one open, all finish. Four at a
-// time, the per-key in-flight cap (S5); a fifth gets 429 (TestS5InflightCaps).
+// 7. Concurrent 402s on A: one close, one open, all finish.
 func TestFailoverConcurrentSingleFlight(t *testing.T) {
 	m := newFakeMarket(t, provA, provB)
 	m.behave[provA] = func(n int, w http.ResponseWriter) {
@@ -571,7 +570,7 @@ func TestFailoverConcurrentSingleFlight(t *testing.T) {
 	}
 	e := newFailoverEnv(t, m, nil)
 	var wg sync.WaitGroup
-	codes := make([]int, perKeyInflight)
+	codes := make([]int, 4)
 	for i := range codes {
 		wg.Add(1)
 		go func(i int) {

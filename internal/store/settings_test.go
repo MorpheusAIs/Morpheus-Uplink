@@ -54,7 +54,7 @@ func TestSettingsValuesRoundTrip(t *testing.T) {
 	}
 	str := func(v string) *string { return &v }
 	if err := s.UpdateSettings(func(x *Settings) error {
-		for k, v := range map[string]string{"forwardIdle": "240", "logLevel": "warn", "inflightMax": "64", "sessionFailover": "false", "providerExclude": "m=0x1"} {
+		for k, v := range map[string]string{"forwardIdle": "240", "logLevel": "warn", "auditRetentionDays": "64", "sessionFailover": "false", "providerExclude": "m=0x1"} {
 			if err := x.SetValue(k, str(v)); err != nil {
 				return err
 			}
@@ -66,7 +66,7 @@ func TestSettingsValuesRoundTrip(t *testing.T) {
 	if err := s.UpdateSettings(func(x *Settings) error {
 		_ = x.SetValue("forwardIdle", str("240"))
 		_ = x.SetValue("logLevel", str("warn"))
-		_ = x.SetValue("inflightMax", str("64"))
+		_ = x.SetValue("auditRetentionDays", str("64"))
 		_ = x.SetValue("sessionFailover", str("false"))
 		_ = x.SetValue("housekeeping", str("false"))
 		return x.SetValue("housekeeping", nil)
@@ -74,13 +74,13 @@ func TestSettingsValuesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := s.GetSettings()
-	got.Values["inflightMax"] = "1" // not aliased
+	got.Values["auditRetentionDays"] = "1" // not aliased
 	s2, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	all := s2.GetSettings().All()
-	want := map[string]string{"forwardIdle": "240", "logLevel": "warn", "inflightMax": "64", "sessionFailover": "false"}
+	want := map[string]string{"forwardIdle": "240", "logLevel": "warn", "auditRetentionDays": "64", "sessionFailover": "false"}
 	if len(all) != len(want) {
 		t.Fatalf("after reopen %v", all)
 	}

@@ -58,16 +58,11 @@ type Pool struct {
 	unresolvedCapped  bool        // an id was dropped at MaxUnresolvedRefusals
 	catalogLoaded     func() bool // no network; see SetCatalogLoaded
 
-	// Leases and long-session limits (lease.go), under mu.
-	sess            map[string]*sessState // session id -> lease state
-	clock           func() time.Time
-	limits          Limits
-	durMax          int
-	opensLog        map[string][]time.Time // key|model -> counted opens
-	pendingGlobal   int
-	pendingKey      map[string]int
-	pendingKeyModel map[string]int
-	testHookLease   func(sessionID string, inflight int)
+	// Leases (lease.go), under mu.
+	sess          map[string]*sessState // session id -> lease state
+	clock         func() time.Time
+	durMax        int
+	testHookLease func(sessionID string, inflight int)
 
 	onClosed OnSessionClosed
 
@@ -115,12 +110,8 @@ func New(client *router.Client, durationSec int) *Pool {
 		retired:  map[string]time.Time{},
 		cutNext:  map[string]string{},
 
-		sess:            map[string]*sessState{},
-		limits:          DefaultLimits,
-		durMax:          1800,
-		opensLog:        map[string][]time.Time{},
-		pendingKey:      map[string]int{},
-		pendingKeyModel: map[string]int{},
+		sess:   map[string]*sessState{},
+		durMax: 1800,
 	}
 	p.duration.Store(int64(durationSec))
 	return p
@@ -206,7 +197,6 @@ type Snapshot struct {
 	OpenedAt    time.Time `json:"openedAt"`
 	EndsAt      time.Time `json:"endsAt"`
 	Opener      string    `json:"opener,omitempty"`
-	Long        bool      `json:"long"`
 }
 
 func (p *Pool) Snapshot() []Snapshot {
@@ -216,7 +206,7 @@ func (p *Pool) Snapshot() []Snapshot {
 	for modelID, e := range p.entries {
 		sn := Snapshot{ModelID: modelID, SessionID: e.sessionID, ExpiresAt: e.expiresAt, Holders: []string{}}
 		if st := p.sess[e.sessionID]; st != nil {
-			sn.InFlight, sn.HolderCount, sn.OpenedAt, sn.EndsAt, sn.Opener, sn.Long = st.inflight, len(st.holders), st.openedAt, st.endsAt, st.opener, st.long
+			sn.InFlight, sn.HolderCount, sn.OpenedAt, sn.EndsAt, sn.Opener = st.inflight, len(st.holders), st.openedAt, st.endsAt, st.opener
 			for k := range st.holders {
 				sn.Holders = append(sn.Holders, k)
 			}
@@ -364,9 +354,8 @@ func (p *Pool) rehydrate(force bool) error {
 			provider:  s.Provider,
 		}
 		if p.sess[s.ID] == nil {
-			// Adopted: opener unknown; a long one counts toward the global cap.
-			opened := time.Unix(s.OpenedAt, 0)
-			p.newStateLocked(modelID, s.ID, opened, ends, "", s.OpenedAt > 0 && s.EndsAt-s.OpenedAt > int64(p.DurationSec()))
+			// Adopted: opener unknown.
+			p.newStateLocked(modelID, s.ID, time.Unix(s.OpenedAt, 0), ends, "")
 		}
 		adopted++
 	}

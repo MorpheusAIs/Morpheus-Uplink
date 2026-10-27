@@ -19,8 +19,7 @@ import (
 //   - ScopeEnvOnly: a security switch shown read-only; set in .env only.
 //
 // Group tags optional features so each can be dropped by deleting its rows
-// here: "long" (long-session limits), "inflight" (in-flight cap). The
-// settings code names no setting outside this table except the five live
+// here: "release" (the session release endpoint). The settings code names no setting outside this table except the five live
 // ones it applies at once.
 type SettingKind string
 
@@ -87,7 +86,7 @@ var Settings = []SettingDef{
 		get: func(c *Config) string { return c.LogLevel }},
 
 	{Name: "sessionFailover", Env: "SESSION_FAILOVER", Kind: KindBool, Default: "true", Scope: ScopeRestart,
-		Help: "Fail over to another provider on a provider error (true or false). Takes effect after an Uplink restart.", Consumer: "api/openai.go (Config.SessionFailover)",
+		Help: "Move a model to another provider when the provider fails a prompt (true or false); false relays the provider's error. Takes effect after an Uplink restart.", Consumer: "api/openai.go (Config.SessionFailover)",
 		get: func(c *Config) string { return btoa(c.SessionFailover) }, set: func(c *Config, v string) { c.SessionFailover = atob(v) }},
 	{Name: "providerCooldown", Env: "UPLINK_PROVIDER_COOLDOWN_SECONDS", Kind: KindInt, Min: 0, Max: MaxProviderCooldownSec, Default: "600", Scope: ScopeRestart, envClamp: true,
 		Help: "How long a failed provider is avoided for that model, in seconds (0–86400; 0 keeps no memory across requests). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderCooldown",
@@ -95,26 +94,14 @@ var Settings = []SettingDef{
 	{Name: "providerExclude", Env: "UPLINK_PROVIDER_EXCLUDE", Kind: KindString, Default: "", Scope: ScopeRestart, check: ValidateProviderExclude,
 		Help: "Providers never opened for a model: <model>=<0x provider>[,<0x provider>]…, entries separated by ';' (empty for none). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderExclude",
 		get: func(c *Config) string { return FormatProviderExclude(c.ProviderExclude) }, set: func(c *Config, v string) { c.ProviderExclude = ParseProviderExclude(v) }},
-	{Name: "inflightMax", Env: "UPLINK_INFLIGHT_MAX", Kind: KindInt, Min: 1, Max: 1024, Default: "32", Scope: ScopeRestart, Group: "inflight",
-		Help: "In-flight inference requests allowed in total (1–1024; 4 per key). Takes effect after an Uplink restart.", Consumer: "api.NewServer newInflightLimiter",
-		get: func(c *Config) string { return itoa(c.InflightMax) }, set: func(c *Config, v string) { c.InflightMax = atoi(v) }},
-	{Name: "longPerKeyModel", Env: "UPLINK_LONG_PER_KEY_MODEL", Kind: KindInt, Min: 0, Max: 16, Default: "1", Scope: ScopeRestart, Group: "long",
-		Help: "Long sessions one key may hold per model (0–16). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
-		get: func(c *Config) string { return itoa(c.LongPerKeyModel) }, set: func(c *Config, v string) { c.LongPerKeyModel = atoi(v) }},
-	{Name: "longPerKey", Env: "UPLINK_LONG_PER_KEY", Kind: KindInt, Min: 0, Max: 64, Default: "2", Scope: ScopeRestart, Group: "long",
-		Help: "Long sessions one key may hold in total (0–64). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
-		get: func(c *Config) string { return itoa(c.LongPerKey) }, set: func(c *Config, v string) { c.LongPerKey = atoi(v) }},
-	{Name: "longSessionsMax", Env: "UPLINK_LONG_SESSIONS_MAX", Kind: KindInt, Min: 0, Max: 256, Default: "3", Scope: ScopeRestart, Group: "long",
-		Help: "Long sessions open at once across all keys (0–256). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
-		get: func(c *Config) string { return itoa(c.LongSessionsMax) }, set: func(c *Config, v string) { c.LongSessionsMax = atoi(v) }},
-	{Name: "opensPerKeyModelHour", Env: "UPLINK_OPENS_PER_KEY_MODEL_HOUR", Kind: KindInt, Min: 0, Max: 120, Default: "2", Scope: ScopeRestart, Group: "long",
-		Help: "Long-session opens one key may make per model per hour (0–120). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetLimits",
-		get: func(c *Config) string { return itoa(c.OpensPerKeyModelHour) }, set: func(c *Config, v string) { c.OpensPerKeyModelHour = atoi(v) }},
+	{Name: "sessionRelease", Env: "UPLINK_SESSION_RELEASE", Kind: KindBool, Default: "true", Scope: ScopeRestart, Group: "release",
+		Help: "Lets a generated key drop its hold on a model's session with POST /v1/sessions/release (true or false; false answers 403 release_disabled). The session closes when no holder and no request is left; otherwise the idle sweep closes it. Takes effect after an Uplink restart.", Consumer: "api handleSessionRelease (Config.SessionRelease)",
+		get: func(c *Config) string { return btoa(c.SessionRelease) }, set: func(c *Config, v string) { c.SessionRelease = atob(v) }},
 	{Name: "auditRetentionDays", Env: "AUDIT_RETENTION_DAYS", Kind: KindInt, Min: 1, Max: 3650, Default: "90", Scope: ScopeRestart,
-		Help: "Days the security audit stream is kept (1–3650). Takes effect after an Uplink restart.", Consumer: "api.NewServer openAuditSink",
+		Help: "Days the high-value audit stream (audit-security.jsonl) is kept (1–3650). Takes effect after an Uplink restart.", Consumer: "api.NewServer openAuditSink",
 		get: func(c *Config) string { return itoa(c.AuditRetentionDays) }, set: func(c *Config, v string) { c.AuditRetentionDays = atoi(v) }},
 	{Name: "housekeeping", Env: "HOUSEKEEPING", Kind: KindBool, Default: "true", Scope: ScopeRestart,
-		Help: "Daily stake reclaim and session housekeeping (true or false). Takes effect after an Uplink restart.", Consumer: "cmd/uplink housekeep.New",
+		Help: "Post-midnight stake reclaim via the router API (true or false). Takes effect after an Uplink restart.", Consumer: "cmd/uplink housekeep.New",
 		get: func(c *Config) string { return btoa(c.Housekeeping) }, set: func(c *Config, v string) { c.Housekeeping = atob(v) }},
 	{Name: "activeModelsUrl", Env: "ACTIVE_MODELS_URL", Kind: KindString, Default: "https://active.mor.org/gateway_models.json", Scope: ScopeRestart, check: validateFeedURL,
 		Help: "Model catalog feed (an https URL). Takes effect after an Uplink restart.", Consumer: "cmd/uplink catalog.New",

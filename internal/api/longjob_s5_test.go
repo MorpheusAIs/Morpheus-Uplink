@@ -303,86 +303,74 @@ func TestS5ReleaseEndpoint(t *testing.T) {
 	noIDs(t, "audit", string(raw), k1, k2)
 }
 
-// S5-11, S5-17 (HTTP): long limits answer 429 long_session_limit with no
-// ids; refused is audited in ops, a successful long open in high-value.
-func TestS5LongLimitHTTP(t *testing.T) {
-	m := newFakeMarket(t, provA)
-	e := newFailoverEnv(t, m, nil)
-	long := map[string][]string{"X-Uplink-Session-Duration": {"1200"}}
-	want := `{"error":{"code":429,"message":"long session limit reached","type":"long_session_limit"}}` + "\n"
-	for _, shared := range []string{e.key, keymaker.PromptKey("failover-seed")} {
-		if r := e.call(t, shared, long, false); r.code != 429 || r.body != want {
-			t.Fatalf("shared-key long: %d %q", r.code, r.body)
-		}
-	}
-	k := e.newKey(t, "long")
-	if r := e.call(t, k, long, false); r.code != 200 {
-		t.Fatalf("long open %d %s", r.code, r.body)
-	}
-	var okHV, refused bool
-	for _, ev := range e.srv.audit.Recent(1000) {
-		if ev.Kind == "session_open_long" {
-			switch AuditStreamFor(ev.Kind, ev.Result) {
-			case AuditStreamHighValue:
-				okHV = okHV || ev.Result == "ok"
-			case AuditStreamOps:
-				refused = refused || ev.Result == "refused"
-			}
-		}
-	}
-	e.srv.FlushAudit()
-	for _, ev := range e.srv.audit.Recent(1000) {
-		if ev.Kind == "session_open_long" && ev.Result == "refused" {
-			refused = true
-		}
-	}
-	if !okHV || !refused {
-		t.Fatalf("audit ok=%v refused=%v", okHV, refused)
-	}
-}
-
-// S5-19: a fifth concurrent in-flight request on one key → 429; the
-// global cap likewise.
-func TestS5InflightCaps(t *testing.T) {
+// Uplink itself refuses no request for being long or concurrent: shared
+// keys open long sessions, and many requests run at once on one key with
+// no Uplink-generated 429.
+func TestS5NoUplinkLimits(t *testing.T) {
 	m := newFakeMarket(t, provA)
 	gate := make(chan struct{})
 	var started atomic.Int32
+	var holdOn atomic.Bool
 	m.behaveReq[provA] = func(n int, w http.ResponseWriter, r *http.Request) {
-		started.Add(1)
-		<-gate
+		if holdOn.Load() {
+			started.Add(1)
+			<-gate
+		}
 		ok200(n, w)
 	}
-	e := newFailoverEnv(t, m, func(c *config.Config) { c.InflightMax = 6 })
-	k1, k2 := e.newKey(t, "if1"), e.newKey(t, "if2")
+	e := newFailoverEnv(t, m, nil)
+	long := map[string][]string{"X-Uplink-Session-Duration": {"1200"}}
+	for _, k := range []string{e.key, keymaker.PromptKey("failover-seed"), e.newKey(t, "long")} {
+		if r := e.call(t, k, long, false); r.code != 200 {
+			t.Fatalf("long open: %d %s", r.code, r.body)
+		}
+	}
+	for _, ev := range e.srv.audit.Recent(1000) {
+		if strings.Contains(ev.Kind, "long") {
+			t.Fatalf("long-session audit kind %q", ev.Kind)
+		}
+	}
+	k := e.newKey(t, "many")
+	const n = 8
 	var wg sync.WaitGroup
-	codes := make(chan int, 8)
-	launch := func(k string) {
+	codes := make(chan int, n)
+	holdOn.Store(true)
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() { defer wg.Done(); codes <- e.call(t, k, nil, false).code }()
 	}
-	for i := 0; i < 4; i++ {
-		launch(k1)
-	}
-	waitFor(t, "s5", func() bool { return started.Load() == 4 })
-	if r := e.call(t, k1, nil, false); r.code != 429 || !strings.Contains(r.body, "too_many_requests") {
-		t.Fatalf("fifth on one key: %d %s", r.code, r.body)
-	}
-	launch(k2)
-	launch(k2)
-	waitFor(t, "s5", func() bool { return started.Load() == 6 })
-	if r := e.call(t, k2, nil, false); r.code != 429 {
-		t.Fatalf("over the global cap: %d", r.code)
+	waitFor(t, "s5", func() bool { return started.Load() == n })
+	if got := e.srv.pool.TotalInFlight(); got != n {
+		t.Fatalf("in flight %d, want %d", got, n)
 	}
 	close(gate)
 	wg.Wait()
 	close(codes)
 	for c := range codes {
 		if c != 200 {
-			t.Fatalf("held request %d", c)
+			t.Fatalf("concurrent request %d", c)
 		}
 	}
-	if r := e.call(t, k1, nil, false); r.code != 200 {
-		t.Fatal("cap not released")
+}
+
+// UPLINK_SESSION_RELEASE=false turns the release route off (after the
+// same key auth); the hold stays.
+func TestS5ReleaseDisabled(t *testing.T) {
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, func(c *config.Config) { c.SessionRelease = false })
+	k := e.newKey(t, "reloff")
+	if r := e.call(t, k, nil, false); r.code != 200 {
+		t.Fatal(r.body)
+	}
+	body := `{"model":"test-model"}`
+	if r := e.release(t, "", body, nil); r.code != 401 {
+		t.Fatalf("no key: %d", r.code)
+	}
+	if r := e.release(t, k, body, nil); r.code != 403 || !strings.Contains(r.body, "release_disabled") {
+		t.Fatalf("disabled: %d %s", r.code, r.body)
+	}
+	if snap := e.srv.pool.Snapshot(); len(snap) != 1 || snap[0].HolderCount != 1 {
+		t.Fatalf("hold dropped: %+v", snap)
 	}
 }
 

@@ -71,11 +71,6 @@ func validateInferenceBody(body []byte, requireMessages bool) (model string, err
 func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		keyID := keyIDFrom(r)
-		if !s.inflight.acquire(keyID) {
-			writeTypedError(w, http.StatusTooManyRequests, "too_many_requests", "too many requests in flight")
-			return
-		}
-		defer s.inflight.release(keyID)
 
 		body, err := readBodyWithDeadline(w, r, maxRequestBody)
 		if err != nil {
@@ -195,7 +190,7 @@ var errAnswered = errors.New("answered")
 func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
 	keyID, reqModel, modelID, failedID string, durationSec int, fo router.ForwardOptions, firstErr error) (*router.ForwardResult, string, *pool.Lease, error) {
 	class := statusClass(firstErr)
-	fr, ferr := s.pool.Failover(modelID, failedID, pool.FailoverOpts{KeyID: keyID, Shared: isSharedKey(keyID), DurationSec: durationSec, Reopen: true})
+	fr, ferr := s.pool.Failover(modelID, failedID, pool.FailoverOpts{KeyID: keyID, DurationSec: durationSec, Reopen: true})
 	if fr.CloseFailed {
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "close_failed")
 	}
@@ -206,8 +201,6 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 			outcome = "no_alternate"
 		case errors.Is(ferr, pool.ErrNoAvailableProvider):
 			outcome = "no_available" // every eligible provider is avoided; nothing opened
-		case errors.Is(ferr, pool.ErrLongSessionLimit):
-			outcome = "long_session_limit" // the long replacement would pass a limit
 		}
 		warnf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
@@ -216,10 +209,6 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 	}
 	if fr.Opened {
 		s.store.TrackSessionOpen(fr.SessionID, keyID, modelID)
-		if fr.Long {
-			s.auditSystem("session_open_long", keyID, "ok",
-				fmt.Sprintf("session_open_long ok %s %ds", s.modelLabel(modelID), fr.DurationSec), false)
-		}
 	}
 	lease := fr.Lease // taken with the replacement, in one critical section
 	if lease == nil {

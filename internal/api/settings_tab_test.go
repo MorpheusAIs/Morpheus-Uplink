@@ -140,11 +140,20 @@ func TestSettingsTabView(t *testing.T) {
 			t.Errorf("%s: router row shows a value %v", d.Name, r.Value)
 		}
 	}
-	if r := v["inflightMax"]; r.Value != float64(32) || r.Default != float64(32) || r.Source != "default" || r.PendingRestart {
-		t.Errorf("inflightMax %+v", r)
+	if r := v["auditRetentionDays"]; r.Value != float64(90) || r.Default != float64(90) || r.Source != "default" || r.PendingRestart {
+		t.Errorf("auditRetentionDays %+v", r)
 	}
 	if r := v["sessionFailover"]; r.Value != true || r.Default != true {
 		t.Errorf("sessionFailover %+v", r)
+	}
+	// The release endpoint's control: a settable restart-scope toggle.
+	if r := v["sessionRelease"]; r.Kind != "bool" || r.Value != true || r.Default != true || !r.Settable || r.Restart != "uplink" || r.Group != "release" {
+		t.Errorf("sessionRelease %+v", r)
+	}
+	for name, r := range v {
+		if l := strings.ToLower(name + " " + r.Env); strings.Contains(l, "inflight") || strings.Contains(l, "long") || strings.Contains(l, "opens_per") {
+			t.Errorf("removed limit on the Settings tab: %s", name)
+		}
 	}
 	if r := v["webPublicUrl"]; !r.PendingRestart && r.Effective == "" {
 		t.Errorf("webPublicUrl %+v", r)
@@ -156,15 +165,15 @@ func TestSettingsTabView(t *testing.T) {
 func TestSettingsRestartScopePersists(t *testing.T) {
 	e := newSettingsEnv(t, nil, nil)
 	bad := []string{
-		`{"name":"inflightMax","value":0}`,
-		`{"name":"inflightMax","value":1025}`,
-		`{"name":"inflightMax","value":"many"}`,
+		`{"name":"auditRetentionDays","value":0}`,
+		`{"name":"auditRetentionDays","value":3651}`,
+		`{"name":"auditRetentionDays","value":"many"}`,
 		`{"name":"sessionFailover","value":"maybe"}`,
 		`{"name":"providerExclude","value":"m1=0x12"}`,
 		`{"name":"activeModelsUrl","value":"http://feed.example/m.json"}`,
 		`{"name":"webPublicUrl","value":"http://console.example"}`,
-		`{"name":"inflightMax","value":{"n":1}}`,
-		`{"name":"inflightMax","value":null}`,
+		`{"name":"auditRetentionDays","value":{"n":1}}`,
+		`{"name":"auditRetentionDays","value":null}`,
 		`{"name":"routerLogLevelApp","value":"debug"}`,
 		`{"name":"proxyStoreChatContext","value":true}`,
 		`{"name":"masterKeyAdmin","value":true}`,
@@ -177,23 +186,23 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 	if all := e.st.GetSettings().All(); len(all) != 0 {
 		t.Fatalf("refused values stored: %v", all)
 	}
-	for _, b := range []string{`{"name":"inflightMax","value":64}`, `{"name":"sessionFailover","value":false}`, `{"name":"providerExclude","value":"m1=0x` + strings.Repeat("a", 40) + `"}`, `{"name":"housekeeping","value":"false"}`, `{"name":"housekeeping","reset":true}`} {
+	for _, b := range []string{`{"name":"auditRetentionDays","value":400}`, `{"name":"sessionFailover","value":false}`, `{"name":"providerExclude","value":"m1=0x` + strings.Repeat("a", 40) + `"}`, `{"name":"housekeeping","value":"false"}`, `{"name":"housekeeping","reset":true}`} {
 		if code, body := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 200 {
 			t.Fatalf("%s: %d %s", b, code, body)
 		}
 	}
 	v := e.view(t)
-	if r := v["inflightMax"]; r.Value != float64(64) || r.Effective != float64(32) || !r.PendingRestart || r.Source != "persisted" {
-		t.Fatalf("inflightMax %+v", r)
+	if r := v["auditRetentionDays"]; r.Value != float64(400) || r.Effective != float64(90) || !r.PendingRestart || r.Source != "persisted" {
+		t.Fatalf("auditRetentionDays %+v", r)
 	}
 	if r := v["housekeeping"]; r.Source != "default" || r.PendingRestart {
 		t.Fatalf("housekeeping after reset %+v", r)
 	}
-	if e.cfg.InflightMax != 32 || !e.cfg.SessionFailover {
+	if e.cfg.AuditRetentionDays != 90 || !e.cfg.SessionFailover {
 		t.Fatal("a restart-scope change applied live")
 	}
 	got := strings.Join(e.audits("setting_change"), "|")
-	if !strings.Contains(got, "inflightMax 32→64 (restart)") || !strings.Contains(got, "providerExclude changed (restart)") || strings.Contains(got, "0xaaaa") {
+	if !strings.Contains(got, "auditRetentionDays 90→400 (restart)") || !strings.Contains(got, "providerExclude changed (restart)") || strings.Contains(got, "0xaaaa") {
 		t.Fatalf("audit %s", got)
 	}
 	// Next start on the same DATA_DIR.
@@ -204,11 +213,11 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 	cfg2 := s6Config(t, nil)
 	cfg2.DataDir = e.cfg.DataDir
 	config.ApplyPersisted(cfg2, st2.GetSettings().All())
-	if cfg2.InflightMax != 64 || cfg2.SessionFailover || !cfg2.Housekeeping || len(cfg2.ProviderExclude["m1"]) != 1 {
+	if cfg2.AuditRetentionDays != 400 || cfg2.SessionFailover || !cfg2.Housekeeping || len(cfg2.ProviderExclude["m1"]) != 1 {
 		t.Fatalf("restart did not apply: %+v", cfg2)
 	}
 	srv2 := NewServer(cfg2, st2, nil, nil, nil, nil)
-	if r := viewOf(t, srv2, "inflightMax"); r.Value != 64 || r.Effective != 64 || r.PendingRestart {
+	if r := viewOf(t, srv2, "auditRetentionDays"); r.Value != 400 || r.Effective != 400 || r.PendingRestart {
 		t.Fatalf("after restart %+v", r)
 	}
 }
@@ -216,26 +225,26 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 // Env wins: an env-set row is read-only (409), shows the env value, and a
 // persisted value does not apply at boot.
 func TestSettingsEnvWinsReadOnly(t *testing.T) {
-	e := newSettingsEnv(t, map[string]string{"UPLINK_INFLIGHT_MAX": "16", "SESSION_FAILOVER": "false", "MASTER_KEY_ADMIN": "false"},
-		map[string]string{"inflightMax": "64", "sessionFailover": "true"})
-	if e.cfg.InflightMax != 16 || e.cfg.SessionFailover {
-		t.Fatalf("persisted value beat env: %d %v", e.cfg.InflightMax, e.cfg.SessionFailover)
+	e := newSettingsEnv(t, map[string]string{"AUDIT_RETENTION_DAYS": "30", "SESSION_FAILOVER": "false", "MASTER_KEY_ADMIN": "false"},
+		map[string]string{"auditRetentionDays": "400", "sessionFailover": "true"})
+	if e.cfg.AuditRetentionDays != 30 || e.cfg.SessionFailover {
+		t.Fatalf("persisted value beat env: %d %v", e.cfg.AuditRetentionDays, e.cfg.SessionFailover)
 	}
 	v := e.view(t)
-	for _, n := range []string{"inflightMax", "sessionFailover", "masterKeyAdmin"} {
+	for _, n := range []string{"auditRetentionDays", "sessionFailover", "masterKeyAdmin"} {
 		if r := v[n]; !r.Pinned || r.Source != "env" || r.PendingRestart {
 			t.Errorf("%s %+v", n, r)
 		}
 	}
-	if v["inflightMax"].Value != float64(16) {
-		t.Errorf("inflightMax shows %v", v["inflightMax"].Value)
+	if v["auditRetentionDays"].Value != float64(30) {
+		t.Errorf("auditRetentionDays shows %v", v["auditRetentionDays"].Value)
 	}
-	for _, b := range []string{`{"name":"inflightMax","value":20}`, `{"name":"inflightMax","reset":true}`, `{"name":"sessionFailover","value":true}`} {
+	for _, b := range []string{`{"name":"auditRetentionDays","value":20}`, `{"name":"auditRetentionDays","reset":true}`, `{"name":"sessionFailover","value":true}`} {
 		if code, body := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 409 || !strings.Contains(body, "set by environment") {
 			t.Errorf("%s: %d %s", b, code, body)
 		}
 	}
-	if v, _ := e.st.GetSettings().Value("inflightMax"); v != "64" {
+	if v, _ := e.st.GetSettings().Value("auditRetentionDays"); v != "400" {
 		t.Fatalf("pinned refusal changed the store: %q", v)
 	}
 }
@@ -329,7 +338,7 @@ func TestSettingsFileAuth(t *testing.T) {
 // above max) is refused whole and changes nothing.
 func TestSettingsExportImport(t *testing.T) {
 	e := newSettingsEnv(t, nil, nil)
-	for _, b := range []string{`{"name":"forwardIdle","value":240}`, `{"name":"inflightMax","value":64}`, `{"name":"logLevel","value":"warn"}`, `{"name":"providerExclude","value":"m1=0x` + strings.Repeat("a", 40) + `"}`} {
+	for _, b := range []string{`{"name":"forwardIdle","value":240}`, `{"name":"auditRetentionDays","value":400}`, `{"name":"logLevel","value":"warn"}`, `{"name":"providerExclude","value":"m1=0x` + strings.Repeat("a", 40) + `"}`} {
 		if code, _ := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 200 {
 			t.Fatalf("%s: %d", b, code)
 		}
@@ -344,12 +353,12 @@ func TestSettingsExportImport(t *testing.T) {
 		Version  int            `json:"version"`
 		Settings map[string]any `json:"settings"`
 	}
-	if err := json.Unmarshal([]byte(export), &f); err != nil || f.Format != "uplink-settings" || f.Version != 1 || len(f.Settings) != 4 || f.Settings["forwardIdle"] != float64(240) || f.Settings["inflightMax"] != float64(64) {
+	if err := json.Unmarshal([]byte(export), &f); err != nil || f.Format != "uplink-settings" || f.Version != 1 || len(f.Settings) != 4 || f.Settings["forwardIdle"] != float64(240) || f.Settings["auditRetentionDays"] != float64(400) {
 		t.Fatalf("export %s", export)
 	}
 	before := e.st.GetSettings().All()
 	bad := map[string]string{
-		"out of range":   `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":240,"inflightMax":5000}}`,
+		"out of range":   `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":240,"auditRetentionDays":5000}}`,
 		"unknown":        `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":200,"turbo":true}}`,
 		"secret":         `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":200,"ADMIN_PASSWORD":"x"}}`,
 		"router":         `{"format":"uplink-settings","version":1,"settings":{"routerLogLevelTcp":"debug"}}`,
@@ -380,7 +389,7 @@ func TestSettingsExportImport(t *testing.T) {
 	}
 	// A valid file replaces the persisted set: live values apply now,
 	// restart ones are pending, absent ones fall back to the default.
-	ok := `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":"300","sessionIdleGrace":120,"inflightMax":48,"housekeeping":false}}`
+	ok := `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":"300","sessionIdleGrace":120,"auditRetentionDays":120,"housekeeping":false}}`
 	if code, body := e.do(t, nil, "POST", "/admin/settings/import", ok, nil); code != 200 {
 		t.Fatalf("import %d %s", code, body)
 	}
@@ -388,8 +397,8 @@ func TestSettingsExportImport(t *testing.T) {
 		t.Fatalf("live values not applied: %d %d", e.srv.forwardIdle(), e.srv.SessionIdleGrace())
 	}
 	v := e.view(t)
-	if v["logLevel"].Source != "default" || v["providerExclude"].Source != "default" || v["inflightMax"].Value != float64(48) || !v["inflightMax"].PendingRestart || v["housekeeping"].Value != false {
-		t.Fatalf("after import %+v %+v %+v", v["logLevel"], v["providerExclude"], v["inflightMax"])
+	if v["logLevel"].Source != "default" || v["providerExclude"].Source != "default" || v["auditRetentionDays"].Value != float64(120) || !v["auditRetentionDays"].PendingRestart || v["housekeeping"].Value != false {
+		t.Fatalf("after import %+v %+v %+v", v["logLevel"], v["providerExclude"], v["auditRetentionDays"])
 	}
 	// Re-importing the first export restores it.
 	if code, body := e.do(t, nil, "POST", "/admin/settings/import", export, nil); code != 200 {

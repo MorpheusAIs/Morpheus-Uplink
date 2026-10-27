@@ -51,11 +51,7 @@ func TestSettingsRegistryTable(t *testing.T) {
 		{"sessionFailover", "SESSION_FAILOVER", KindBool, "true", 0, 0, ScopeRestart, ""},
 		{"providerCooldown", "UPLINK_PROVIDER_COOLDOWN_SECONDS", KindInt, "600", 0, 86400, ScopeRestart, ""},
 		{"providerExclude", "UPLINK_PROVIDER_EXCLUDE", KindString, "", 0, 0, ScopeRestart, ""},
-		{"inflightMax", "UPLINK_INFLIGHT_MAX", KindInt, "32", 1, 1024, ScopeRestart, "inflight"},
-		{"longPerKeyModel", "UPLINK_LONG_PER_KEY_MODEL", KindInt, "1", 0, 16, ScopeRestart, "long"},
-		{"longPerKey", "UPLINK_LONG_PER_KEY", KindInt, "2", 0, 64, ScopeRestart, "long"},
-		{"longSessionsMax", "UPLINK_LONG_SESSIONS_MAX", KindInt, "3", 0, 256, ScopeRestart, "long"},
-		{"opensPerKeyModelHour", "UPLINK_OPENS_PER_KEY_MODEL_HOUR", KindInt, "2", 0, 120, ScopeRestart, "long"},
+		{"sessionRelease", "UPLINK_SESSION_RELEASE", KindBool, "true", 0, 0, ScopeRestart, "release"},
 		{"auditRetentionDays", "AUDIT_RETENTION_DAYS", KindInt, "90", 1, 3650, ScopeRestart, ""},
 		{"housekeeping", "HOUSEKEEPING", KindBool, "true", 0, 0, ScopeRestart, ""},
 		{"activeModelsUrl", "ACTIVE_MODELS_URL", KindString, "https://active.mor.org/gateway_models.json", 0, 0, ScopeRestart, ""},
@@ -173,16 +169,17 @@ func TestSettingsEnvPins(t *testing.T) {
 		env, val string
 		pinned   bool
 	}{
-		{"UPLINK_INFLIGHT_MAX", "64", true},
-		{"UPLINK_INFLIGHT_MAX", "abc", false},
-		{"UPLINK_INFLIGHT_MAX", "0", false},
+		{"AUDIT_RETENTION_DAYS", "64", true},
+		{"AUDIT_RETENTION_DAYS", "abc", false},
+		{"AUDIT_RETENTION_DAYS", "0", false},
+		{"UPLINK_SESSION_RELEASE", "false", true},
 		{"UPLINK_PROVIDER_COOLDOWN_SECONDS", "999999", true},
 		{"SESSION_FAILOVER", "false", true},
 		{"SESSION_FAILOVER", "maybe", false},
 		{"UPLINK_PROVIDER_EXCLUDE", "junk", true},
 		{"MASTER_KEY_ADMIN", "true", true},
 		{"UPLINK_LOG_LEVEL", "warning", true},
-		{"UPLINK_LONG_PER_KEY", "65", false},
+		{"AUDIT_RETENTION_DAYS", "3651", false},
 	}
 	for _, c := range cases {
 		clearSettingEnv(t)
@@ -197,26 +194,26 @@ func TestSettingsEnvPins(t *testing.T) {
 // unless the environment pins them; an invalid one is skipped with a note.
 func TestApplyPersisted(t *testing.T) {
 	clearSettingEnv(t)
-	t.Setenv("UPLINK_LONG_PER_KEY", "5")
+	t.Setenv("AUDIT_RETENTION_DAYS", "5")
 	c := quietFromEnv(t)
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 	notes := ApplyPersisted(c, map[string]string{
-		"inflightMax": "64", "longPerKey": "9", "sessionFailover": "false", "housekeeping": "false",
-		"providerCooldown": "120", "auditRetentionDays": "400", "activeModelsUrl": "https://feed.example/m.json",
-		"providerExclude": "m1=0x" + strings.Repeat("a", 40), "longSessionsMax": "999",
-		"forwardIdle": "60", // live: applied by the API server, not here
-		"webPublicUrl": "http://console.example",
+		"sessionRelease": "false", "auditRetentionDays": "400", "sessionFailover": "false", "housekeeping": "false",
+		"providerCooldown": "999999", "activeModelsUrl": "https://feed.example/m.json",
+		"providerExclude": "m1=0x" + strings.Repeat("a", 40),
+		"forwardIdle":     "60", // live: applied by the API server, not here
+		"webPublicUrl":    "http://console.example",
 	})
-	if c.InflightMax != 64 || c.LongPerKey != 5 || c.SessionFailover || c.Housekeeping || c.ProviderCooldownSec != 120 ||
-		c.AuditRetentionDays != 400 || c.ActiveModelsURL != "https://feed.example/m.json" || len(c.ProviderExclude["m1"]) != 1 {
+	if c.SessionRelease || c.AuditRetentionDays != 5 || c.SessionFailover || c.Housekeeping ||
+		c.ActiveModelsURL != "https://feed.example/m.json" || len(c.ProviderExclude["m1"]) != 1 {
 		t.Fatalf("persisted values not applied: %+v", c)
 	}
-	if c.LongSessionsMax != 3 || c.ForwardIdleSec != 180 || c.WebPublicURL != "" {
-		t.Fatalf("invalid or live values applied: long %d fwd %d web %q", c.LongSessionsMax, c.ForwardIdleSec, c.WebPublicURL)
+	if c.ProviderCooldownSec != 600 || c.ForwardIdleSec != 180 || c.WebPublicURL != "" {
+		t.Fatalf("invalid or live values applied: cooldown %d fwd %d web %q", c.ProviderCooldownSec, c.ForwardIdleSec, c.WebPublicURL)
 	}
-	if len(notes) != 2 || !strings.Contains(strings.Join(notes, ";"), "longSessionsMax") {
+	if len(notes) != 2 || !strings.Contains(strings.Join(notes, ";"), "providerCooldown") {
 		t.Fatalf("notes %v", notes)
 	}
 }
