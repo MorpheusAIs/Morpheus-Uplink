@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
 	"github.com/absgrafx/morpheus-uplink/internal/catalog"
@@ -37,7 +38,9 @@ type Server struct {
 	lockout   *adminauth.Lockout
 	audit     *AuditLog
 	auditSink AuditSink
-	auditAgg  *auditAggregator
+	auditFile *auditSink
+	auditAgg  *auditAggregator // loopable high-value events
+	opsAgg    *auditAggregator // failure/ops events
 	outflow   *OutflowAlert
 
 	walletMu   sync.Mutex
@@ -65,8 +68,11 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		audit:     NewAuditLog(500),
 		outflow:   &OutflowAlert{},
 	}
-	s.auditSink = ringSink{ring: s.audit}
-	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, func(st AuditStream, ev AuditEvent) { s.auditSink.WriteAudit(st, ev) })
+	s.auditFile = openAuditSink(s.audit, cfg.DataDir, time.Duration(auditRetentionDays(cfg))*24*time.Hour)
+	s.auditSink = s.auditFile
+	emit := func(st AuditStream, ev AuditEvent) { s.auditSink.WriteAudit(st, ev) }
+	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, aggMaxKeys*16, emit)
+	s.opsAgg = newAuditAggregator(aggWindow, opsAggMaxKeys, opsAggMaxKeys, emit)
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()
 	return s
@@ -195,4 +201,11 @@ func writeOpenAIError(w http.ResponseWriter, status int, message string) {
 			"type":    "invalid_request_error",
 		},
 	})
+}
+
+func auditRetentionDays(cfg *config.Config) int {
+	if cfg == nil || cfg.AuditRetentionDays <= 0 {
+		return 90
+	}
+	return cfg.AuditRetentionDays
 }

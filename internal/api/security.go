@@ -57,11 +57,11 @@ func (s *Server) CheckOutflow() {
 	s.outflow.lastChecked = time.Now().UTC()
 	if s.outflow.lastETH != nil && eth != nil && eth.Cmp(s.outflow.lastETH) < 0 {
 		delta := new(big.Int).Sub(s.outflow.lastETH, eth)
-		s.audit.Record(balanceDropKind, "router-wallet", "ETH balance decreased by "+formatUnits18(delta)+" ETH "+ethDropNote)
+		s.auditSystem(balanceDropKind, "router-wallet", "", "ETH balance decreased by "+formatUnits18(delta)+" ETH "+ethDropNote, false)
 	}
 	if s.outflow.lastMOR != nil && mor != nil && mor.Cmp(s.outflow.lastMOR) < 0 {
 		delta := new(big.Int).Sub(s.outflow.lastMOR, mor)
-		s.audit.Record(balanceDropKind, "router-wallet", "MOR balance decreased by "+formatUnits18(delta)+" MOR "+morDropNote)
+		s.auditSystem(balanceDropKind, "router-wallet", "", "MOR balance decreased by "+formatUnits18(delta)+" MOR "+morDropNote, false)
 	}
 	if eth != nil {
 		s.outflow.lastETH = eth

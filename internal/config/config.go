@@ -69,6 +69,10 @@ type Config struct {
 	TrustedProxyCIDRs []string
 	// UPLINK_RESET_2FA: break-glass wipe of 2FA/sessions/lockouts once per marker cycle.
 	Reset2FA bool
+	// AUDIT_RETENTION_DAYS: retention of the high-value audit stream
+	// (audit-security.jsonl), 1…3650, default 90. The failure/ops stream
+	// keeps a fixed 30 days.
+	AuditRetentionDays int
 }
 
 func FromEnv() (*Config, error) {
@@ -96,6 +100,7 @@ func FromEnv() (*Config, error) {
 		DevHTTP:              getenvBool("UPLINK_DEV_HTTP", false),
 		TrustedProxyCIDRs:    splitCSV(os.Getenv("TRUSTED_PROXY_CIDR")),
 		Reset2FA:             getenvBool("UPLINK_RESET_2FA", false),
+		AuditRetentionDays:   getenvRangeInt("AUDIT_RETENTION_DAYS", 90, 1, 3650),
 	}
 
 	// Security switches fall back to their safe value when malformed.
@@ -186,6 +191,21 @@ func getenvNonNegInt(key string, def int) int {
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
 		log.Printf("config: %s is not a whole number >= 0; using the default %d", key, def)
+		return def
+	}
+	return n
+}
+
+// getenvRangeInt reads a whole number in [lo, hi]. Unset: def. Malformed
+// or out of range: a warning (name only) and def.
+func getenvRangeInt(key string, def, lo, hi int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < lo || n > hi {
+		log.Printf("config: %s must be a whole number %d…%d; using the default %d", key, lo, hi, def)
 		return def
 	}
 	return n

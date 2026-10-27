@@ -478,10 +478,16 @@ function extract(name) {
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 const mkEl = () => ({ value: '', classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, contains(c) { return this._s.has(c); } } });
 const els = { alertFilter: mkEl(), alertsNoMatch: mkEl(), securityAlerts: { rows: [], querySelectorAll() { return this.rows; } } };
-global.document = { getElementById: (id) => els[id] || null };
+// DOM stub: nodes record className, textContent and children; there is no
+// innerHTML, so any use of it in alertRowsTable shows up below.
+const mkNode = (tag) => ({ tag, className: '', textContent: '', children: [], appendChild(c) { this.children.push(c); return c; } });
+global.document = { getElementById: (id) => els[id] || null, createElement: mkNode };
 global.T = {};
-eval(['escapeHtml', 'alertTime', 'alertDetail', 'alertRowsHtml', 'filterAlerts'].map(extract).join('\n')
-  + '\nObject.assign(T, { alertRowsHtml, filterAlerts });');
+eval(['alertTime', 'alertDetail', 'alertRowsTable', 'filterAlerts'].map(extract).join('\n')
+  + '\nObject.assign(T, { alertRowsTable, filterAlerts });');
+if (/alertRowsHtml|box\.innerHTML = alert/.test(html)) fail('security alerts must not be rendered through innerHTML');
+if (!html.includes('box.replaceChildren(alertRowsTable(alerts));')) fail('security alerts must use alertRowsTable');
+if (/innerHTML/.test(extract('alertRowsTable'))) fail('alertRowsTable must use textContent only');
 if (!/id="alertFilter"[^>]*type="search"[^>]*oninput="filterAlerts\(\)"/.test(html)) fail('filter box must call filterAlerts on input');
 if (html.indexOf('id="alertFilter"') > html.indexOf('id="securityAlerts"')) fail('filter box must sit above the list');
 if (!/\.alerts-table \.alert-at \{[^}]*monospace/.test(html)) fail('time column must be monospace');
@@ -492,10 +498,19 @@ const alerts = [
   { at: '2026-10-19T23:59:59.5Z', kind: '2fa_enroll', message: 'enrolled (2026-10-19 23:59:59)' },
   { at: '2026-10-19T08:00:00Z', kind: 'key_create', message: 'key created (agent-1)' },
 ];
-const out = T.alertRowsHtml(alerts);
-const rows = [...out.matchAll(/<tr class="alert-row"><td class="alert-at">([^<]*)<\/td><td class="alert-kind"><strong>([^<]*)<\/strong><\/td><td class="alert-detail">([^<]*)<\/td><\/tr>/g)]
-  .map((m) => ({ at: m[1], kind: m[2], detail: m[3] }));
-if (rows.length !== 4) fail('want 4 rows of time | bold action | details: ' + out);
+const out = T.alertRowsTable(alerts);
+if (out.tag !== 'table' || out.className !== 'alerts-table' || out.children[0].tag !== 'tbody') fail('table shape');
+const rows = out.children[0].children.map((tr) => {
+  if (tr.className !== 'alert-row' || tr.children.length !== 3) fail('row shape');
+  const [at, kind, detail] = tr.children;
+  if (at.className !== 'alert-at' || kind.className !== 'alert-kind' || kind.children[0].tag !== 'strong' || detail.className !== 'alert-detail') fail('cell shape');
+  return { at: at.textContent, kind: kind.children[0].textContent, detail: detail.textContent };
+});
+if (rows.length !== 4) fail('want 4 rows of time | bold action | details');
+// Markup in an audit field stays text.
+const evil = T.alertRowsTable([{ at: '2026-10-20T14:05:09Z', kind: '<img src=x onerror=alert(1)>', message: '/admin/<b>x</b>' }]);
+const er = evil.children[0].children[0];
+if (er.children[1].children[0].textContent !== '<img src=x onerror=alert(1)>' || er.children[2].textContent !== '/admin/<b>x</b>') fail('fields must be set as text');
 if (rows.map((r) => r.kind).join(',') !== 'balance_drop,login,2fa_enroll,key_create') fail('rows must be newest first: ' + rows.map((r) => r.kind));
 for (const r of rows) {
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(r.at)) fail('time format YYYY-MM-DD HH:MM:SS: ' + r.at);
@@ -518,7 +533,7 @@ els.alertFilter.value = 'nothing-like-this'; T.filterAlerts();
 if (hidden().join() !== 'true,true,true,true' || els.alertsNoMatch.classList.contains('hidden')) fail('no-match: ' + hidden());
 els.alertFilter.value = '  '; T.filterAlerts();
 if (hidden().join() !== 'false,false,false,false' || !els.alertsNoMatch.classList.contains('hidden')) fail('empty filter shows all');
-console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter');
+console.log('OK: security alerts newest first, YYYY-MM-DD HH:MM:SS, bold action, no repeated time, filter, textContent only');
 NODE
 
 # Status warns when the page origin is not WEB_PUBLIC_URL (text only).

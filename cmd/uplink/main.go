@@ -129,16 +129,22 @@ func main() {
 		}
 	}()
 
-	// Write the summaries of ended admin audit aggregation windows.
+	// Write the summaries of ended audit aggregation windows, and apply the
+	// audit retention once a day (it also ran at boot).
 	go func() {
 		t := time.NewTicker(api.AuditFlushInterval)
 		defer t.Stop()
+		lastPrune := time.Now()
 		for {
 			select {
 			case <-hkCtx.Done():
 				return
-			case <-t.C:
+			case now := <-t.C:
 				srv.FlushAudit()
+				if now.Sub(lastPrune) >= 24*time.Hour {
+					srv.PruneAudit()
+					lastPrune = now
+				}
 			}
 		}
 	}()

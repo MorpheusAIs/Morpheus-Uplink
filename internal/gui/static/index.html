@@ -1862,7 +1862,7 @@ async function refreshSecurity() {
         if (!alerts.length) {
           box.textContent = UI_COPY.alertsNone;
         } else {
-          box.innerHTML = alertRowsHtml(alerts);
+          box.replaceChildren(alertRowsTable(alerts));
         }
       }
     } catch (e) {
@@ -1900,14 +1900,30 @@ function alertDetail(a, when) {
   }
   return t.replace(/\s{2,}/g, ' ').trim();
 }
-function alertRowsHtml(alerts) {
+// alertRowsTable builds the rows with DOM nodes and textContent only:
+// audit fields (paths, messages) are never parsed as HTML.
+function alertRowsTable(alerts) {
   const rows = alerts.slice().sort((x, y) => (Date.parse(y.at) || 0) - (Date.parse(x.at) || 0));
-  return '<table class="alerts-table"><tbody>' + rows.map(a => {
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const table = el('table', 'alerts-table');
+  const tbody = el('tbody');
+  table.appendChild(tbody);
+  for (const a of rows) {
     const when = alertTime(a.at);
-    return '<tr class="alert-row"><td class="alert-at">' + escapeHtml(when) + '</td>'
-      + '<td class="alert-kind"><strong>' + escapeHtml(a.kind || '') + '</strong></td>'
-      + '<td class="alert-detail">' + escapeHtml(alertDetail(a, when)) + '</td></tr>';
-  }).join('') + '</tbody></table>';
+    const tr = el('tr', 'alert-row');
+    tr.appendChild(el('td', 'alert-at', when));
+    const kind = el('td', 'alert-kind');
+    kind.appendChild(el('strong', '', String(a.kind || '')));
+    tr.appendChild(kind);
+    tr.appendChild(el('td', 'alert-detail', alertDetail(a, when)));
+    tbody.appendChild(tr);
+  }
+  return table;
 }
 // filterAlerts: client-side, case-insensitive substring over the whole row.
 function filterAlerts() {

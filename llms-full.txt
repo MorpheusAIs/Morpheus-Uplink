@@ -894,9 +894,11 @@ One topic at a time. You do not need every section on day one.
   and lockouts, 2FA and key changes, boot session checks, provider
   failovers, balance drops),
   newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
-  (bold) | details. The filter box above the list hides rows that do not
-  contain the typed text (case-insensitive). The list is kept in memory and
-  starts empty after a restart; forward the container logs for history. It
+  (bold) | details, set as plain text. The filter box above the list hides
+  rows that do not contain the typed text (case-insensitive). The list is
+  loaded at boot from the audit files in `DATA_DIR`
+  ([Audit streams](06-developers.md#audit-streams)), so it survives a
+  restart; at least half of it is kept for admin and credential events. It
   loads once 2FA is enrolled or off; while an enrollment is required it says
   so instead.
 
@@ -1239,6 +1241,44 @@ without credentials, whatever `MASTER_KEY_ADMIN` says.
 - **Client address**: a change of client address within a session is
   audited once per change as `admin_session_ip_change` (aggregated per
   session per minute). The session is not bound to an address.
+- **Master Bearer lockout**: the Bearer branch of the admin routes has its
+  own per-client-address lockout (5 free failures, then 2^(n-5) s up to
+  15 min), checked before the key compare. It neither reads nor feeds the
+  global login trip, so a password flood does not lock the Master key out
+  from other addresses. Each rejected Bearer is audited as
+  `admin_bearer_reject` (path and address only).
+
+### Audit streams
+
+Two JSON Lines files in `DATA_DIR` (directory 0750), opened append-only
+with `O_NOFOLLOW`, mode 0600:
+
+| File | Holds |
+|---|---|
+| `audit-security.jsonl` | Successful admin and credential events: `login`, `step_up`, `key_reveal`, `key_create` / `key_import` / `key_revoke`, 2FA changes, `setting_change`, a successful `session_open_long`, `pool_close` / `pool_close_all`, `admin_session_ip_change`, `admin_key_use`, `balance_drop` |
+| `audit.jsonl` | Failures and agent or system events: `admin_bearer_reject`, login and step-up failures, other rejects, `session_release`, a refused `session_open_long`, `provider_failover`, `session_reconcile*` |
+
+- **Aggregation**: unauthenticated failures (`login`, `login_lockout`,
+  `admin_bearer_reject`) are written at most once per minute per (client
+  address, event), and agent events per (key id, event); repeats become
+  one line with `count`. The map holds about 10,000 keys; beyond that new
+  keys share one `other` line per event. `admin_key_use` and
+  `admin_session_ip_change` are aggregated the same way (64 keys per event).
+- **Rotation**: at 5 MiB a file moves to `.1` and `.2`; at most 3 files per
+  stream.
+- **Retention**: `AUDIT_RETENTION_DAYS` (default 90, 1…3650) for
+  `audit-security.jsonl`, 30 days for `audit.jsonl`. Whole rotated files
+  whose newest line is older are deleted at boot and daily; the live file
+  is never rewritten.
+- **Safety**: a symlink, a non-regular file or a file owned by another uid
+  is refused (logged once; the in-memory list only). A write error is
+  logged once and is not fatal.
+- **Content**: `json.Marshal` only. Paths without the query, at most 256
+  printable ASCII bytes; never the User-Agent, a token or any part or hash
+  of one.
+- **Boot**: the last 500 lines of each file are loaded into the in-memory
+  list behind `GET /admin/audit` (same shape, plus `stream` and `count`)
+  and Security alerts. Status `disk.audit` reports the file sizes.
 
 ### Admin 2FA and recovery codes
 
@@ -1474,6 +1514,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |
 | `USAGE_PRUNE_DAYS` | `30` | Admin usage-history prune retention |
+| `AUDIT_RETENTION_DAYS` | `90` | Retention of `audit-security.jsonl` rotated files, 1…3650 ([Audit streams](#audit-streams)) |
 | `SESSION_DIRECT_PAYMENT` | ignored | Removed: sessions are always staking-mode (`directPayment:false`); setting `true` only logs a warning |
 | `CLOSE_SESSIONS_ON_EXIT` | `true` | On a graceful stop, close every open session on the wallet (as of the last scan, including uncatalogued models and other clients' sessions); `false` leaves them for the next boot reconcile |
 | `UPLINK_RECONCILE_GATE_SECONDS` | `60` | Boot reconcile: how long session opens wait for the first session list |

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/absgrafx/morpheus-uplink/internal/chain"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
@@ -99,7 +101,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.audit.Record("key_create", s.lockout.ClientIP(r), "created key "+rec.ID)
+	s.auditAdmin(r, "key_create", "created key "+rec.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"key":    full, // shown once; only the hash is stored
 		"record": rec,
@@ -129,6 +131,7 @@ func (s *Server) handleImportKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.auditAdmin(r, "key_import", "imported key "+rec.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{"record": rec})
 }
 
@@ -148,7 +151,7 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
 	}
-	s.audit.Record("key_revoke", s.lockout.ClientIP(r), "revoked key "+id)
+	s.auditAdmin(r, "key_revoke", "revoked key "+id)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
@@ -228,7 +231,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Free-space for / and DATA_DIR - never include wallet/cookie/Bearer material.
-	status["disk"] = collectDiskStatus("/", s.cfg.DataDir)
+	disk := collectDiskStatus("/", s.cfg.DataDir)
+	if s.auditFile != nil {
+		disk["audit"] = s.auditFile.diskStatus()
+	}
+	status["disk"] = disk
 	auth := s.store.GetAuthState()
 	status["twoFactor"] = map[string]any{
 		"enrolled":       auth.Enrolled,
@@ -332,6 +339,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
 	res := s.pool.CloseAll()
+	s.auditAdmin(r, "pool_close_all", fmt.Sprintf("pool_close_all attempted=%d closed=%d failed=%d", res.Attempted, res.Closed, res.Failed))
 	status := http.StatusOK
 	if res.Attempted > 0 && res.Closed == 0 {
 		status = http.StatusBadGateway
@@ -499,9 +507,11 @@ func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.pool.CloseSession(id); err != nil {
+		s.auditAdmin(r, "pool_close", "pool_close failed session="+pool.ShortID(id))
 		http.Error(w, "close session: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	s.auditAdmin(r, "pool_close", "pool_close session="+pool.ShortID(id))
 	writeJSON(w, http.StatusOK, map[string]any{"closed": true, "sessionId": id})
 }
 
@@ -558,4 +568,11 @@ func (s *Server) adminSessionStatus(twoFactorOn bool) map[string]any {
 		"stepUpMaxAgeSec": int(StepUpMaxAge.Seconds()),
 		"warnings":        warnings,
 	}
+}
+
+// auditAdmin writes a high-value admin action by the caller (cookie
+// session or master Bearer).
+func (s *Server) auditAdmin(r *http.Request, kind, message string) {
+	ip := s.lockout.ClientIP(r)
+	s.writeAudit(AuditStreamHighValue, AuditEvent{At: time.Now().UTC(), Kind: kind, Actor: ip, IP: ip, Result: "ok", Message: message})
 }

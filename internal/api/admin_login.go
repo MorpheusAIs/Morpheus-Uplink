@@ -142,8 +142,34 @@ func (s *Server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": n})
 }
 
+// auditEvent writes one event. Unauthenticated failures (login,
+// login_lockout, admin_bearer_reject) are aggregated per (client address,
+// event) per minute; other events (a signed-in admin's failures included,
+// which sit behind the session and the lockout) are written as is.
 func (s *Server) auditEvent(event, ip, result, reason string) {
-	s.writeAudit(AuditStreamFor(event, result), auditEventOf(event, ip, result, reason))
+	st := AuditStreamFor(event, result)
+	if st == AuditStreamOps && unauthAggregated[event] {
+		s.opsAgg.Record(st, ip, auditEventOf(event, ip, result, reason))
+		return
+	}
+	s.writeAudit(st, auditEventOf(event, ip, result, reason))
+}
+
+// unauthAggregated: failure kinds anyone can trigger without a session.
+var unauthAggregated = map[string]bool{"login": true, "login_lockout": true, "admin_bearer_reject": true}
+
+// auditAgent writes an event an API key can trigger (failure/ops stream),
+// aggregated per (key id, event) per minute.
+func (s *Server) auditAgent(event, keyID, ip, result, reason string) {
+	ev := auditEventOf(event, ip, result, reason)
+	ev.Actor = keyID
+	s.opsAgg.Record(AuditStreamOps, keyID, ev)
+}
+
+// auditSystem writes a system event (no client): high-value unless its
+// kind or result routes it to ops. quiet: the caller logged it already.
+func (s *Server) auditSystem(kind, actor, result, message string, quiet bool) {
+	s.writeAudit(AuditStreamFor(kind, result), AuditEvent{At: time.Now().UTC(), Kind: kind, Actor: actor, Result: result, Message: message, quiet: quiet})
 }
 
 func auditEventOf(event, ip, result, reason string) AuditEvent {
@@ -164,14 +190,24 @@ func (s *Server) auditAggregated(event, key, ip, result, reason string) {
 // writeAudit sends one event to the audit sink. Ended aggregation windows
 // are written first, so summaries keep their order with later events.
 func (s *Server) writeAudit(stream AuditStream, ev AuditEvent) {
-	s.auditAgg.Flush()
+	s.FlushAudit()
 	s.auditSink.WriteAudit(stream, ev)
 }
 
 // FlushAudit writes the summaries of ended aggregation windows. main calls
 // it once per aggregation window; it is also run on every audit write and
 // before the audit list is read.
-func (s *Server) FlushAudit() { s.auditAgg.Flush() }
+func (s *Server) FlushAudit() {
+	s.auditAgg.Flush()
+	s.opsAgg.Flush()
+}
+
+// PruneAudit applies the audit streams' retention (boot and daily).
+func (s *Server) PruneAudit() {
+	if s.auditFile != nil {
+		s.auditFile.Prune()
+	}
+}
 
 // AuditFlushInterval is how often FlushAudit should run.
 const AuditFlushInterval = aggWindow
@@ -187,13 +223,28 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 
 		// Optional master key admin (default off).
 		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			ip := s.lockout.ClientIP(r)
+			path := sanitizeAuditPath(r.URL.Path)
+			// Per-IP-only lockout, checked before the key compare: it never
+			// reads or feeds the global trip, so a password flood cannot
+			// lock out the master Bearer and a Bearer flood cannot lock
+			// out the password login.
+			if ok, retry := s.lockout.AllowBearer(ip); !ok {
+				s.auditEvent("admin_bearer_reject", ip, "blocked", "lockout path="+path)
+				w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+				http.Error(w, "too many failed attempts", http.StatusTooManyRequests)
+				return
+			}
 			if s.cfg.MasterKeyAdmin && keymakerEqual(token, s.masterKey) {
-				ip := s.lockout.ClientIP(r)
+				s.lockout.SuccessBearer(ip)
 				// Aggregated per client address per minute (loopable).
-				s.auditAggregated("admin_key_use", ip, ip, "ok", sanitizeAuditPath(r.URL.Path))
+				s.auditAggregated("admin_key_use", ip, ip, "ok", path)
 				next(w, r.WithContext(context.WithValue(r.Context(), adminAuthKey{}, adminAuth{bearer: true})))
 				return
 			}
+			// Never the token or any part or hash of it: path and address.
+			s.lockout.FailureBearer(ip)
+			s.auditEvent("admin_bearer_reject", ip, "fail", "path="+path)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

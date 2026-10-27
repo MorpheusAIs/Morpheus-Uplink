@@ -799,7 +799,7 @@ func TestAuditAggregatorAdminKeyUse(t *testing.T) {
 	var mu sync.Mutex
 	var out []AuditEvent
 	clk := &s1Clock{t: time.Unix(1_800_000_000, 0)}
-	a := newAuditAggregator(time.Minute, 64, func(_ AuditStream, ev AuditEvent) {
+	a := newAuditAggregator(time.Minute, 64, 1024, func(_ AuditStream, ev AuditEvent) {
 		mu.Lock()
 		out = append(out, ev)
 		mu.Unlock()
@@ -830,7 +830,7 @@ func TestAuditAggregatorAdminKeyUse(t *testing.T) {
 func TestAuditAggregatorBoundedUnderKeyRotation(t *testing.T) {
 	var out []AuditEvent
 	clk := &s1Clock{t: time.Unix(1_800_000_000, 0)}
-	a := newAuditAggregator(time.Minute, 64, func(_ AuditStream, ev AuditEvent) { out = append(out, ev) })
+	a := newAuditAggregator(time.Minute, 64, 1024, func(_ AuditStream, ev AuditEvent) { out = append(out, ev) })
 	a.now = clk.Now
 	for i := 0; i < 10000; i++ {
 		ip := fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255)

@@ -13,12 +13,14 @@ type Lockout struct {
 	mu sync.Mutex
 
 	perIP          map[string]*ipState
-	global         []time.Time // recent failure timestamps
+	bearerIP       map[string]*ipState // admin Bearer failures: per IP only, no global trip
+	global         []time.Time         // recent failure timestamps
 	globalUntil    time.Time
 	globalBackoff  time.Duration
 	globalLastTrip time.Time
 
 	trusted []*net.IPNet
+	now     func() time.Time
 }
 
 const maxTrackedIPs = 10000
@@ -33,7 +35,9 @@ type ipState struct {
 func NewLockout(trustedCIDRs []string) (*Lockout, error) {
 	l := &Lockout{
 		perIP:         map[string]*ipState{},
+		bearerIP:      map[string]*ipState{},
 		globalBackoff: time.Minute,
+		now:           time.Now,
 	}
 	for _, c := range trustedCIDRs {
 		c = strings.TrimSpace(c)
@@ -90,7 +94,7 @@ func (l *Lockout) isTrusted(ip net.IP) bool {
 func (l *Lockout) Allow(ip string) (ok bool, retryAfter time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
+	now := l.now()
 	if now.Before(l.globalUntil) {
 		return false, l.globalUntil.Sub(now)
 	}
@@ -119,7 +123,7 @@ func (l *Lockout) Success(ip string) {
 func (l *Lockout) Failure(ip string) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
+	now := l.now()
 
 	// Global window: >20 failures in 15 min → backoff starting 1 min, doubling to 15.
 	cutoff := now.Add(-15 * time.Minute)
@@ -175,28 +179,17 @@ func (l *Lockout) Failure(ip string) time.Duration {
 }
 
 func (l *Lockout) ensureIP(ip string, now time.Time) *ipState {
-	st := l.perIP[ip]
+	return ensureIn(l.perIP, ip, now)
+}
+
+func ensureIn(m map[string]*ipState, ip string, now time.Time) *ipState {
+	st := m[ip]
 	if st == nil {
-		if len(l.perIP) >= maxTrackedIPs {
-			// Evict a stale unlocked entry to bound memory.
-			for k, v := range l.perIP {
-				if now.After(v.lockedUntil) && (v.failures == 0 || now.Sub(v.lastFail) >= time.Hour) {
-					delete(l.perIP, k)
-					break
-				}
-			}
-			// Still full: drop an arbitrary unlocked key.
-			if len(l.perIP) >= maxTrackedIPs {
-				for k, v := range l.perIP {
-					if now.After(v.lockedUntil) {
-						delete(l.perIP, k)
-						break
-					}
-				}
-			}
+		if len(m) >= maxTrackedIPs {
+			evictOne(m, now)
 		}
 		st = &ipState{}
-		l.perIP[ip] = st
+		m[ip] = st
 	}
 	if st.failures > 0 && now.Sub(st.lastFail) >= time.Hour && now.After(st.lockedUntil) {
 		st.failures = 0
@@ -210,7 +203,103 @@ func (l *Lockout) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.perIP = map[string]*ipState{}
+	l.bearerIP = map[string]*ipState{}
 	l.global = nil
 	l.globalUntil = time.Time{}
 	l.globalBackoff = time.Minute
+}
+
+// AllowBearer is the admin Bearer branch's lockout check: per client
+// address only. It never reads the global trip, so a password-login flood
+// cannot lock out the master Bearer from other addresses.
+func (l *Lockout) AllowBearer(ip string) (ok bool, retryAfter time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	st := l.bearerIP[ip]
+	if st == nil {
+		return true, 0
+	}
+	if st.failures > 0 && now.Sub(st.lastFail) >= time.Hour && now.After(st.lockedUntil) {
+		delete(l.bearerIP, ip)
+		return true, 0
+	}
+	if now.Before(st.lockedUntil) {
+		return false, st.lockedUntil.Sub(now)
+	}
+	return true, 0
+}
+
+// FailureBearer records a rejected admin Bearer for one address (same
+// per-IP schedule as Failure: 5 free, then 2^(n-5) s up to 15 min). It
+// never feeds the global window.
+func (l *Lockout) FailureBearer(ip string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	st := ensureIn(l.bearerIP, ip, now)
+	st.failures++
+	st.lastFail = now
+	if st.failures <= 5 {
+		return 0
+	}
+	shift := min(st.failures-5, 10)
+	d := min(time.Second<<uint(shift), 15*time.Minute)
+	st.lockedUntil = now.Add(d)
+	return d
+}
+
+// SuccessBearer clears an address's Bearer failures.
+func (l *Lockout) SuccessBearer(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.bearerIP, ip)
+}
+
+// GlobalLocked reports whether the global password-login trip is active.
+func (l *Lockout) GlobalLocked() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.now().Before(l.globalUntil)
+}
+
+// evictOne drops one unlocked entry to bound memory: a stale one among the
+// first few looked at, else the first unlocked one. Locked entries are
+// kept. Bounded work per call, so a flood of new addresses stays cheap.
+func evictOne(m map[string]*ipState, now time.Time) {
+	const look = 64
+	var unlocked string
+	have := false
+	i := 0
+	for k, v := range m {
+		if now.After(v.lockedUntil) {
+			if v.failures == 0 || now.Sub(v.lastFail) >= time.Hour {
+				delete(m, k)
+				return
+			}
+			if !have {
+				unlocked, have = k, true
+			}
+		}
+		if i++; i >= look && have {
+			break
+		}
+	}
+	if have {
+		delete(m, unlocked)
+	}
+}
+
+// SetClock replaces the clock (tests).
+func (l *Lockout) SetClock(now func() time.Time) {
+	l.mu.Lock()
+	l.now = now
+	l.mu.Unlock()
+}
+
+// TrackedBearerIPs is the size of the Bearer failure map (tests).
+func (l *Lockout) TrackedBearerIPs() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.bearerIP)
 }

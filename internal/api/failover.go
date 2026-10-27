@@ -196,6 +196,6 @@ func (s *Server) auditFailover(model, sessionID, provider, class, outcome string
 	}
 	slog.Warn("audit", "event", "provider_failover", "result", outcome, "model", model,
 		"session", sid, "provider", prov, "status", class)
-	s.audit.RecordFull("provider_failover", "system", "", outcome,
-		fmt.Sprintf("provider_failover %s model=%s session=%s provider=%s status=%s", outcome, model, sid, prov, class))
+	s.auditSystem("provider_failover", "system", outcome,
+		fmt.Sprintf("provider_failover %s model=%s session=%s provider=%s status=%s", outcome, model, sid, prov, class), true)
 }

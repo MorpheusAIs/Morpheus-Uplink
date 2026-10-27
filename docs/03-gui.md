@@ -57,9 +57,11 @@ One topic at a time. You do not need every section on day one.
   and lockouts, 2FA and key changes, boot session checks, provider
   failovers, balance drops),
   newest first. Each row reads time (local, `YYYY-MM-DD HH:MM:SS`) | event name
-  (bold) | details. The filter box above the list hides rows that do not
-  contain the typed text (case-insensitive). The list is kept in memory and
-  starts empty after a restart; forward the container logs for history. It
+  (bold) | details, set as plain text. The filter box above the list hides
+  rows that do not contain the typed text (case-insensitive). The list is
+  loaded at boot from the audit files in `DATA_DIR`
+  ([Audit streams](06-developers.md#audit-streams)), so it survives a
+  restart; at least half of it is kept for admin and credential events. It
   loads once 2FA is enrolled or off; while an enrollment is required it says
   so instead.
 
