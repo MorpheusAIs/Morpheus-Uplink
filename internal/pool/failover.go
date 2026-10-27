@@ -383,6 +383,19 @@ type FailoverResult struct {
 	CloseFailed    bool   // the failed session's close did not land (it stays retired)
 	CloseDeferred  bool   // still in flight on another request: closes when that ends
 	DurationSec    int
+	Long           bool // the replacement was opened long (counted in Limits)
+	// Lease is the caller's hold on SessionID, taken in the same critical
+	// section that pooled it (nil when reopen was false, or the
+	// replacement is already retiring).
+	Lease *Lease
+}
+
+// FailoverOpts describe the request that hit the failure.
+type FailoverOpts struct {
+	KeyID       string
+	Shared      bool // master or prompt key: never opens long sessions
+	DurationSec int  // 0: pool default; capped at the duration max
+	Reopen      bool // open a replacement and lease it (false: mid-stream cut)
 }
 
 // Failover moves a model off the provider behind failedID. It runs under
@@ -393,38 +406,53 @@ type FailoverResult struct {
 //
 // It returns ErrNoAlternate, without closing anything, when no other
 // provider serves the model.
-func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) (FailoverResult, error) {
+func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResult, error) {
+	durationSec := o.DurationSec
 	if durationSec <= 0 {
 		durationSec = p.DurationSec()
 	}
+	if mx := p.DurationMax(); mx > 0 && durationSec > mx {
+		durationSec = mx
+	}
+	long := durationSec > p.DurationSec()
 	res := FailoverResult{DurationSec: durationSec}
 	key := normModel(modelID)
 	lock := p.openLock(key)
 	lock.Lock()
 	defer lock.Unlock()
 
-	// 1. Someone else already swapped the session: use the replacement.
+	// 1. Someone else already swapped the session: use the replacement,
+	// leased in the same critical section that found it.
 	p.mu.Lock()
 	cur, pooled := p.entries[key]
-	p.mu.Unlock()
 	if pooled && cur.sessionID != failedID && p.now().Before(cur.expiresAt) {
 		res.SessionID, res.Replaced, res.Provider = cur.sessionID, true, cur.provider
+		if o.Reopen {
+			if st := p.stateLocked(key, cur); !st.retired && !st.closing {
+				res.Lease = p.leaseLocked(cur.sessionID, st, o.KeyID)
+			}
+		}
+		p.mu.Unlock()
 		return res, nil
 	}
+	p.mu.Unlock()
+	ao := AcquireOpts{KeyID: o.KeyID, Shared: o.Shared}
 	if p.isRetired(failedID) {
 		// Already failed over, but its replacement is gone (open failed or
 		// expired): open normally, avoiding cooling providers.
 		res.Replaced = true
-		if !reopen {
+		if !o.Reopen {
 			return res, nil
 		}
-		id, prov, err := p.openAvoidingCooling(modelID, durationSec)
+		p.mu.Lock()
+		stamp, err := p.reserveLocked(key, ao, long, long, "")
+		p.mu.Unlock()
 		if err != nil {
 			return res, err
 		}
-		p.store(key, id, prov, durationSec)
-		res.SessionID, res.Provider, res.Opened = id, prov, true
-		return res, nil
+		id, prov, err := p.openAvoidingCooling(modelID, durationSec)
+		p.finishFailoverOpen(key, ao, long, stamp, id, prov, durationSec, err, &res)
+		return res, err
 	}
 
 	// 2. Cool the failed provider.
@@ -442,12 +470,23 @@ func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) 
 	exclude[failedProv] = true
 	bids, err := p.client.RatedBids(modelID)
 	if err != nil {
-		log.Printf("pool: failover %s: rated bids: %v (keeping session)", modelID, err)
+		slog.Warn("pool: failover: rated bids unavailable; keeping session", "model", modelID, "err", err)
 		return res, fmt.Errorf("%w (bids unavailable: %v)", ErrNoAlternate, err)
 	}
 	alts, n := alternates(bids, exclude)
 	if n == 0 {
 		return res, ErrNoAlternate
+	}
+	// A long replacement counts toward the long-session limits like any
+	// long open; the failed session itself is not counted against it.
+	var stamp time.Time
+	if o.Reopen {
+		p.mu.Lock()
+		stamp, err = p.reserveLocked(key, ao, long, long, failedID)
+		p.mu.Unlock()
+		if err != nil {
+			return res, err
+		}
 	}
 
 	// 4. Retire and close the failed session synchronously (bounded), so
@@ -459,28 +498,46 @@ func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) 
 		if err := p.closeBounded(failedID); err != nil {
 			res.CloseFailed = true
 			p.failoverCloseFailed(failedID)
-			log.Printf("pool: failover %s: close session %s: %v (retired; not re-adopted)", modelID, short(failedID), err)
+			slog.Warn("pool: failover: close failed (retired; not re-adopted)", "model", modelID, "session", short(failedID), "err", err)
 		} else {
 			p.notifyClosed(failedID)
 		}
 	} else {
 		res.CloseDeferred = true
 	}
-	if !reopen {
+	if !o.Reopen {
 		// A mid-stream cut: the next open walks the bids without it.
 		p.MarkStreamCut(modelID, failedProv)
 		return res, nil
 	}
 
-	// 5. Open on another provider. 6. Pool it with its provider.
+	// 5. Open on another provider. 6. Pool it with its provider, leased.
 	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, false)
+	p.finishFailoverOpen(key, ao, long, stamp, id, prov, durationSec, err, &res)
 	if err != nil {
 		return res, err
 	}
-	p.store(key, id, prov, durationSec)
-	res.SessionID, res.Provider, res.Opened = id, prov, true
 	log.Printf("pool: failed over model %s from provider %s to session %s (provider %s)", modelID, short(failedProv), short(id), short(prov))
 	return res, nil
+}
+
+// finishFailoverOpen ends the reservation and, when the open worked, pools
+// the replacement and leases it for the caller in one critical section.
+func (p *Pool) finishFailoverOpen(key string, ao AcquireOpts, long bool, stamp time.Time, id, prov string, durationSec int, err error, res *FailoverResult) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unreserveLocked(ao.KeyID, key, long)
+	if err != nil {
+		if long {
+			p.refundLocked(key, ao.KeyID, stamp)
+		}
+		return
+	}
+	now := p.now()
+	p.entries[key] = entry{sessionID: id, expiresAt: now.Add(time.Duration(durationSec)*time.Second - expiryBuffer), provider: prov}
+	st := p.newStateLocked(key, id, now, now.Add(time.Duration(durationSec)*time.Second), ao.KeyID, long)
+	res.Lease = p.leaseLocked(id, st, ao.KeyID)
+	res.SessionID, res.Provider, res.Opened, res.Long = id, prov, true, long
 }
 
 // closeBounded closes a session, giving up waiting after

@@ -163,67 +163,6 @@ func (p *Pool) emitRescan(ev ReconcileEvent) {
 	}
 }
 
-// EnsureResult is returned by EnsureDuration.
-type EnsureResult struct {
-	SessionID   string
-	Opened      bool // true when a new on-chain session was opened
-	DurationSec int
-}
-
-// Ensure returns an open session for the model, opening one if needed.
-func (p *Pool) Ensure(modelID string) (string, error) {
-	res, err := p.EnsureDuration(modelID, 0)
-	if err != nil {
-		return "", err
-	}
-	return res.SessionID, nil
-}
-
-// EnsureDuration returns an open session. durationSec <= 0 uses the pool default.
-// Reuse order: in-memory pool → adopt a still-open on-chain session → open new.
-func (p *Pool) EnsureDuration(modelID string, durationSec int) (EnsureResult, error) {
-	if durationSec <= 0 {
-		durationSec = p.DurationSec()
-	}
-	key := normModel(modelID)
-	p.mu.Lock()
-	if e, ok := p.entries[key]; ok && p.now().Before(e.expiresAt) {
-		p.mu.Unlock()
-		return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, nil
-	}
-	p.mu.Unlock()
-	lock := p.openLock(key)
-
-	p.waitGate()
-	lock.Lock()
-	defer lock.Unlock()
-
-	if res, ok := p.cachedSession(modelID, durationSec); ok {
-		return res, nil
-	}
-
-	// Memory miss (restart, invalidate after a bad prompt, etc.): prefer the
-	// already-staked on-chain session over opening another and double-locking MOR.
-	if err := p.RehydrateForce(); err != nil {
-		log.Printf("pool: rehydrate before open for %s: %v", modelID, err)
-		if p.gated.Load() && !p.stateKnown.Load() {
-			return EnsureResult{}, ErrSessionStateUnknown
-		}
-	}
-	if res, ok := p.cachedSession(modelID, durationSec); ok {
-		log.Printf("pool: adopted on-chain session %s for model %s", short(res.SessionID), modelID)
-		return res, nil
-	}
-
-	sessionID, provider, err := p.openAvoidingCooling(modelID, durationSec)
-	if err != nil {
-		return EnsureResult{}, err
-	}
-	p.store(key, sessionID, provider, durationSec)
-	log.Printf("pool: opened session %s for model %s (duration %ds)", short(sessionID), modelID, durationSec)
-	return EnsureResult{SessionID: sessionID, Opened: true, DurationSec: durationSec}, nil
-}
-
 // openLock returns the per-model open lock.
 func (p *Pool) openLock(key string) *sync.Mutex {
 	p.mu.Lock()
@@ -234,29 +173,6 @@ func (p *Pool) openLock(key string) *sync.Mutex {
 		p.opening[key] = lock
 	}
 	return lock
-}
-
-// store pools a session this pool just opened.
-func (p *Pool) store(key, sessionID, provider string, durationSec int) {
-	p.mu.Lock()
-	now := p.now()
-	p.entries[key] = entry{
-		sessionID: sessionID,
-		expiresAt: now.Add(time.Duration(durationSec)*time.Second - expiryBuffer),
-		provider:  provider,
-	}
-	p.newStateLocked(key, sessionID, now, now.Add(time.Duration(durationSec)*time.Second), "", durationSec > p.DurationSec())
-	p.mu.Unlock()
-}
-
-func (p *Pool) cachedSession(modelID string, durationSec int) (EnsureResult, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	e, ok := p.entries[normModel(modelID)]
-	if !ok || !p.now().Before(e.expiresAt) {
-		return EnsureResult{}, false
-	}
-	return EnsureResult{SessionID: e.sessionID, Opened: false, DurationSec: durationSec}, true
 }
 
 // Invalidate drops the pooled session for a model (e.g. after a failed

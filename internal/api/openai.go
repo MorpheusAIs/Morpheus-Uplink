@@ -72,9 +72,6 @@ func validateInferenceBody(body []byte, requireMessages bool) (model string, err
 func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		keyID := keyIDFrom(r)
-		if keyID == "" {
-			keyID = r.Header.Get("X-Uplink-Key-Id") // set by requireAPIKey alongside the context
-		}
 		if !s.inflight.acquire(keyID) {
 			writeTypedError(w, http.StatusTooManyRequests, "too_many_requests", "too many requests in flight")
 			return
@@ -199,14 +196,17 @@ var errAnswered = errors.New("answered")
 func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
 	keyID, reqModel, modelID, failedID string, durationSec int, fo router.ForwardOptions, firstErr error) (*router.ForwardResult, string, *pool.Lease, error) {
 	class := statusClass(firstErr)
-	fr, ferr := s.pool.Failover(modelID, failedID, durationSec, true)
+	fr, ferr := s.pool.Failover(modelID, failedID, pool.FailoverOpts{KeyID: keyID, Shared: isSharedKey(keyID), DurationSec: durationSec, Reopen: true})
 	if fr.CloseFailed {
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "close_failed")
 	}
 	if ferr != nil {
 		outcome := "reopen_failed"
-		if errors.Is(ferr, pool.ErrNoAlternate) {
+		switch {
+		case errors.Is(ferr, pool.ErrNoAlternate):
 			outcome = "no_alternate"
+		case errors.Is(ferr, pool.ErrLongSessionLimit):
+			outcome = "long_session_limit" // the long replacement would pass a limit
 		}
 		log.Printf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
@@ -215,8 +215,12 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 	}
 	if fr.Opened {
 		s.store.TrackSessionOpen(fr.SessionID, keyID, modelID)
+		if fr.Long {
+			s.auditSystem("session_open_long", keyID, "ok",
+				fmt.Sprintf("session_open_long ok %s %ds", s.modelLabel(modelID), fr.DurationSec), false)
+		}
 	}
-	lease := s.pool.LeaseSession(fr.SessionID, keyID)
+	lease := fr.Lease // taken with the replacement, in one critical section
 	if lease == nil {
 		// The replacement is already closing (released or swept).
 		relayRouterError(w, firstErr)
@@ -275,7 +279,7 @@ func (s *Server) afterStreamProviderError(reqModel, modelID, sessionID string, d
 		class = "5xx"
 	}
 	go func() {
-		fr, err := s.pool.Failover(modelID, sessionID, durationSec, false)
+		fr, err := s.pool.Failover(modelID, sessionID, pool.FailoverOpts{DurationSec: durationSec})
 		if fr.Replaced {
 			return
 		}

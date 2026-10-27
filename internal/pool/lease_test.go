@@ -329,7 +329,8 @@ func TestS5FailoverWithInflightRetires(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)
 	other, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k2"})
-	fr, err := p.Failover(modelA, r.SessionID, 600, true)
+	fr, err := p.Failover(modelA, r.SessionID, FailoverOpts{KeyID: "k1", DurationSec: 600, Reopen: true})
+	defer fr.Lease.Done()
 	if err != nil && !errors.Is(err, ErrNoAlternate) {
 		t.Fatalf("failover: %v", err)
 	}
@@ -452,7 +453,7 @@ func TestS5DrainingRetiredCountsGlobalOnly(t *testing.T) {
 	lr, p := newLeaseRouter(t, c)
 	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 1, Global: 2, OpensPerHour: 10})
 	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-	if _, err := p.Failover(modelA, r.SessionID, 600, false); err != nil && !errors.Is(err, ErrNoAlternate) {
+	if _, err := p.Failover(modelA, r.SessionID, FailoverOpts{DurationSec: 600}); err != nil && !errors.Is(err, ErrNoAlternate) {
 		t.Fatal(err)
 	}
 	// k1's long session is retired and draining (l still in flight).
@@ -517,6 +518,33 @@ func TestS5DefaultCallsOpenOneSession(t *testing.T) {
 	}
 	if o, _ := lr.snapshot(); len(o) != 1 {
 		t.Fatalf("opens %d", len(o))
+	}
+}
+
+// Josh N-1: the same calls spread over more than 9 minutes (past the
+// 510 s usable life of a 600 s session) give at most one replacement, and
+// at most one open counted in the hourly log.
+func TestS5DefaultCallsOverNineMinutes(t *testing.T) {
+	c := newFakeClock()
+	lr, p := newLeaseRouter(t, c)
+	start := c.Now()
+	for i := 0; i < 10; i++ {
+		if i > 0 {
+			c.Advance(61 * time.Second) // last call at 549 s
+		}
+		l, _ := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
+		l.Done()
+		p.SweepIdle(5 * time.Minute)
+	}
+	if span := c.Now().Sub(start); span <= 9*time.Minute {
+		t.Fatalf("span %v", span)
+	}
+	o, _ := lr.snapshot()
+	p.mu.Lock()
+	counted := len(p.opensLog["k1|"+normModel(modelA)])
+	p.mu.Unlock()
+	if len(o) > 2 || counted > 1 {
+		t.Fatalf("opens %d counted %d", len(o), counted)
 	}
 }
 
@@ -621,5 +649,98 @@ func TestCapAppliesToNoHeaderOpen(t *testing.T) {
 	l.Done()
 	if r.DurationSec != 1800 {
 		t.Fatalf("explicit duration open %d, want 1800", r.DurationSec)
+	}
+}
+
+// acquireDone takes and immediately ends a lease (the reuse-order tests
+// only need which session Acquire picked).
+func acquireDone(p *Pool, modelID string, dur int) (AcquireResult, error) {
+	l, res, err := p.Acquire(modelID, AcquireOpts{DurationSec: dur})
+	l.Done()
+	return res, err
+}
+
+// Gary SHOULD-2: the failover replacement comes back leased, taken in the
+// critical section that pooled it (no window for the sweep to close it).
+func TestS5FailoverReplacementLeased(t *testing.T) {
+	c := newFakeClock()
+	_, p := newLeaseRouter(t, c)
+	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	var leasedUnderLock []string
+	p.SetTestHookLease(func(id string, inflight int) { leasedUnderLock = append(leasedUnderLock, id) })
+	fr, err := p.Failover(modelA, r.SessionID, FailoverOpts{KeyID: "k1", Reopen: true})
+	if err != nil || !fr.Opened || fr.Lease == nil || fr.Lease.SessionID != fr.SessionID {
+		t.Fatalf("failover %+v %v", fr, err)
+	}
+	p.mu.Lock()
+	inflight, holder := p.sess[fr.SessionID].inflight, p.sess[fr.SessionID].holders["k1"]
+	p.mu.Unlock()
+	if inflight != 1 || holder.IsZero() || len(leasedUnderLock) != 1 || leasedUnderLock[0] != fr.SessionID {
+		t.Fatalf("replacement not leased at open: inflight=%d hooks=%v", inflight, leasedUnderLock)
+	}
+	fr.Lease.Done()
+	// A second failure on the old id finds the replacement and leases it too.
+	fr2, err := p.Failover(modelA, r.SessionID, FailoverOpts{KeyID: "k2", Reopen: true})
+	if err != nil || !fr2.Replaced || fr2.Lease == nil || fr2.SessionID != fr.SessionID {
+		t.Fatalf("second failover %+v %v", fr2, err)
+	}
+	fr2.Lease.Done()
+}
+
+// Gary SHOULD-4 / Josh S-4: a failover reopen at a long duration counts
+// toward the long-session limits (the failed session is not counted
+// against its own replacement), and a refused one closes nothing.
+func TestS5FailoverLongCountsLimits(t *testing.T) {
+	c := newFakeClock()
+	lr, p := newLeaseRouter(t, c)
+	p.SetLimits(Limits{PerKeyModel: 1, PerKey: 2, Global: 2, OpensPerHour: 10})
+	l1, r1 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
+	l1.Done()
+	// Replacing its own long session is allowed and stays long.
+	fr, err := p.Failover(modelA, r1.SessionID, FailoverOpts{KeyID: "k1", DurationSec: 1200, Reopen: true})
+	if err != nil || !fr.Long || fr.Lease == nil {
+		t.Fatalf("own long failover %+v %v", fr, err)
+	}
+	fr.Lease.Done()
+	p.mu.Lock()
+	st := p.sess[fr.SessionID]
+	long, opener := st.long, st.opener
+	p.mu.Unlock()
+	if !long || opener != "k1" {
+		t.Fatalf("replacement long=%v opener=%q", long, opener)
+	}
+	// k2 fills the global limit; a long failover for k3 is then refused
+	// before anything is closed.
+	l2, _ := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k2", DurationSec: 1200})
+	defer l2.Done()
+	l3, r3 := mustAcquire(t, p, modelC, AcquireOpts{KeyID: "k3"})
+	l3.Done()
+	_, before := lr.snapshot()
+	fr3, err := p.Failover(modelC, r3.SessionID, FailoverOpts{KeyID: "k3", DurationSec: 1200, Reopen: true})
+	if !errors.Is(err, ErrLongSessionLimit) || fr3.Lease != nil || fr3.Opened {
+		t.Fatalf("long failover over the limit: %+v %v", fr3, err)
+	}
+	if _, after := lr.snapshot(); len(after) != len(before) {
+		t.Fatalf("refused failover closed a session: %v", after)
+	}
+	// The same failover at the default duration is not long and proceeds.
+	fr4, err := p.Failover(modelC, r3.SessionID, FailoverOpts{KeyID: "k3", Reopen: true})
+	if err != nil || fr4.Long || fr4.Lease == nil {
+		t.Fatalf("default failover %+v %v", fr4, err)
+	}
+	fr4.Lease.Done()
+	// A failover never opens above the duration max.
+	p.SetDurationMax(1800)
+	l5, r5 := mustAcquire(t, p, modelD, AcquireOpts{KeyID: "k4"})
+	l5.Done()
+	p.SetLimits(Limits{PerKeyModel: 5, PerKey: 5, Global: 5, OpensPerHour: 10})
+	fr5, err := p.Failover(modelD, r5.SessionID, FailoverOpts{KeyID: "k4", DurationSec: 7200, Reopen: true})
+	if err != nil || fr5.DurationSec != 1800 {
+		t.Fatalf("capped failover %+v %v", fr5, err)
+	}
+	fr5.Lease.Done()
+	if opens, _ := lr.snapshot(); opens[len(opens)-1] != 1800 {
+		t.Fatalf("opened at %d", opens[len(opens)-1])
 	}
 }

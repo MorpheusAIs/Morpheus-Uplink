@@ -1826,6 +1826,8 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   address, the status class (`402`, `429`, `5xx`, `stream_cut` for a bare
   upstream cut, ...), and the outcome:
   `retried_ok`, `retry_failed`, `no_alternate`, `reopen_failed`,
+  `long_session_limit` (a long replacement counts toward the long-session
+  limits like any long open, and was refused),
   `close_failed` (an extra event when the close did not land), or
   `stream_retired`. No request or response bodies, no keys.
 

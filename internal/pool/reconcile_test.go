@@ -181,7 +181,7 @@ func TestStartupReconcileAdoptsAndClosesThenNoDoubleOpen(t *testing.T) {
 	if f.closed["0xa-long"] != 0 || f.closed["0xx-live"] != 0 {
 		t.Fatal("adoptable or unconfigured session was closed")
 	}
-	res, err := p.EnsureDuration(modelA, 600)
+	res, err := acquireDone(p, modelA, 600)
 	if err != nil || res.Opened || res.SessionID != "0xa-long" {
 		t.Fatalf("ensure %+v %v", res, err)
 	}
@@ -202,9 +202,9 @@ func TestGateBlocksOpenUntilReconcileDone(t *testing.T) {
 	ts := f.server(t)
 	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.Gate()
-	done := make(chan EnsureResult, 1)
+	done := make(chan AcquireResult, 1)
 	go func() {
-		r, _ := p.EnsureDuration(modelA, 600)
+		r, _ := acquireDone(p, modelA, 600)
 		done <- r
 	}()
 	select {
@@ -232,7 +232,7 @@ func TestListFailureRefusesOpenUntilStateKnown(t *testing.T) {
 		Backoff: 5 * time.Millisecond, BackoffMax: 10 * time.Millisecond, GateFor: 40 * time.Millisecond,
 		RetryEvery: 10 * time.Millisecond, OnGiveUp: func(error) { gaveUp.Store(true) },
 	})
-	_, err := p.EnsureDuration(modelA, 600)
+	_, err := acquireDone(p, modelA, 600)
 	if err != ErrSessionStateUnknown {
 		t.Fatalf("err = %v, want ErrSessionStateUnknown", err)
 	}
@@ -245,7 +245,7 @@ func TestListFailureRefusesOpenUntilStateKnown(t *testing.T) {
 	for !p.stateKnown.Load() && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	r, err := p.EnsureDuration(modelA, 600)
+	r, err := acquireDone(p, modelA, 600)
 	if err != nil || !r.Opened || f.opened.Load() != 1 {
 		t.Fatalf("after recovery %+v %v opened=%d", r, err, f.opened.Load())
 	}
@@ -338,7 +338,7 @@ func TestReconcileCaseMismatchedCatalogClosesNoLiveSession(t *testing.T) {
 		t.Fatalf("snapshot %+v", p.Snapshot())
 	}
 	// The catalog id (lowercase) must find the adopted session: no new open.
-	res, err := p.EnsureDuration(modelA, 600)
+	res, err := acquireDone(p, modelA, 600)
 	if err != nil || res.Opened || res.SessionID != "0xlive0" || f.opened.Load() != 0 {
 		t.Fatalf("case-mismatched adopt not reused: %+v err=%v opened=%d", res, err, f.opened.Load())
 	}
@@ -357,7 +357,7 @@ func TestRescanKeysByLowercaseModel(t *testing.T) {
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
-	res, err := p.EnsureDuration(modelA, 600)
+	res, err := acquireDone(p, modelA, 600)
 	if err != nil || res.Opened || f.opened.Load() != 0 {
 		t.Fatalf("rescan adopt not found by lowercase id: %+v %v opened=%d", res, err, f.opened.Load())
 	}
@@ -519,7 +519,7 @@ func TestReconcilePartialListFailureClosesNothing(t *testing.T) {
 		Backoff: 5 * time.Millisecond, BackoffMax: 10 * time.Millisecond, GateFor: 40 * time.Millisecond,
 		RetryEvery: 10 * time.Millisecond, OnGiveUp: func(error) { gaveUp.Store(true) },
 	})
-	if _, err := p.EnsureDuration(modelA, 600); err != ErrSessionStateUnknown {
+	if _, err := acquireDone(p, modelA, 600); err != ErrSessionStateUnknown {
 		t.Fatalf("err = %v, want ErrSessionStateUnknown", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -576,7 +576,7 @@ func TestReconcileGateReleasedBeforeSlowCloses(t *testing.T) {
 		close(done)
 	}()
 	res := make(chan error, 1)
-	go func() { _, err := p.EnsureDuration(modelA, 600); res <- err }()
+	go func() { _, err := acquireDone(p, modelA, 600); res <- err }()
 	select {
 	case err := <-res:
 		if err != nil || f.opened.Load() != 1 {
