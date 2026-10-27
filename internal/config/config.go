@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -73,6 +74,11 @@ type Config struct {
 	// (audit-security.jsonl), 1…3650, default 90. The failure/ops stream
 	// keeps a fixed 30 days.
 	AuditRetentionDays int
+	// UPLINK_PROVIDER_EXCLUDE: providers never opened for a model,
+	// "<model>=<provider>[,<provider>]…", entries separated by ";". Model
+	// is a registration id or a catalog name; providers are 0x addresses.
+	// Validated at boot: a bad entry is warned and ignored.
+	ProviderExclude map[string][]string
 }
 
 func FromEnv() (*Config, error) {
@@ -101,6 +107,7 @@ func FromEnv() (*Config, error) {
 		TrustedProxyCIDRs:    splitCSV(os.Getenv("TRUSTED_PROXY_CIDR")),
 		Reset2FA:             getenvBool("UPLINK_RESET_2FA", false),
 		AuditRetentionDays:   getenvRangeInt("AUDIT_RETENTION_DAYS", 90, 1, 3650),
+		ProviderExclude:      ParseProviderExclude(os.Getenv("UPLINK_PROVIDER_EXCLUDE")),
 	}
 
 	// Security switches fall back to their safe value when malformed.
@@ -198,6 +205,44 @@ func getenvNonNegInt(key string, def int) int {
 
 // getenvRangeInt reads a whole number in [lo, hi]. Unset: def. Malformed
 // or out of range: a warning (name only) and def.
+var (
+	reProviderAddr = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	reModelID      = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
+	reModelName    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$`)
+)
+
+// ParseProviderExclude parses UPLINK_PROVIDER_EXCLUDE. Entries are
+// "<model>=<provider>[,<provider>]…" separated by ";". An entry with a bad
+// model or provider is logged (by position, not value) and ignored;
+// a bad provider drops only that provider.
+func ParseProviderExclude(v string) map[string][]string {
+	out := map[string][]string{}
+	if strings.TrimSpace(v) == "" {
+		return out
+	}
+	for i, ent := range strings.Split(v, ";") {
+		ent = strings.TrimSpace(ent)
+		if ent == "" {
+			continue
+		}
+		model, provs, ok := strings.Cut(ent, "=")
+		model = strings.ToLower(strings.TrimSpace(model))
+		if !ok || (!reModelID.MatchString(model) && (strings.HasPrefix(model, "0x") || !reModelName.MatchString(model))) {
+			log.Printf("config: UPLINK_PROVIDER_EXCLUDE entry %d is not <model>=<provider>[,<provider>]; ignored", i+1)
+			continue
+		}
+		for j, pr := range strings.Split(provs, ",") {
+			pr = strings.ToLower(strings.TrimSpace(pr))
+			if !reProviderAddr.MatchString(pr) {
+				log.Printf("config: UPLINK_PROVIDER_EXCLUDE entry %d provider %d is not a 0x address; ignored", i+1, j+1)
+				continue
+			}
+			out[model] = append(out[model], pr)
+		}
+	}
+	return out
+}
+
 func getenvRangeInt(key string, def, lo, hi int) int {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {

@@ -51,6 +51,15 @@ var noFailoverPatterns = []string{
 	"request cancelled while waiting in queue",
 }
 
+// streamCutPatterns are upstream stream cuts, matched only inside a
+// providerModelError body the router returned.
+var streamCutPatterns = []string{
+	"error reading stream",
+	"unexpected eof",
+	"connection reset",
+	"broken pipe",
+}
+
 // classifyForwardError decides what to do with a failed probe Forward.
 // The order matters (see docs/06-developers.md, Provider failover).
 func classifyForwardError(err error) forwardDecision {
@@ -69,6 +78,15 @@ func classifyForwardError(err error) forwardDecision {
 		}
 	}
 	pme := strings.Contains(body, "providermodelerror")
+	if pme {
+		// The provider's stream to the router broke before the first byte
+		// (text the upstream reported, never our own socket errors) [F1].
+		for _, p := range streamCutPatterns {
+			if strings.Contains(body, p) {
+				return decFailover
+			}
+		}
+	}
 	switch c := se.Code; {
 	case pme && (c == 402 || c == 401 || c == 403 || c == 404):
 		return decFailover

@@ -73,10 +73,11 @@ print(client.chat.completions.create(
   provider is available), in the OpenAI error shape (`error.message`,
   `error.type`, `error.code`). `502` means Uplink could not reach its
   router.
-- Streaming: if the provider fails after part of the answer was sent, the
-  stream ends with one `data: {"error":{...,"type":"provider_error"}}`
-  event. Send the request again; the next one goes to another provider
-  (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
+- Streaming: if the provider fails or its stream breaks off (no
+  `data: [DONE]`) after part of the answer was sent, the stream ends with
+  one `data: {"error":{...,"type":"provider_error"}}` event. Send the
+  request again; the next one goes to another provider when the model has
+  one. Closing your own connection is never counted against the provider.
 - See [Provider failover](06-developers.md#provider-failover).
 
 </details>

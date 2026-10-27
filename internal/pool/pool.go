@@ -42,6 +42,13 @@ type Pool struct {
 	cooldown time.Duration        // 0: no memory across requests
 	cooling  map[string]time.Time // normModel|provider -> until
 	retired  map[string]time.Time // session id -> on-chain end (never re-adopted)
+	// cutNext: a provider that cut a stream; the model's next open walks
+	// the bids excluding it, whatever the cool-down (one-shot).
+	cutNext map[string]string // normModel -> provider
+	// exclude: UPLINK_PROVIDER_EXCLUDE, model id or lowercased name ->
+	// providers never opened for it. namer maps an id to its name.
+	exclude map[string]map[string]bool
+	namer   func(modelID string) string
 
 	onClosed OnSessionClosed
 
@@ -88,6 +95,7 @@ func New(client *router.Client, durationSec int) *Pool {
 		cooldown: DefaultProviderCooldown,
 		cooling:  map[string]time.Time{},
 		retired:  map[string]time.Time{},
+		cutNext:  map[string]string{},
 	}
 }
 
@@ -334,7 +342,7 @@ func (p *Pool) rehydrate(force bool) error {
 		if p.isClosing(s.ID) {
 			continue // the boot reconcile is closing it
 		}
-		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider)
+		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider) || p.isExcluded(s.ModelAgentID, s.Provider)
 		if !usable {
 			// Past end (or inside buffer): ask router to close so unused
 			// returns and used moves to the daylock queue.

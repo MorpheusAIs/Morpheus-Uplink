@@ -84,6 +84,89 @@ func (p *Pool) IsCooling(modelID, provider string) bool {
 	return ok && time.Now().Before(until)
 }
 
+// SetProviderExclude installs the configured exclusions
+// (UPLINK_PROVIDER_EXCLUDE): model id or name -> providers. namer resolves
+// a model id to its catalog name so name-keyed entries apply.
+func (p *Pool) SetProviderExclude(m map[string][]string, namer func(string) string) {
+	ex := map[string]map[string]bool{}
+	for model, provs := range m {
+		k := strings.ToLower(strings.TrimSpace(model))
+		if ex[k] == nil {
+			ex[k] = map[string]bool{}
+		}
+		for _, pr := range provs {
+			ex[k][strings.ToLower(strings.TrimSpace(pr))] = true
+		}
+	}
+	p.fmu.Lock()
+	p.exclude, p.namer = ex, namer
+	p.fmu.Unlock()
+}
+
+// excludedProviders is the configured exclusion set for a model.
+func (p *Pool) excludedProviders(modelID string) map[string]bool {
+	p.fmu.Lock()
+	ex, namer := p.exclude, p.namer
+	p.fmu.Unlock()
+	out := map[string]bool{}
+	if len(ex) == 0 {
+		return out
+	}
+	keys := []string{normModel(modelID)}
+	if namer != nil {
+		if n := strings.ToLower(strings.TrimSpace(namer(modelID))); n != "" {
+			keys = append(keys, n)
+		}
+	}
+	for _, k := range keys {
+		for pr := range ex[k] {
+			out[pr] = true
+		}
+	}
+	return out
+}
+
+func (p *Pool) isExcluded(modelID, provider string) bool {
+	return provider != "" && p.excludedProviders(modelID)[strings.ToLower(strings.TrimSpace(provider))]
+}
+
+// MarkStreamCut records that provider cut a stream for the model: the
+// model's next open walks the bids without it, even when the cool-down is
+// off or this is the only provider cooling.
+func (p *Pool) MarkStreamCut(modelID, provider string) {
+	if strings.TrimSpace(provider) == "" {
+		return
+	}
+	p.fmu.Lock()
+	p.cutNext[normModel(modelID)] = strings.ToLower(strings.TrimSpace(provider))
+	p.fmu.Unlock()
+}
+
+func (p *Pool) pendingCut(modelID string) string {
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	return p.cutNext[normModel(modelID)]
+}
+
+func (p *Pool) clearCut(modelID string) {
+	p.fmu.Lock()
+	delete(p.cutNext, normModel(modelID))
+	p.fmu.Unlock()
+}
+
+// avoidSet is every provider a new open for the model avoids: cooling,
+// configured exclusions, and a pending stream cut.
+func (p *Pool) avoidSet(modelID string) map[string]bool {
+	out := p.coolingProviders(modelID)
+	for pr := range p.excludedProviders(modelID) {
+		out[pr] = true
+	}
+	if c := p.pendingCut(modelID); c != "" {
+		out[c] = true
+	}
+	return out
+}
+
 // coolingProviders lists the model's providers in cool-down.
 func (p *Pool) coolingProviders(modelID string) map[string]bool {
 	prefix := normModel(modelID) + "|"
@@ -170,8 +253,11 @@ func alternates(bids []router.RatedBid, exclude map[string]bool) ([]router.Rated
 // exclusion uses the router's omitProvider on the model open; more than
 // one walks the filtered rated bids by bid (at most MaxBidAttempts opens,
 // one per provider). A failed open puts that provider in cool-down.
-func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string]bool, alts []router.RatedBid) (string, string, error) {
-	if len(exclude) == 1 {
+//
+// byBid forces the bid walk even for one exclusion (the open after a
+// stream cut, [F3]).
+func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string]bool, alts []router.RatedBid, byBid bool) (string, string, error) {
+	if len(exclude) == 1 && !byBid {
 		var omit string
 		for k := range exclude {
 			omit = k
@@ -224,10 +310,11 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		prov, _ := p.sessionProvider(modelID, id)
 		return id, prov, nil
 	}
-	exclude := p.coolingProviders(modelID)
+	exclude := p.avoidSet(modelID)
 	if len(exclude) == 0 {
 		return plain()
 	}
+	cut := p.pendingCut(modelID)
 	bids, err := p.client.RatedBids(modelID)
 	if err != nil {
 		log.Printf("pool: rated bids for %s: %v (opening without exclusions)", modelID, err)
@@ -238,10 +325,13 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		log.Printf("pool: every provider of model %s is cooling; opening without exclusions", modelID)
 		return plain()
 	}
-	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts)
+	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, cut != "")
 	if err != nil {
 		log.Printf("pool: open avoiding cooling providers for %s: %v (opening without exclusions)", modelID, err)
 		return plain()
+	}
+	if cut != "" {
+		p.clearCut(modelID)
 	}
 	return id, prov, nil
 }
@@ -310,7 +400,7 @@ func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) 
 
 	// 3. Guardrail: count distinct providers outside the exclusions before
 	// closing anything.
-	exclude := p.coolingProviders(modelID)
+	exclude := p.avoidSet(modelID)
 	exclude[failedProv] = true
 	bids, err := p.client.RatedBids(modelID)
 	if err != nil {
@@ -337,11 +427,13 @@ func (p *Pool) Failover(modelID, failedID string, durationSec int, reopen bool) 
 		p.notifyClosed(failedID)
 	}
 	if !reopen {
+		// A mid-stream cut: the next open walks the bids without it.
+		p.MarkStreamCut(modelID, failedProv)
 		return res, nil
 	}
 
 	// 5. Open on another provider. 6. Pool it with its provider.
-	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts)
+	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, false)
 	if err != nil {
 		return res, err
 	}

@@ -1,0 +1,308 @@
+package api
+
+import (
+	"bufio"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/absgrafx/morpheus-uplink/internal/config"
+	"github.com/absgrafx/morpheus-uplink/internal/router"
+)
+
+const s4Chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n"
+
+// streamThenEOF sends one chunk and ends the body with no [DONE] and no
+// finish_reason: an upstream cut.
+func streamThenEOF(n int, w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(200)
+	_, _ = w.Write([]byte(s4Chunk))
+	w.(http.Flusher).Flush()
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// S4: an upstream EOF without [DONE] or finish_reason cools A and retires
+// its session; the client gets the SSE error event; the next open walks
+// the bids (by bid, not omitProvider) and lands on B.
+func TestS4EOFWithoutDoneCoolsAndRetires(t *testing.T) {
+	for _, cool := range []int{600, 0} {
+		m := newFakeMarket(t, provA, provB)
+		m.behave[provA] = streamThenEOF
+		e := newFailoverEnv(t, m, func(c *config.Config) { c.ProviderCooldownSec = cool })
+		code, body := e.chat(t, true)
+		if code != 200 || !strings.Contains(body, `"Hel"`) || !strings.Contains(body, `data: {"error":`) {
+			t.Fatalf("cool %d: got %d %q", cool, code, body)
+		}
+		waitFor(t, "retire", func() bool { _, c := m.snapshot(); return len(c) == 1 && len(e.failoverAudits()) == 1 })
+		if cool > 0 && !e.srv.pool.IsCooling(testModelID, provA) {
+			t.Fatal("A not cooling")
+		}
+		if a := e.failoverAudits(); a[0] != "stream_retired" {
+			t.Fatalf("audits %v", a)
+		}
+		if code, _ := e.chat(t, false); code != 200 {
+			t.Fatalf("next %d", code)
+		}
+		opens, _ := m.snapshot()
+		if len(opens) != 2 || opens[1].provider != provB || opens[1].bid != bidOf(provB) {
+			t.Fatalf("cool %d: next open %+v, want a by-bid open on B", cool, opens)
+		}
+	}
+}
+
+// S4: a 400 providerModelError "error reading stream" before the first
+// byte fails over once.
+func TestS4ErrorReadingStreamBeforeFirstByteFailsOver(t *testing.T) {
+	m := newFakeMarket(t, provA, provB)
+	m.behave[provA] = func(n int, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"providerModelError":{"error":{"message":"error reading stream: unexpected EOF"}},"statusCode":400}`))
+	}
+	e := newFailoverEnv(t, m, nil)
+	if code, body := e.chat(t, false); code != 200 || !strings.Contains(body, `"hi"`) {
+		t.Fatalf("got %d %q", code, body)
+	}
+	opens, closes := m.snapshot()
+	if len(opens) != 2 || opens[1].provider != provB || len(closes) != 1 {
+		t.Fatalf("opens %+v closes %v", opens, closes)
+	}
+	if a := e.failoverAudits(); len(a) != 1 || a[0] != "retried_ok" {
+		t.Fatalf("audits %v", a)
+	}
+}
+
+// S4: the cut strings fail over only inside a providerModelError body.
+func TestS4CutPatternsOnlyInProviderBody(t *testing.T) {
+	for _, p := range []string{"error reading stream", "unexpected EOF", "connection reset by peer", "broken pipe"} {
+		pme := &router.StatusError{Code: 400, Body: `{"providerModelError":{"error":{"message":"` + p + `"}}}`}
+		if d := classifyForwardError(pme); d != decFailover {
+			t.Fatalf("%q in providerModelError: %v", p, d)
+		}
+		plain := &router.StatusError{Code: 400, Body: `{"error":"` + p + `"}`}
+		if d := classifyForwardError(plain); d != decRelay {
+			t.Fatalf("%q outside providerModelError: %v", p, d)
+		}
+	}
+}
+
+// S4: normal streams ([DONE], or a finish_reason) do not cool.
+func TestS4CompleteStreamDoesNotCool(t *testing.T) {
+	for name, tail := range map[string]string{
+		"done":   "data: [DONE]\n\n",
+		"finish": "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+	} {
+		m := newFakeMarket(t, provA, provB)
+		m.behave[provA] = func(n int, w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(s4Chunk + tail))
+		}
+		e := newFailoverEnv(t, m, nil)
+		code, body := e.chat(t, true)
+		if code != 200 || strings.Contains(body, `"error"`) {
+			t.Fatalf("%s: %d %q", name, code, body)
+		}
+		assertNotCooled(t, e, m)
+	}
+}
+
+func assertNotCooled(t *testing.T, e *failoverEnv, m *fakeMarket) {
+	t.Helper()
+	time.Sleep(150 * time.Millisecond) // a background failover would have started
+	_, closes := m.snapshot()
+	if e.srv.pool.IsCooling(testModelID, provA) || len(closes) != 0 || len(e.failoverAudits()) != 0 {
+		t.Fatalf("cooled or retired: cooling=%v closes=%v audits=%v",
+			e.srv.pool.IsCooling(testModelID, provA), closes, e.failoverAudits())
+	}
+	if e.pooled() == "" {
+		t.Fatal("session left the pool")
+	}
+	// The next open is not steered away either: the pooled session is reused.
+	if code, _ := e.chat(t, false); code != 200 {
+		t.Fatalf("next %d", code)
+	}
+	if opens, _ := m.snapshot(); len(opens) != 1 {
+		t.Fatalf("reopened: %+v", opens)
+	}
+}
+
+// blockingUpstream sends one chunk, then waits for the request to be
+// cancelled and ends without [DONE] (which would be a cut if it counted).
+func blockingUpstream(seen chan<- struct{}) func(int, http.ResponseWriter, *http.Request) {
+	return func(n int, w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(s4Chunk))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+			close(seen)
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// S4 never-cools 1: the client closes its socket mid-stream.
+func TestS4ClientClosesSocketDoesNotCool(t *testing.T) {
+	m := newFakeMarket(t, provA, provB)
+	seen := make(chan struct{})
+	m.behaveReq[provA] = blockingUpstream(seen)
+	e := newFailoverEnv(t, m, nil)
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+e.key)
+	req.Header.Set("Content-Type", "application/json")
+	tr := &http.Transport{}
+	resp, err := (&http.Client{Transport: tr}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, _ := bufio.NewReader(resp.Body).ReadString('\n')
+	if !strings.Contains(line, "Hel") {
+		t.Fatalf("first line %q", line)
+	}
+	resp.Body.Close()
+	tr.CloseIdleConnections()
+	select {
+	case <-seen: // the upstream request was cancelled with ours
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream request not cancelled after the client hung up")
+	}
+	m.mu.Lock()
+	m.behaveReq = map[string]func(int, http.ResponseWriter, *http.Request){}
+	m.mu.Unlock()
+	assertNotCooled(t, e, m)
+}
+
+// failWriter fails every write after the first with err, optionally
+// cancelling the request context on the first write instead.
+type failWriter struct {
+	mu      sync.Mutex
+	h       http.Header
+	writes  int
+	err     error
+	onWrite func()
+}
+
+func (f *failWriter) Header() http.Header { return f.h }
+func (f *failWriter) WriteHeader(int)     {}
+func (f *failWriter) Flush()              {}
+func (f *failWriter) Write(b []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writes++
+	if f.writes == 1 {
+		if f.onWrite != nil {
+			f.onWrite()
+		}
+		return len(b), nil
+	}
+	if f.err != nil {
+		return 0, f.err
+	}
+	return len(b), nil
+}
+
+// twoChunksThenEOF sends two chunks and an EOF without [DONE].
+func twoChunksThenEOF(n int, w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(200)
+	_, _ = w.Write([]byte(s4Chunk))
+	w.(http.Flusher).Flush()
+	time.Sleep(30 * time.Millisecond)
+	_, _ = w.Write([]byte(s4Chunk))
+	w.(http.Flusher).Flush()
+}
+
+func serveStream(t *testing.T, e *failoverEnv, ctx context.Context, w http.ResponseWriter) {
+	t.Helper()
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+e.key)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:5000"
+	e.srv.Handler().ServeHTTP(w, req)
+}
+
+// S4 never-cools 2 and 3: a write to our client fails with broken pipe or
+// connection reset (and the upstream then also ends without [DONE]).
+func TestS4ClientWriteErrorDoesNotCool(t *testing.T) {
+	for _, werr := range []error{syscall.EPIPE, syscall.ECONNRESET} {
+		m := newFakeMarket(t, provA, provB)
+		m.behave[provA] = twoChunksThenEOF
+		e := newFailoverEnv(t, m, nil)
+		fw := &failWriter{h: http.Header{}, err: werr}
+		serveStream(t, e, context.Background(), fw)
+		if fw.writes < 2 {
+			t.Fatalf("%v: writes %d", werr, fw.writes)
+		}
+		m.behave[provA] = nil
+		assertNotCooled(t, e, m)
+	}
+}
+
+// S4 never-cools 4, 5 and 6: the request context is cancelled, or one of
+// Uplink's own timers (total, idle) ends the call mid-stream.
+func TestS4OwnCancelAndTimeoutsDoNotCool(t *testing.T) {
+	for name, cause := range map[string]error{
+		"canceled":      context.Canceled,
+		"total_timeout": router.ErrTotalTimeout,
+		"idle_timeout":  router.ErrIdleTimeout,
+	} {
+		m := newFakeMarket(t, provA, provB)
+		seen := make(chan struct{})
+		m.behaveReq[provA] = blockingUpstream(seen)
+		e := newFailoverEnv(t, m, nil)
+		ctx, cancel := context.WithCancelCause(context.Background())
+		fw := &failWriter{h: http.Header{}, onWrite: func() { cancel(cause) }}
+		serveStream(t, e, ctx, fw)
+		select {
+		case <-seen:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s: upstream not cancelled", name)
+		}
+		m.mu.Lock()
+		m.behaveReq = map[string]func(int, http.ResponseWriter, *http.Request){}
+		m.mu.Unlock()
+		assertNotCooled(t, e, m)
+	}
+}
+
+// S4: UPLINK_PROVIDER_EXCLUDE keeps opens off a provider, by id or name;
+// bad entries are ignored.
+func TestS4ProviderExcludeConfig(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	got := config.ParseProviderExclude("test-model=" + a40 + ",nope ; " + testModelID + "=" + b40 + ";bad;0x12=" + a40 + ";=" + a40)
+	if len(got) != 2 || len(got["test-model"]) != 1 || got["test-model"][0] != a40 || got[testModelID][0] != b40 {
+		t.Fatalf("parsed %v", got)
+	}
+	for _, key := range []string{"test-model", testModelID} {
+		m := newFakeMarket(t, a40, b40)
+		e := newFailoverEnv(t, m, nil)
+		e.srv.pool.SetProviderExclude(map[string][]string{key: {a40}}, e.srv.catalog.NameByID)
+		_, _ = e.srv.catalog.Resolve("test-model") // load the catalog for the name lookup
+		if code, _ := e.chat(t, false); code != 200 {
+			t.Fatalf("%s: chat %d", key, code)
+		}
+		opens, _ := m.snapshot()
+		if len(opens) != 1 || opens[0].provider != b40 {
+			t.Fatalf("%s: opens %+v", key, opens)
+		}
+	}
+}

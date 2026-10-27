@@ -134,6 +134,7 @@ type fakeMarket struct {
 	mu          sync.Mutex
 	providers   []string
 	behave      map[string]fakeProvider
+	behaveReq   map[string]func(n int, w http.ResponseWriter, r *http.Request) // sees the request (its context)
 	prompts     map[string]int
 	sessions    map[string]*fakeSess
 	opens       []openRec
@@ -144,7 +145,7 @@ type fakeMarket struct {
 
 func newFakeMarket(t *testing.T, providers ...string) *fakeMarket {
 	return &fakeMarket{t: t, providers: providers, behave: map[string]fakeProvider{},
-		prompts: map[string]int{}, sessions: map[string]*fakeSess{}}
+		behaveReq: map[string]func(int, http.ResponseWriter, *http.Request){}, prompts: map[string]int{}, sessions: map[string]*fakeSess{}}
 }
 
 func bidOf(p string) string { return "0xbid" + strings.TrimPrefix(p, "0x") }
@@ -249,7 +250,12 @@ func (m *fakeMarket) server() *httptest.Server {
 		m.prompts[s.provider]++
 		n := m.prompts[s.provider]
 		f := m.behave[s.provider]
+		fr := m.behaveReq[s.provider]
 		m.mu.Unlock()
+		if fr != nil {
+			fr(n, w, r)
+			return
+		}
 		if f == nil {
 			f = ok200
 		}
@@ -611,7 +617,8 @@ func TestFailoverMidStream(t *testing.T) {
 		t.Fatalf("next request %d", code)
 	}
 	opens, _ := m.snapshot()
-	if len(opens) != 2 || opens[1].provider != provB {
+	// S4 [F3]: the open after a cut walks the bids, even with one provider cooling.
+	if len(opens) != 2 || opens[1].provider != provB || opens[1].bid != bidOf(provB) {
 		t.Fatalf("opens %+v", opens)
 	}
 }
@@ -666,7 +673,7 @@ func TestFailoverRetryMidStream(t *testing.T) {
 		t.Fatalf("next request %d", code)
 	}
 	opens, _ := m.snapshot()
-	if last := opens[len(opens)-1]; last.provider != provC {
+	if last := opens[len(opens)-1]; last.provider != provC || last.bid != bidOf(provC) {
 		t.Fatalf("next request opened on %s: %+v", last.provider, opens)
 	}
 }

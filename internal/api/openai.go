@@ -117,7 +117,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		// it can be classified (see classifyForwardError) and either fail
 		// over to another provider, reopen a dead session, or be relayed
 		// with the router's real status.
-		res, err := s.router.Forward(w, routerPath, sessionID, r.Header, body, true)
+		res, err := s.router.Forward(r.Context(), w, routerPath, sessionID, r.Header, body, true)
 		if err != nil {
 			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 			switch dec := classifyForwardError(err); {
@@ -136,7 +136,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 					s.store.TrackSessionOpen(ensured.SessionID, keyID, modelID)
 				}
 				sessionID = ensured.SessionID
-				res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
+				res, err = s.router.Forward(r.Context(), w, routerPath, sessionID, r.Header, body, false)
 				if err != nil {
 					log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 					writeOpenAIError(w, http.StatusBadGateway, "inference failed") // detail logged above
@@ -156,8 +156,14 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				return
 			}
 		}
-		if res.MidStreamProviderError {
+		switch {
+		case res.MidStreamProviderError:
+			// Only an upstream cut is a provider fault: cool-down + retire.
 			s.afterStreamProviderError(reqModel, modelID, sessionID, durationSec, res.MidStreamStatus)
+		case res.Cut != router.CutNone:
+			// Our client or our own timer ended it: logged, never a
+			// provider fault (no cool-down, retire or failover).
+			log.Printf("api: stream ended early (model %s, session %s): %s", reqModel, pool.ShortID(sessionID), res.Cut)
 		}
 		s.store.RecordUsage(keyID, modelID, res.PromptTokens, res.CompletionTokens) // by resolved id (#56)
 	}
@@ -190,7 +196,7 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 	if fr.Opened {
 		s.store.TrackSessionOpen(fr.SessionID, keyID, modelID)
 	}
-	res, err := s.router.Forward(w, routerPath, fr.SessionID, r.Header, body, true)
+	res, err := s.router.Forward(r.Context(), w, routerPath, fr.SessionID, r.Header, body, true)
 	if fr.Replaced {
 		// Another request did the failover (and its audit); this one only
 		// retried on the replacement.
@@ -226,7 +232,10 @@ func (s *Server) afterStreamProviderError(reqModel, modelID, sessionID string, d
 		return
 	}
 	class := fmt.Sprint(status)
-	if status >= 500 {
+	switch {
+	case status == 0:
+		class = "stream_cut" // upstream ended without [DONE] or finish_reason
+	case status >= 500:
 		class = "5xx"
 	}
 	go func() {

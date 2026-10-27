@@ -325,6 +325,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (not merged into LowestBid) |
 | `SESSION_DURATION_SECONDS` | `600` | Session length (stake scales) |
 | `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
+| `UPLINK_PROVIDER_EXCLUDE` | (empty) | Providers never opened for a model: `<model>=<provider>[,<provider>]…`, entries separated by `;`; model is an id or a catalog name ([Provider failover](#provider-failover)). Bad entries are warned and ignored |
 | `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed) |
 | `HOUSEKEEPING` | `true` | Post-midnight stake reclaim (via router API) |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
@@ -509,7 +510,11 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   of credit or rejects its own key); any 429; any 5xx; and a provider
   model error with 400, 413 or 422 whose text says the provider is
   impaired (rate limit, too many requests, capacity, overloaded, model or
-  service unavailable, or `"statusCode":429` / `503` in the body).
+  service unavailable, or `"statusCode":429` / `503` in the body), or
+  whose text reports a cut of the provider's own stream (`error reading
+  stream`, `unexpected eof`, `connection reset`, `broken pipe`). These cut
+  strings count only inside a provider model error body from the router,
+  never when they come from Uplink's own socket to its client.
 - *Relayed with the router's real status* (not a blanket 502), no
   failover, no cool-down: other 4xx (the request itself is wrong, for
   example a bad parameter), TEE attestation or verification failures, and
@@ -542,14 +547,32 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   retry still avoids the provider that just failed.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
-  the answer cannot be restarted: the provider's error line is replaced by
-  one `data: {"error":{"message":...,"type":"provider_error","code":N}}`
-  event and the stream ends. The provider goes into cool-down and the
-  session is retired (only when another provider exists), so the next
-  request opens elsewhere (when `UPLINK_PROVIDER_COOLDOWN_SECONDS` > 0).
+  the answer cannot be restarted. Two upstream events count as a
+  mid-stream provider cut: a provider error line, and the router body
+  ending (or failing to read) without `data: [DONE]` or a `finish_reason`
+  while the request is still live and no Uplink timer ended it. Either
+  way the client gets one
+  `data: {"error":{"message":...,"type":"provider_error","code":N}}`
+  event (`code` 502 for a bare cut) and the stream ends. The provider goes
+  into cool-down and the session is retired (only when another provider
+  exists). The model's next open walks the rated bids by bid without that
+  provider, even when it is the only one cooling or the cool-down is `0`.
+- *Never a provider fault:* the client hanging up, a write error to the
+  client (broken pipe, connection reset, write deadline), a cancelled
+  request, and Uplink's own idle or total timeout. These end the call and
+  are logged; nothing is cooled, retired or failed over, and the pooled
+  session is kept. A client hang-up also cancels the upstream request.
+- *Configured exclusions* (`UPLINK_PROVIDER_EXCLUDE`): providers never
+  opened for a model, as `<model>=<provider>[,<provider>]…` with entries
+  separated by `;`. The model is a registration id or a catalog name; a
+  provider is its `0x` address. Opens and Rehydrate avoid them like a
+  cooling provider (when every provider of the model is excluded or
+  cooling, a normal open is made). Bad entries are logged by position and
+  ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short
-  address, the status class (`402`, `429`, `5xx`, ...), and the outcome:
+  address, the status class (`402`, `429`, `5xx`, `stream_cut` for a bare
+  upstream cut, ...), and the outcome:
   `retried_ok`, `retry_failed`, `no_alternate`, `reopen_failed`,
   `close_failed` (an extra event when the close did not land), or
   `stream_retired`. No request or response bodies, no keys.

@@ -4,6 +4,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -399,6 +400,60 @@ type ForwardResult struct {
 	// retires the session for later requests (no retry of this one).
 	MidStreamProviderError bool
 	MidStreamStatus        int
+	// Cut says why a stream ended early (CutNone for a complete stream or
+	// a buffered body). Only CutUpstream is a provider fault.
+	Cut Cut
+}
+
+// Cut is the reason a relayed stream ended before its end marker.
+type Cut int
+
+const (
+	// CutNone: the stream ended normally ([DONE] or a finish_reason seen).
+	CutNone Cut = iota
+	// CutUpstream: reading the router body failed, or it ended without
+	// [DONE] or a finish_reason, while the request was still live and no
+	// Uplink timer fired, or the router sent a mid-stream provider model
+	// error. The only provider fault.
+	CutUpstream
+	// CutClient: writing or flushing to our own client failed (hang-up,
+	// broken pipe, connection reset, write deadline).
+	CutClient
+	// CutCanceled: the request context was cancelled (client gone).
+	CutCanceled
+	// CutUplinkTimeout: one of Uplink's own timers ended the call.
+	CutUplinkTimeout
+)
+
+func (c Cut) String() string {
+	return [...]string{"none", "upstream", "client", "canceled", "uplink_timeout"}[c]
+}
+
+// ErrIdleTimeout and ErrTotalTimeout are the context causes Uplink's own
+// per-request timers cancel with; a cut carrying either is ours, never the
+// provider's.
+var (
+	ErrIdleTimeout  = errors.New("uplink idle timeout")
+	ErrTotalTimeout = errors.New("uplink total timeout")
+)
+
+// IsUplinkTimeout reports whether err (or ctx's cause) is one of Uplink's
+// own timers: the two causes above, a context deadline, or the HTTP
+// client's own timeout.
+func IsUplinkTimeout(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		cause := context.Cause(ctx)
+		if errors.Is(cause, ErrIdleTimeout) || errors.Is(cause, ErrTotalTimeout) || errors.Is(cause, context.DeadlineExceeded) {
+			return true
+		}
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrIdleTimeout) || errors.Is(err, ErrTotalTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return strings.Contains(err.Error(), "Client.Timeout exceeded")
 }
 
 // maxErrorBody bounds the router error body kept for classification and
@@ -411,11 +466,18 @@ const maxErrorBody = 64 << 10
 // If probeOnly is true and the router responds with a non-2xx status, the
 // response is NOT written to w and the caller may retry (e.g. with a fresh
 // session) — otherwise everything is relayed as-is.
-func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool) (*ForwardResult, error) {
+//
+// ctx is the request's context: when it ends (client gone, or one of
+// Uplink's timers) the upstream request is cancelled too.
+func (c *Client) Forward(ctx context.Context, w http.ResponseWriter, path, sessionID string, header http.Header, body []byte, probeOnly bool) (*ForwardResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	req, err := c.newRequest(http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+	req = req.WithContext(ctx)
 	if ct := header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
@@ -449,9 +511,10 @@ func (c *Client) Forward(w http.ResponseWriter, path, sessionID string, header h
 	streaming := isEventStream(contentType)
 	if streaming {
 		w.WriteHeader(resp.StatusCode)
-		st := flushCopy(w, resp.Body)
+		st := flushCopyCtx(ctx, w, resp.Body)
 		res.PromptTokens, res.CompletionTokens = st.promptTokens, st.completionTokens
 		res.MidStreamProviderError, res.MidStreamStatus = st.providerError, st.providerStatus
+		res.Cut = st.cut
 		return res, nil
 	}
 
@@ -482,8 +545,13 @@ func isEventStream(contentType string) bool {
 // streamResult is what flushCopy saw while relaying an SSE stream.
 type streamResult struct {
 	promptTokens, completionTokens int64
-	providerError                  bool // a provider model error replaced the rest of the stream
-	providerStatus                 int
+	providerError                  bool // a provider fault ended the stream (see Cut)
+	providerStatus                 int  // status the provider error carried; 0 for a bare upstream cut
+	sawDone                        bool // a data: [DONE] line arrived
+	sawFinish                      bool // a chunk carried a non-null finish_reason
+	cut                            Cut
+	upstreamReadErr                error // reading the router body failed (not io.EOF)
+	clientWriteErr                 error // writing to our client failed
 }
 
 // flushCopy copies an SSE stream to w line by line, flushing after each
@@ -495,9 +563,28 @@ type streamResult struct {
 // appends it as a bare JSON object ({"providerModelError":...}), which SSE
 // clients would ignore; flushCopy writes an OpenAI-shaped SSE error event
 // in its place and ends the stream.
+//
+// Only the upstream side can be a provider fault: an upstream EOF without
+// [DONE] or a finish_reason while ctx is live (no client hang-up, no
+// Uplink timer) is a cut; a write error to our client, a cancelled ctx or
+// an Uplink timer is never one (see Cut).
 func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
+	return flushCopyCtx(context.Background(), w, src)
+}
+
+func flushCopyCtx(ctx context.Context, w http.ResponseWriter, src io.Reader) streamResult {
 	var out streamResult
 	flusher, _ := w.(http.Flusher)
+	// ours classifies an end that came from our side of the stream.
+	ours := func(err error) Cut {
+		if IsUplinkTimeout(ctx, err) {
+			return CutUplinkTimeout
+		}
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return CutCanceled
+		}
+		return CutNone
+	}
 	buf := make([]byte, 32*1024)
 	var pending []byte
 	passthrough := false // inside an oversized line: relay, do not parse
@@ -505,8 +592,14 @@ func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
 		if len(b) == 0 {
 			return true
 		}
-		_, err := w.Write(b)
-		return err == nil
+		if _, err := w.Write(b); err != nil {
+			out.clientWriteErr = err
+			if out.cut = ours(nil); out.cut == CutNone {
+				out.cut = CutClient
+			}
+			return false
+		}
+		return true
 	}
 	flush := func() {
 		if flusher != nil {
@@ -517,12 +610,17 @@ func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
 	// when the stream must stop (client gone, or provider error replaced).
 	handle := func(line []byte) bool {
 		if status, ok := sseProviderError(line); ok {
-			out.providerError, out.providerStatus = true, status
+			out.providerError, out.providerStatus, out.cut = true, status, CutUpstream
 			_ = write(sseErrorEvent(status))
 			return false
 		}
 		if p, c, ok := sseUsage(line); ok {
 			out.promptTokens, out.completionTokens = p, c
+		}
+		if sseDone(line) {
+			out.sawDone = true
+		} else if !out.sawFinish && sseFinish(line) {
+			out.sawFinish = true
 		}
 		return write(line)
 	}
@@ -570,12 +668,58 @@ func flushCopy(w http.ResponseWriter, src io.Reader) streamResult {
 		}
 		if err != nil {
 			if len(pending) > 0 && !passthrough {
-				_ = handle(pending)
+				if !handle(pending) {
+					flush()
+					return out
+				}
+			}
+			if err != io.EOF {
+				out.upstreamReadErr = err
+			}
+			if c := ours(err); c != CutNone {
+				// Our client or our timer ended it: never a provider fault.
+				out.cut = c
+			} else if out.upstreamReadErr != nil || (!out.sawDone && !out.sawFinish) {
+				// The provider side broke off mid-answer.
+				// Tell the client (best effort), then record the cut.
+				_ = write(sseErrorEvent(http.StatusBadGateway))
+				out.providerError, out.providerStatus, out.cut = true, 0, CutUpstream
 			}
 			flush()
 			return out
 		}
 	}
+}
+
+// sseDone reports a "data: [DONE]" line.
+func sseDone(line []byte) bool {
+	t := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(t, []byte("data:")) {
+		return false
+	}
+	return bytes.Equal(bytes.TrimSpace(t[len("data:"):]), []byte("[DONE]"))
+}
+
+// sseFinish reports a data: chunk with a non-null finish_reason.
+func sseFinish(line []byte) bool {
+	t := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(t, []byte("data:")) || !bytes.Contains(t, []byte(`"finish_reason"`)) {
+		return false
+	}
+	var chunk struct {
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(t[len("data:"):]), &chunk) != nil {
+		return false
+	}
+	for _, c := range chunk.Choices {
+		if c.FinishReason != nil && *c.FinishReason != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sseProviderError reports a bare provider model error line (not a data:
