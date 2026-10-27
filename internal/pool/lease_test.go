@@ -604,3 +604,22 @@ func TestS5AtomicLeaseRace(t *testing.T) {
 		t.Fatalf("in-flight %d after all requests ended", n)
 	}
 }
+
+// MUST-1: every open is capped at the max, with or without the headers:
+// a default above the max (or an explicit duration) never opens longer.
+func TestCapAppliesToNoHeaderOpen(t *testing.T) {
+	c := newFakeClock()
+	lr, p := newLeaseRouter(t, c)
+	p.SetDurationMax(1800)
+	p.SetDuration(3600) // a default above the cap must not open longer
+	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	if o, _ := lr.snapshot(); len(o) != 1 || o[0] != 1800 || r.DurationSec != 1800 {
+		t.Fatalf("no-header open %v %+v, want 1800", o, r)
+	}
+	l, r = mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1", DurationSec: 7200})
+	l.Done()
+	if r.DurationSec != 1800 {
+		t.Fatalf("explicit duration open %d, want 1800", r.DurationSec)
+	}
+}

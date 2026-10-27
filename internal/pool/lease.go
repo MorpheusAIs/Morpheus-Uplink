@@ -289,9 +289,10 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 		if need := o.TotalSec + 120; need > openDur {
 			openDur = need
 		}
-		if mx := p.DurationMax(); openDur > mx {
-			openDur = mx
-		}
+	}
+	// The cap applies to every open, with or without the headers.
+	if mx := p.DurationMax(); mx > 0 && openDur > mx {
+		openDur = mx
 	}
 	long := openDur > p.DurationSec()
 	counted := long || short
