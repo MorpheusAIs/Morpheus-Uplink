@@ -1213,9 +1213,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         <h2>Settings</h2>
         <p class="note" style="margin-top:0">
           Saved in DATA_DIR with the admin state. Some apply at once; others say
-          they take effect after an Uplink or router restart. A value set in the
+          they take effect after an Uplink restart. A value set in the
           environment wins and is read-only here: remove it from .env to manage it
-          in the console. Secrets stay in .env only. Every change is logged.
+          in the console. Settings that live in .env only, router settings and
+          secrets are not shown here. Every change is logged.
         </p>
         <div class="row" style="margin-bottom:8px">
           <button class="ghost" type="button" id="settingsExportBtn" onclick="exportSettings()">Export settings</button>
@@ -1224,6 +1225,9 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
         <div id="settingsList" class="stack" style="gap:8px;margin-top:10px">Loading…</div>
         <p id="settingsMsg" class="note" style="margin:6px 0 0" role="status"></p>
+        <p class="note" id="settingsEnvDocs">
+          <a href="https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/06-developers.md#environment-variables" target="_blank" rel="noopener noreferrer">All .env settings</a>
+        </p>
       </section>
     </div>
 
@@ -1677,8 +1681,8 @@ async function api(path, opts = {}) {
   return res.text();
 }
 
-/** Operator settings (#51): one row per registry setting. Env-pinned,
- * router and env-only rows are read-only. */
+/** Operator settings (#51): one row per setting the console can change.
+ * .env-only and router rows are not shown; env-pinned rows are read-only. */
 async function loadSettings() {
   const msg = document.getElementById('settingsMsg');
   try {
@@ -1698,9 +1702,11 @@ function settingTip(s) {
   t += ' Default: ' + settingText(s.default) + '.';
   return t;
 }
+// settingShown: only rows the console can change (live or Uplink restart).
+function settingShown(s) {
+  return s.scope !== 'env' && s.scope !== 'router' && s.settable !== false;
+}
 function settingNote(s) {
-  if (s.scope === 'router') return 'router setting: set ' + s.env + ' in the router\u2019s .env and restart the router';
-  if (s.scope === 'env') return 'set in .env only (' + s.env + ')';
   if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
   if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
   if (s.source === 'persisted') return 'saved';
@@ -1709,7 +1715,7 @@ function settingNote(s) {
 function renderSettings(list) {
   const box = document.getElementById('settingsList');
   box.textContent = '';
-  for (const s of list) {
+  for (const s of list.filter(settingShown)) {
     const row = document.createElement('div');
     row.className = 'setting-row';
     const head = document.createElement('div');
@@ -1751,7 +1757,7 @@ function renderSettings(list) {
       input.value = s.value == null ? '' : String(s.value);
     }
     input.id = 'setting-' + s.name;
-    input.disabled = !!s.pinned || s.settable === false;
+    input.disabled = !!s.pinned;
     const cell = document.createElement('div');
     cell.className = 'setting-cell';
     cell.appendChild(input);

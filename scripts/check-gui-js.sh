@@ -629,7 +629,7 @@ const mk = (tag) => ({ tag, children: [], style: {}, attrs: {}, disabled: false,
   setAttribute(k, v) { this.attrs[k] = v; }, appendChild(c) { this.children.push(c); return c; } });
 const box = mk('div');
 global.document = { getElementById: () => box, createElement: mk };
-const names = ['renderSettings', 'settingText', 'settingTip', 'settingNote', 'setTip', 'settingValue'];
+const names = ['renderSettings', 'settingShown', 'settingText', 'settingTip', 'settingNote', 'setTip', 'settingValue'];
 for (const n of ['renderSettings', 'settingTip', 'settingNote']) if (/innerHTML/.test(extract(n))) fail(n + ' must not use innerHTML');
 eval(names.map(extract).join('\n') + '\nObject.assign(global, { renderSettings, settingValue });');
 renderSettings([
@@ -641,7 +641,10 @@ renderSettings([
   { name: 'masterKeyAdmin', kind: 'bool', value: false, default: false, source: 'default', env: 'MASTER_KEY_ADMIN', pinned: false, settable: false, scope: 'env', help: 'Security switch.' },
   { name: 'webPublicUrl', kind: 'string', value: 'https://console.example', default: '', source: 'env', env: 'WEB_PUBLIC_URL', pinned: true, settable: false, scope: 'env', help: 'Console origin. Set in .env only.' },
 ]);
-const [pinned, free, bool, str, router, envOnly, envOnlySet] = box.children;
+if (box.children.length !== 4) fail('only settable rows are shown: ' + box.children.length);
+const [pinned, free, bool, str] = box.children;
+const shownNames = box.children.map((r) => r.children[0].children[0].textContent);
+for (const n of ['routerLogLevelApp', 'masterKeyAdmin', 'webPublicUrl']) if (shownNames.includes(n)) fail(n + ' must not be shown');
 const walk = (n) => [n].concat(...(n.children || []).map(walk));
 const ctl = (row) => walk(row).find((c) => c.id && c.id.startsWith('setting-'));
 const note = (row) => row.children[row.children.length - 1].textContent;
@@ -664,9 +667,7 @@ if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'deb
 if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false || buttons(bool) !== 2) fail('bool must be a switch');
 if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
 if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
-if (!ctl(router).disabled || buttons(router) || !note(router).includes('router') || !tipOf(router).includes('restart the router')) fail('router row must be read-only with the router note');
-if (!ctl(envOnly).disabled || buttons(envOnly) || !note(envOnly).includes('.env only')) fail('env-only row must be read-only');
-if (!ctl(envOnlySet).disabled || buttons(envOnlySet) || note(envOnlySet) !== 'set in .env only (WEB_PUBLIC_URL)') fail('env-only row set in .env must say .env only, not "remove it": ' + note(envOnlySet));
+if (!/href="https:\/\/github\.com\/MorpheusAIs\/Morpheus-Uplink\/blob\/main\/docs\/06-developers\.md#environment-variables"/.test(html.slice(html.indexOf('id="tab-settings"'), html.indexOf('id="tab-playground"')))) fail('Settings needs one link to the .env reference');
 if (!/stepUpFetch\('\/admin\/settings'/.test(extract('saveSetting')) || /\bapi\('\/admin\/settings'/.test(extract('saveSetting'))) fail('a single-setting save must use the step-up retry');
 if (settingValue('64', 'int') !== 64 || settingValue(true, 'bool') !== true || settingValue('x', 'string') !== 'x') fail('typed values');
 if (!html.includes('data-tab="settings"') || !html.includes('id="tab-settings"')) fail('Settings must be its own tab');
@@ -674,7 +675,7 @@ const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-
 if (sec.includes('settingsList')) fail('settings must leave the Security tab');
 if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
 if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
-console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, env/router/env-only rows read-only, saves, export and import behind step-up');
+console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, only settable rows shown (env-pinned read-only), .env reference link, saves, export and import behind step-up');
 NODE
 
 # Sessions page: per-session lease state (opened, ends, in flight, holders)
