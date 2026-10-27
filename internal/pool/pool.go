@@ -345,7 +345,7 @@ func (p *Pool) rehydrate(force bool) error {
 			continue
 		}
 		if st := p.sess[s.ID]; st != nil && (st.retired || st.closing) {
-			continue // retired by a reopen, release or sweep: never handed out again
+			continue // retired by a failover, release or sweep: never handed out again
 		}
 		p.entries[modelID] = entry{
 			sessionID: s.ID,

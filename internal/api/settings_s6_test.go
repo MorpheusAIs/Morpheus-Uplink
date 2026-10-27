@@ -150,7 +150,7 @@ func TestS6SettingsAPI(t *testing.T) {
 		t.Fatalf("set %d %s", code, body)
 	}
 	k := e.newKey(t, "s6")
-	if r := e.call(t, k, map[string][]string{"X-Uplink-Request-Timeout": {"600"}}, false); r.header.Get("X-Uplink-Timeouts") != "idle=240;total=600" {
+	if r := e.call(t, k, map[string][]string{"X-Uplink-Session-Duration": {"600"}}, false); r.header.Get("X-Uplink-Timeouts") != "idle=240;total=600" {
 		t.Fatalf("not live: %q", r.header.Get("X-Uplink-Timeouts"))
 	}
 	// Default and max reach the pool.

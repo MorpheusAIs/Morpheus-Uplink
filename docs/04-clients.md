@@ -94,16 +94,17 @@ changes. Any key may ask for a long session; release needs a generated
 ```bash
 curl -sS https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer sk-…" -H "Content-Type: application/json" \
-  -H "X-Uplink-Request-Timeout: 1500" -H "X-Uplink-Idle-Timeout: 300" \
+  -H "X-Uplink-Session-Duration: 1800" -H "X-Uplink-Idle-Timeout: 300" \
   -d '{"model":"…","stream":true,"messages":[…]}'
 ```
 
-- `X-Uplink-Request-Timeout` (total seconds for this call),
-  `X-Uplink-Idle-Timeout` (seconds without bytes, 30…600, default 180),
+- `X-Uplink-Idle-Timeout` (seconds without bytes, 30…600, default 180),
   `X-Uplink-Session-Duration` (session length for a new session, 600…max).
   Whole numbers only, sent once; a bad value is a `400` naming the header.
-- The response then carries `X-Uplink-Timeouts: idle=…;total=…` and
-  `X-Uplink-Session-Remaining`.
+  Each call's total timer is 600 s.
+- The response then carries `X-Uplink-Timeouts: idle=…;total=…`.
+- A session is used until it expires or is closed for being idle; the
+  next call opens a new one.
 - A timeout before any answer is a `504` with `"type":"timeout"`. In a
   stream it ends with an error event, `finish_reason:
   "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.

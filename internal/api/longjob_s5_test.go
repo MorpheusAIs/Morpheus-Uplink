@@ -117,13 +117,11 @@ func TestS5HeaderValidation(t *testing.T) {
 		{"duration over max", h("X-Uplink-Session-Duration", "1801"), 400, ""},
 		{"duration text", h("X-Uplink-Session-Duration", "ten"), 400, ""},
 		{"duration ok", h("X-Uplink-Session-Duration", "600"), 200, "idle=180;total=600"},
-		{"timeout 0", h("X-Uplink-Request-Timeout", "0"), 400, ""},
-		{"timeout -5", h("X-Uplink-Request-Timeout", "-5"), 400, ""},
-		{"timeout +600", h("X-Uplink-Request-Timeout", "+600"), 400, ""},
-		{"timeout 7 digits", h("X-Uplink-Request-Timeout", "0600000"), 400, ""},
-		{"timeout repeated", h("X-Uplink-Request-Timeout", "600", "X-Uplink-Request-Timeout", "600"), 400, ""},
-		{"timeout max 6 digits clamps", h("X-Uplink-Request-Timeout", "999999"), 200, "idle=180;total=1680"},
-		{"timeout below floor clamps", h("X-Uplink-Request-Timeout", "10"), 200, "idle=180;total=30"},
+		{"request timeout header is not read", h("X-Uplink-Request-Timeout", "0"), 200, ""},
+		{"request timeout header beside duration", h("X-Uplink-Request-Timeout", "1680", "X-Uplink-Session-Duration", "1200"), 200, "idle=180;total=600"},
+		{"idle +60", h("X-Uplink-Idle-Timeout", "+60"), 400, ""},
+		{"idle 7 digits", h("X-Uplink-Idle-Timeout", "0600000"), 400, ""},
+		{"idle repeated", h("X-Uplink-Idle-Timeout", "60", "X-Uplink-Idle-Timeout", "60"), 400, ""},
 		{"idle 0", h("X-Uplink-Idle-Timeout", "0"), 400, ""},
 		{"idle low clamps", h("X-Uplink-Idle-Timeout", "5"), 200, "idle=30;total=600"},
 		{"idle high clamps", h("X-Uplink-Idle-Timeout", "99999"), 200, "idle=600;total=600"},
@@ -138,26 +136,26 @@ func TestS5HeaderValidation(t *testing.T) {
 		if got := r.header.Get("X-Uplink-Timeouts"); got != tc.timeouts {
 			t.Errorf("%s: X-Uplink-Timeouts %q want %q", tc.name, got, tc.timeouts)
 		}
-		if tc.timeouts != "" && r.header.Get("X-Uplink-Session-Remaining") == "" {
-			t.Errorf("%s: no X-Uplink-Session-Remaining", tc.name)
+		if r.header.Get("X-Uplink-Session-Remaining") != "" {
+			t.Errorf("%s: X-Uplink-Session-Remaining is no longer sent", tc.name)
 		}
 		if tc.code == 400 && !strings.Contains(r.body, "X-Uplink-") {
 			t.Errorf("%s: 400 does not name the header: %s", tc.name, r.body)
 		}
-		noIDs(t, tc.name, r.body+r.header.Get("X-Uplink-Timeouts")+r.header.Get("X-Uplink-Session-Remaining"))
+		noIDs(t, tc.name, r.body+r.header.Get("X-Uplink-Timeouts"))
 	}
 	// Whitespace never reaches us over the wire (net/http trims it), so the
 	// parser is checked directly.
 	for _, v := range []string{" 600", "600 ", "6 00", "\t600"} {
 		req := httptest.NewRequest(http.MethodPost, "/", nil)
-		req.Header["X-Uplink-Request-Timeout"] = []string{v}
-		if _, _, msg := strictHeaderInt(req, "X-Uplink-Request-Timeout"); msg == "" {
+		req.Header["X-Uplink-Idle-Timeout"] = []string{v}
+		if _, _, msg := strictHeaderInt(req, "X-Uplink-Idle-Timeout"); msg == "" {
 			t.Errorf("%q accepted", v)
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	req.Header.Set("X-Uplink-Request-Timeout", "999999")
-	if n, ok, msg := strictHeaderInt(req, "X-Uplink-Request-Timeout"); n != 999999 || !ok || msg != "" {
+	req.Header.Set("X-Uplink-Idle-Timeout", "999999")
+	if n, ok, msg := strictHeaderInt(req, "X-Uplink-Idle-Timeout"); n != 999999 || !ok || msg != "" {
 		t.Fatalf("max 6-digit value: %d %v %q", n, ok, msg)
 	}
 }
@@ -175,21 +173,27 @@ func TestS5NoHeadersUnchanged(t *testing.T) {
 	}
 }
 
-// S5-15: request timeout 1800 with cap 1800 → total 1680, open ≤ 1800.
-func TestS5RequestTimeoutClampedToCap(t *testing.T) {
+// X-Uplink-Request-Timeout is no longer read: it neither sizes the session
+// nor changes the call total (the default stays), and a session opens at
+// the requested duration or the default, capped at the max.
+func TestS5RequestTimeoutHeaderNotRead(t *testing.T) {
 	m := newFakeMarket(t, provA)
 	e := newFailoverEnv(t, m, func(c *config.Config) { c.SessionDurationMax = 1800 })
 	e.srv.pool.SetDurationMax(1800)
 	key := e.newKey(t, "cap")
 	r := e.call(t, key, map[string][]string{"X-Uplink-Request-Timeout": {"1800"}}, false)
-	if r.code != 200 || r.header.Get("X-Uplink-Timeouts") != "idle=180;total=1680" {
+	if r.code != 200 || r.header.Get("X-Uplink-Timeouts") != "" || r.header.Get("X-Uplink-Session-Remaining") != "" {
 		t.Fatalf("%d %s %v", r.code, r.body, r.header)
 	}
 	opens, _ := m.snapshot()
-	for _, o := range opens {
-		if d, _ := o.body["sessionDuration"].(float64); d > 1800 {
-			t.Fatalf("opened %v s", d)
-		}
+	if len(opens) != 1 {
+		t.Fatalf("opens %d", len(opens))
+	}
+	if d, _ := opens[0].body["sessionDuration"].(float64); d != 600 {
+		t.Fatalf("opened %v s, want the 600 s default", d)
+	}
+	if got := forwardOpts(callLimits{totalSec: requestTimeoutDef, idleSec: 180}, false).Total; got != requestTimeoutDef*timeUnit {
+		t.Fatalf("call total %v", got)
 	}
 }
 

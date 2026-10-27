@@ -112,9 +112,8 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			(*h)()
 		}
 		sessionID := ensured.SessionID
-		total := effectiveTotal(cl, ensured)
-		setTimeoutHeaders(w, cl, total, ensured.Remaining)
-		fo := forwardOpts(cl, total, stream)
+		setTimeoutHeaders(w, cl)
+		fo := forwardOpts(cl, stream)
 
 		// First attempt probes: a non-2xx is not written to the client, so
 		// it can be classified (see classifyForwardError) and either fail

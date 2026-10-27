@@ -197,57 +197,36 @@ func mustAcquire(t *testing.T, p *Pool, model string, o AcquireOpts) (*Lease, Ac
 	return l, r
 }
 
-// S5-6 and S5-15 (pool part): reuse by remaining life.
-func TestS5ReuseByRemaining(t *testing.T) {
+// A pooled session is reused until its usable life ends, however little
+// is left; the next call after that opens a new one. Every open is capped
+// at the duration max.
+func TestS5SessionUsedUntilExpiry(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)
 	l1, r1 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
 	if !r1.Opened || r1.DurationSec != 600 {
 		t.Fatalf("first %+v", r1)
 	}
-	c.Advance(400 * time.Second) // 200 s of usable life left
-	l2, r2 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", TotalSec: 600})
-	if !r2.Opened || !r2.Reopened || r2.SessionID == r1.SessionID || r2.DurationSec != 720 {
-		t.Fatalf("reopen %+v", r2)
-	}
-	if lr.closedCount(r1.SessionID) != 0 {
-		t.Fatal("old session closed while a request was in flight on it")
+	c.Advance(500 * time.Second) // 10 s of usable life left (600 − 90 buffer)
+	l2, r2 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1800})
+	if r2.Opened || r2.SessionID != r1.SessionID {
+		t.Fatalf("want reuse of the pooled session, got %+v", r2)
 	}
 	l1.Done()
-	waitUntil(t, "old close", func() bool { return lr.closedCount(r1.SessionID) == 1 })
 	l2.Done()
-	// Reused when it has the life: 720 s session, 100 s later, total 600 → reuse.
-	c.Advance(100 * time.Second)
-	l3, r3 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", TotalSec: 500})
-	defer l3.Done()
-	if r3.Opened || r3.SessionID != r2.SessionID || r3.Remaining != 620*time.Second {
-		t.Fatalf("reuse %+v", r3)
-	}
-}
-
-// S5-15: a reused session with 900 s left and a request of 600 is reused;
-// a reopen never exceeds the maximum.
-func TestS5ReuseDecisionBeforeRemainingClamp(t *testing.T) {
-	c := newFakeClock()
-	lr, p := newLeaseRouter(t, c)
-	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", DurationSec: 1200})
-	l.Done()
-	c.Advance(300 * time.Second) // 900 s left
-	l2, r2 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", TotalSec: 600})
-	l2.Done()
-	if r2.Opened || r2.SessionID != r.SessionID || r2.Remaining != 900*time.Second {
-		t.Fatalf("want reuse with 900 s, got %+v", r2)
-	}
-	c.Advance(600 * time.Second) // 300 s left: reopen, capped at the max
-	l3, r3 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1", TotalSec: 1680})
+	c.Advance(20 * time.Second) // past the usable life
+	l3, r3 := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
 	l3.Done()
-	if !r3.Opened || r3.DurationSec != 1800 {
-		t.Fatalf("reopen %+v", r3)
+	if !r3.Opened || r3.SessionID == r1.SessionID || r3.DurationSec != 600 {
+		t.Fatalf("want a new open after expiry, got %+v", r3)
 	}
-	for _, d := range func() []int { o, _ := lr.snapshot(); return o }() {
-		if d > 1800 {
-			t.Fatalf("opened %d s > max", d)
-		}
+	l4, r4 := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1", DurationSec: 86400})
+	l4.Done()
+	if !r4.Opened || r4.DurationSec != 1800 {
+		t.Fatalf("open not capped at the max: %+v", r4)
+	}
+	if o, _ := lr.snapshot(); len(o) != 3 {
+		t.Fatalf("opens %v, want 3", o)
 	}
 }
 
@@ -345,8 +324,7 @@ func TestS5FailoverWithInflightRetires(t *testing.T) {
 }
 
 // Long sessions have no per-key, global or hourly limits: any key (the
-// shared ones included) opens sessions up to the duration max, and
-// reopen-by-remaining is never refused.
+// shared ones included) opens sessions up to the duration max.
 func TestS5NoLongSessionLimits(t *testing.T) {
 	c := newFakeClock()
 	_, p := newLeaseRouter(t, c)
@@ -368,11 +346,6 @@ func TestS5NoLongSessionLimits(t *testing.T) {
 		p.Release(modelA, "k2")
 		_ = r
 	}
-	for i := 0; i < 4; i++ { // reopen-by-remaining every round
-		c.Advance(200 * time.Second)
-		l, _ := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k3", TotalSec: 1680})
-		l.Done()
-	}
 }
 
 // S5-24: ten default-size calls (no request-timeout header) spread over
@@ -392,7 +365,7 @@ func TestS5DefaultCallsOpenOneSession(t *testing.T) {
 }
 
 // Security gate N-1: the same calls spread over more than 9 minutes (past the
-// 510 s usable life of a 600 s session) give at most one replacement.
+// 510 s usable life of a 600 s session) open at most one new session.
 func TestS5DefaultCallsOverNineMinutes(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)

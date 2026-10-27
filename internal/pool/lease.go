@@ -16,7 +16,7 @@ import (
 //	     --end/panic/cancel--> inflight--              (Lease.Done, deferred)
 //	     --release(k)--> delete holders[k]; none left and idle → CLOSING
 //	     --sweep: idle ≥ grace--> CLOSING
-//	     --failover / remaining too short--> RETIRED (not handed out)
+//	     --failover--> RETIRED (not handed out)
 //	RETIRED --inflight==0--> CLOSING --ok--> CLOSED | --fail--> RETIRED (sweep retries, max 3)
 
 // maxCloseRetries bounds the sweep's retries of a failed close.
@@ -173,49 +173,34 @@ func (p *Pool) LeaseSession(sessionID, keyID string) *Lease {
 type AcquireOpts struct {
 	KeyID       string
 	DurationSec int // X-Uplink-Session-Duration (0: pool default)
-	TotalSec    int // clamped X-Uplink-Request-Timeout (0: header absent)
 }
 
 // AcquireResult says what Acquire handed out.
 type AcquireResult struct {
 	SessionID   string
 	Opened      bool
-	Reopened    bool // a reopen-by-remaining replaced a pooled session
 	DurationSec int
-	Remaining   time.Duration // usable on-chain life left (end − now)
 }
 
-// remainingLocked is the session's on-chain life left: expiresAt + buffer − now.
-func (p *Pool) remainingLocked(e entry) time.Duration {
-	return e.expiresAt.Add(expiryBuffer).Sub(p.now())
-}
-
-// tryPooledLocked leases the pooled session when it is usable and, with a
-// declared total, has total + 30 s left. tooShort reports a pooled,
-// usable session that failed only the remaining-life check.
-func (p *Pool) tryPooledLocked(key string, o AcquireOpts, dur int) (l *Lease, res AcquireResult, tooShort bool) {
+// tryPooledLocked leases the pooled session when it is usable (not
+// expired, retired or closing).
+func (p *Pool) tryPooledLocked(key string, o AcquireOpts, dur int) (*Lease, AcquireResult) {
 	e, ok := p.entries[key]
 	if !ok || !p.now().Before(e.expiresAt) {
-		return nil, res, false
+		return nil, AcquireResult{}
 	}
 	st := p.stateLocked(key, e)
 	if st.retired || st.closing {
-		return nil, res, false
+		return nil, AcquireResult{}
 	}
-	rem := p.remainingLocked(e)
-	if o.TotalSec > 0 && rem < time.Duration(o.TotalSec+30)*time.Second {
-		return nil, res, true
-	}
-	l = p.leaseLocked(e.sessionID, st, o.KeyID)
-	return l, AcquireResult{SessionID: e.sessionID, DurationSec: dur, Remaining: rem}, false
+	l := p.leaseLocked(e.sessionID, st, o.KeyID)
+	return l, AcquireResult{SessionID: e.sessionID, DurationSec: dur}
 }
 
 // Acquire hands out a session for the model with a lease taken in the same
-// critical section. Reuse order: pooled (with enough life left when a total
-// is declared) → adopt an on-chain session → open. With a declared total
-// a fresh session is sized to fit it (total + 120 s, at most the max); a
-// pooled session too short for it is replaced (reopen-by-remaining) and
-// retired, closing when its in-flight reaches 0.
+// critical section. Reuse order: pooled → adopt an on-chain session → open.
+// A session is used until it expires or the idle sweep closes it; the next
+// call then opens a new one.
 func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, error) {
 	dur := o.DurationSec
 	if dur <= 0 {
@@ -223,7 +208,7 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 	}
 	key := normModel(modelID)
 	p.mu.Lock()
-	if l, res, _ := p.tryPooledLocked(key, o, dur); l != nil {
+	if l, res := p.tryPooledLocked(key, o, dur); l != nil {
 		p.mu.Unlock()
 		return l, res, nil
 	}
@@ -235,79 +220,43 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 	defer lock.Unlock()
 
 	p.mu.Lock()
-	l, res, short := p.tryPooledLocked(key, o, dur)
+	l, res := p.tryPooledLocked(key, o, dur)
 	p.mu.Unlock()
 	if l != nil {
 		return l, res, nil
 	}
-	if !short {
-		// Memory miss: prefer an already-staked on-chain session.
-		if err := p.RehydrateForce(); err != nil {
-			warnf("pool: rehydrate before open for %s: %v", modelID, err)
-			if p.gated.Load() && !p.stateKnown.Load() {
-				return nil, AcquireResult{}, ErrSessionStateUnknown
-			}
+	// Memory miss: prefer an already-staked on-chain session.
+	if err := p.RehydrateForce(); err != nil {
+		warnf("pool: rehydrate before open for %s: %v", modelID, err)
+		if p.gated.Load() && !p.stateKnown.Load() {
+			return nil, AcquireResult{}, ErrSessionStateUnknown
 		}
-		p.mu.Lock()
-		l, res, short = p.tryPooledLocked(key, o, dur)
-		p.mu.Unlock()
-		if l != nil {
-			log.Printf("pool: adopted on-chain session %s for model %s", short_(res.SessionID), modelID)
-			return l, res, nil
-		}
+	}
+	p.mu.Lock()
+	l, res = p.tryPooledLocked(key, o, dur)
+	p.mu.Unlock()
+	if l != nil {
+		log.Printf("pool: adopted on-chain session %s for model %s", short_(res.SessionID), modelID)
+		return l, res, nil
 	}
 
 	openDur := dur
-	if o.TotalSec > 0 {
-		if need := o.TotalSec + 120; need > openDur {
-			openDur = need
-		}
-	}
-	// The cap applies to every open, with or without the headers.
+	// The cap applies to every open, with or without the header.
 	if mx := p.DurationMax(); mx > 0 && openDur > mx {
 		openDur = mx
 	}
-	p.mu.Lock()
-	var replacing string
-	if short {
-		replacing = p.entries[key].sessionID
-	}
-	p.mu.Unlock()
-
 	id, prov, err := p.openAvoidingCooling(modelID, openDur)
-	if err == nil && replacing != "" {
-		// Before the new entry is visible: a rescan must not adopt the
-		// replaced session back.
-		p.mu.Lock()
-		oldEnds := time.Time{}
-		if st := p.sess[replacing]; st != nil {
-			oldEnds = st.endsAt
-		}
-		p.mu.Unlock()
-		p.retire(replacing, oldEnds)
-	}
-	now := p.now()
 	if err != nil {
 		return nil, AcquireResult{}, err
 	}
+	now := p.now()
 	p.mu.Lock()
 	p.entries[key] = entry{sessionID: id, expiresAt: now.Add(time.Duration(openDur)*time.Second - expiryBuffer), provider: prov}
 	st := p.newStateLocked(key, id, now, now.Add(time.Duration(openDur)*time.Second), o.KeyID)
 	l = p.leaseLocked(id, st, o.KeyID)
-	closeOld := ""
-	if ost := p.sess[replacing]; replacing != "" && replacing != id && ost != nil {
-		ost.retired = true
-		if ost.inflight == 0 && !ost.closing {
-			ost.closing, closeOld = true, replacing
-		}
-	}
 	p.mu.Unlock()
-	if closeOld != "" {
-		go p.closeState(closeOld)
-	}
 	log.Printf("pool: opened session %s for model %s (duration %ds)", short_(id), modelID, openDur)
-	return l, AcquireResult{SessionID: id, Opened: true, Reopened: short, DurationSec: openDur,
-		Remaining: time.Duration(openDur) * time.Second}, nil
+	return l, AcquireResult{SessionID: id, Opened: true, DurationSec: openDur}, nil
 }
 
 func short_(id string) string { return short(id) }

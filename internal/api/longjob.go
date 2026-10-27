@@ -33,10 +33,9 @@ var (
 )
 
 const (
-	requestTimeoutDef = 600 // seconds: the router call total without the header
+	requestTimeoutDef = 600 // seconds: the router call total
 	idleTimeoutMin    = 30
 	idleTimeoutMax    = 600
-	requestTimeoutMin = 30
 	releaseBodyMax    = 1 << 10
 	headerDigitsMax   = 6
 )
@@ -107,13 +106,13 @@ func strictHeaderInt(r *http.Request, name string) (n int, present bool, errMsg 
 // callLimits are one inference request's effective session and timer values.
 type callLimits struct {
 	durationSec int // 0: pool default
-	totalSec    int
-	totalSet    bool // X-Uplink-Request-Timeout sent
+	totalSec    int // always requestTimeoutDef
 	idleSec     int
 	anyHeader   bool
 }
 
-// parseCallLimits validates the three X-Uplink headers (DETAIL §2).
+// parseCallLimits validates the two X-Uplink headers (session duration
+// and idle timeout).
 func (s *Server) parseCallLimits(r *http.Request) (callLimits, string) {
 	dmax := s.durationMax()
 	idleDef := s.forwardIdle()
@@ -129,15 +128,6 @@ func (s *Server) parseCallLimits(r *http.Request) (callLimits, string) {
 			return cl, fmt.Sprintf("X-Uplink-Session-Duration must be 600…%d seconds", dmax)
 		}
 		cl.durationSec = n
-	}
-	if n, ok, msg := strictHeaderInt(r, "X-Uplink-Request-Timeout"); msg != "" {
-		return cl, msg
-	} else if ok {
-		cl.anyHeader, cl.totalSet = true, true
-		if n <= 0 {
-			return cl, "X-Uplink-Request-Timeout must be at least 1 second"
-		}
-		cl.totalSec = min(max(n, requestTimeoutMin), dmax-120)
 	}
 	if n, ok, msg := strictHeaderInt(r, "X-Uplink-Idle-Timeout"); msg != "" {
 		return cl, msg
@@ -258,11 +248,7 @@ func (s *Server) handleSessionRelease(w http.ResponseWriter, r *http.Request) {
 
 // acquireSession wraps pool.Acquire with its typed error answers.
 func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID string, cl callLimits) (*pool.Lease, pool.AcquireResult, bool) {
-	o := pool.AcquireOpts{KeyID: keyID, DurationSec: cl.durationSec}
-	if cl.totalSet {
-		o.TotalSec = cl.totalSec
-	}
-	lease, res, err := s.pool.Acquire(modelID, o)
+	lease, res, err := s.pool.Acquire(modelID, pool.AcquireOpts{KeyID: keyID, DurationSec: cl.durationSec})
 	if errors.Is(err, pool.ErrNoEligibleProvider) {
 		// Only providers excluded by UPLINK_PROVIDER_EXCLUDE serve the model.
 		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")
@@ -286,38 +272,21 @@ func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID 
 }
 
 // forwardOpts turns the call limits into router timers.
-func forwardOpts(cl callLimits, total int, stream bool) router.ForwardOptions {
+func forwardOpts(cl callLimits, stream bool) router.ForwardOptions {
 	return router.ForwardOptions{
 		Idle:   time.Duration(cl.idleSec) * timeUnit,
-		Total:  time.Duration(total) * timeUnit,
+		Total:  time.Duration(cl.totalSec) * timeUnit,
 		Stream: stream,
 	}
 }
 
 // setTimeoutHeaders writes the effective values (no ids) when the client
 // sent any of the X-Uplink headers; without them responses are unchanged.
-func setTimeoutHeaders(w http.ResponseWriter, cl callLimits, total int, remaining time.Duration) {
+func setTimeoutHeaders(w http.ResponseWriter, cl callLimits) {
 	if !cl.anyHeader {
 		return
 	}
-	w.Header().Set("X-Uplink-Timeouts", "idle="+strconv.Itoa(cl.idleSec)+";total="+strconv.Itoa(total))
-	rem := int(remaining / time.Second)
-	if rem < 0 {
-		rem = 0
-	}
-	w.Header().Set("X-Uplink-Session-Remaining", strconv.Itoa(rem))
-}
-
-// effectiveTotal applies step 3 of the reuse rule: on a reused session
-// (and only when the header was sent) clamp the total to its remaining life.
-func effectiveTotal(cl callLimits, res pool.AcquireResult) int {
-	total := cl.totalSec
-	if cl.totalSet && !res.Opened {
-		if rem := int(res.Remaining / time.Second); rem < total {
-			total = max(rem, 1)
-		}
-	}
-	return total
+	w.Header().Set("X-Uplink-Timeouts", "idle="+strconv.Itoa(cl.idleSec)+";total="+strconv.Itoa(cl.totalSec))
 }
 
 // writeNoAvailableProvider answers ErrNoAvailableProvider: a typed 503 with

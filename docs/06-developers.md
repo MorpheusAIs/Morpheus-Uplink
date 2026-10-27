@@ -627,8 +627,8 @@ timers and session handling. Source: `internal/api/longjob.go`,
 `internal/pool/lease.go`, `internal/router/client.go`.
 
 - *Timers per call.* An **idle** timer (no bytes from upstream; default
-  `UPLINK_FORWARD_IDLE_SECONDS`, 180) and a **total** timer (default the
-  session length). Before any answer an expiry is a `504`
+  `UPLINK_FORWARD_IDLE_SECONDS`, 180) and a **total** timer (600 s, not
+  set per call). Before any answer an expiry is a `504`
   `{"error":{"type":"timeout","code":504,"message":"upstream idle timeout"}}`
   (or `total`). Mid-stream the client gets an SSE error event, a chunk with
   `finish_reason: "uplink_idle_timeout"` (or `uplink_total_timeout`) and
@@ -641,18 +641,15 @@ timers and session handling. Source: `internal/api/longjob.go`,
   once; anything else is a `400` that names the header):
   - `X-Uplink-Session-Duration`: session length for a new session,
     600…`UPLINK_SESSION_DURATION_MAX`.
-  - `X-Uplink-Request-Timeout`: total for this call; clamped to
-    30…(max − 120).
   - `X-Uplink-Idle-Timeout`: idle timer for this call; clamped to 30…600.
-  When any of them is sent the response carries
-  `X-Uplink-Timeouts: idle=<s>;total=<s>` and
-  `X-Uplink-Session-Remaining: <s>`. Without them responses are unchanged.
-- *Reuse by remaining life.* A pooled session is reused only when its
-  remaining life covers the call's total plus 30 s; otherwise a new
-  session opens for max(requested, total + 120) s, capped at the max, and
-  the old one is retired and closed when its last call ends.
+  When either is sent the response carries
+  `X-Uplink-Timeouts: idle=<s>;total=<s>`. Without them responses are
+  unchanged. Other `X-Uplink-` headers are not read.
+- *Session reuse.* A pooled session is reused until it expires (less the
+  90 s buffer) or the idle sweep closes it; the next call then opens a new
+  one at the requested or default length, capped at the max.
 - *Leases.* Every call holds a lease on its session; a session is closed
-  (release, idle sweep, failover, reopen) only when no call is in flight.
+  (release, idle sweep, failover) only when no call is in flight.
   A failover on a session another call is still using retires it and
   closes it later.
 - *Idle sweep.* Every 30 s, sessions with nothing in flight and unused for
