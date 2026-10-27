@@ -31,14 +31,32 @@ type factorResult struct {
 // A 6-digit input is treated as TOTP, a 12-symbol base32 input as a
 // recovery code; anything else fails as bad_totp.
 func (s *Server) consumeSecondFactor(code string, then func(*store.AuthState)) factorResult {
+	return s.consumeFactor(code, true, then)
+}
+
+// consumeTOTP is consumeSecondFactor that accepts a TOTP code only. A
+// recovery code is refused before the store update, so it is not consumed.
+func (s *Server) consumeTOTP(code string, then func(*store.AuthState)) factorResult {
+	return s.consumeFactor(code, false, then)
+}
+
+func (s *Server) consumeFactor(code string, allowRecovery bool, then func(*store.AuthState)) factorResult {
 	var res factorResult
 	code = strings.TrimSpace(code)
+	if !allowRecovery && adminauth.LooksLikeRecoveryCode(code) {
+		res.reason = "recovery_code_refused"
+		return res
+	}
 	err := s.store.UpdateAuthState(func(a *store.AuthState) error {
 		if !a.Enrolled {
 			res.reason = "not_enrolled"
 			return errNotEnrolled
 		}
 		if adminauth.LooksLikeRecoveryCode(code) {
+			if !allowRecovery { // unreachable: refused above, kept as a guard
+				res.reason = "recovery_code_refused"
+				return errSecondFactor
+			}
 			pepper, err := adminauth.RecoveryPepper(s.cfg.APIKeySeed)
 			if err != nil {
 				res.reason = "recovery_error"

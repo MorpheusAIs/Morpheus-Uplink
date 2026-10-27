@@ -58,7 +58,7 @@ func TestTwoFactorOnNotEnrolledAllowsEnrollPath(t *testing.T) {
 	}
 
 	// Enroll start must work with CSRF.
-	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/admin/2fa/enroll/start", strings.NewReader("{}"))
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/admin/2fa/enroll/start", strings.NewReader(`{"password":"`+cfg.AdminPassword+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	withCSRF(req, cfg)
 	resp, err = ac.Do(req)
@@ -114,7 +114,7 @@ func TestRequireSessionPollDoesNotExtendIdle(t *testing.T) {
 
 	makeReq := func(poll bool) *http.Request {
 		rr := httptest.NewRecorder()
-		adminauth.SetSessionCookie(rr, raw, true)
+		adminauth.SetSessionCookie(rr, raw, true, adminauth.SessionAbsolute)
 		req := httptest.NewRequest(http.MethodGet, "/admin/2fa/status", nil)
 		for _, c := range rr.Result().Cookies() {
 			req.AddCookie(c)

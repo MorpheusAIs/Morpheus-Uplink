@@ -13,6 +13,9 @@ type AuditEvent struct {
 	IP      string    `json:"ip,omitempty"`
 	Result  string    `json:"result,omitempty"`
 	Message string    `json:"message"`
+	// reason is the short failure/detail code for the JSON log (not part
+	// of the ring's JSON shape).
+	reason string
 }
 
 // AuditLog is an in-memory ring of recent events for the Security panel.

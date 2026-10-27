@@ -36,6 +36,8 @@ type Server struct {
 	sessions  *adminauth.SessionStore
 	lockout   *adminauth.Lockout
 	audit     *AuditLog
+	auditSink AuditSink
+	auditAgg  *auditAggregator
 	outflow   *OutflowAlert
 
 	walletMu   sync.Mutex
@@ -58,11 +60,13 @@ func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *po
 		housekeep: hk,
 		masterKey: keymaker.MasterKey(cfg.APIKeySeed),
 		promptKey: keymaker.PromptKey(cfg.APIKeySeed),
-		sessions:  adminauth.NewSessionStore(),
+		sessions:  adminauth.NewSessionStoreWith(cfg.AdminSessionIdle, cfg.AdminSessionAbsolute),
 		lockout:   lo,
 		audit:     NewAuditLog(500),
 		outflow:   &OutflowAlert{},
 	}
+	s.auditSink = ringSink{ring: s.audit}
+	s.auditAgg = newAuditAggregator(aggWindow, aggMaxKeys, func(st AuditStream, ev AuditEvent) { s.writeAudit(st, ev) })
 	s.applyBreakGlass()
 	s.ensurePasswordFingerprint()
 	return s
@@ -84,13 +88,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/2fa/status", s.requireSession(s.handleTOTPStatus))
 	mux.HandleFunc("POST /admin/2fa/enroll/start", s.requireSession(s.handleTOTPEnrollStart))
 	mux.HandleFunc("POST /admin/2fa/enroll/confirm", s.requireSession(s.handleTOTPEnrollConfirm))
+	mux.HandleFunc("POST /admin/step-up", s.requireSession(s.handleStepUp))
 	mux.HandleFunc("POST /admin/2fa/remove", s.requireAdmin(s.handleTOTPRemove))
 	mux.HandleFunc("POST /admin/2fa/recovery/regen", s.requireAdmin(s.handleRecoveryRegen))
 	mux.HandleFunc("POST /admin/2fa/reset", s.requireAdmin(s.handleTOTPReset))
 	mux.HandleFunc("GET /admin/audit", s.requireAdmin(s.handleAudit))
 
 	// Admin surface (session cookie).
-	mux.HandleFunc("GET /admin/keys", s.requireAdmin(s.handleListKeys))
+	mux.HandleFunc("GET /admin/keys", s.refuseRevealOverBearer(s.requireAdmin(s.handleListKeys)))
 	mux.HandleFunc("POST /admin/keys", s.requireAdmin(s.handleCreateKey))
 	mux.HandleFunc("POST /admin/keys/import", s.requireAdmin(s.handleImportKey))
 	mux.HandleFunc("DELETE /admin/keys/{id}", s.requireAdmin(s.handleRevokeKey))

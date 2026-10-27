@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	SessionAbsolute = 8 * time.Hour
-	SessionIdle     = 30 * time.Minute
+	// Defaults when the store is built without explicit lengths
+	// (ADMIN_SESSION_IDLE / ADMIN_SESSION_ABSOLUTE, see config).
+	SessionAbsolute = 12 * time.Hour
+	SessionIdle     = 4 * time.Hour
 	MaxSessions     = 10
 
 	CookieHost = "__Host-uplink_admin"
@@ -23,16 +25,41 @@ type Session struct {
 	Hash      string
 	CreatedAt time.Time
 	LastSeen  time.Time
-	IP        string
+	IP        string // client address last seen on this session
+	// StepUpAt is the last successful POST /admin/step-up (zero if none).
+	StepUpAt time.Time
+}
+
+// Fresh reports whether the session logged in or stepped up within maxAge
+// of now (StepUpAt, or CreatedAt when it never stepped up).
+func (s *Session) Fresh(now time.Time, maxAge time.Duration) bool {
+	at := s.CreatedAt
+	if s.StepUpAt.After(at) {
+		at = s.StepUpAt
+	}
+	return now.Sub(at) <= maxAge
 }
 
 type SessionStore struct {
-	mu     sync.Mutex
-	byHash map[string]*Session // hash -> session
-	now    func() time.Time    // injectable clock (tests); nil = time.Now
+	mu       sync.Mutex
+	byHash   map[string]*Session // hash -> session
+	now      func() time.Time    // injectable clock (tests); nil = time.Now
+	idle     time.Duration
+	absolute time.Duration
 }
 
 func (s *SessionStore) clock() time.Time {
+	s.mu.Lock()
+	now := s.now
+	s.mu.Unlock()
+	if now != nil {
+		return now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// clockLocked is clock for callers that already hold s.mu.
+func (s *SessionStore) clockLocked() time.Time {
 	if s.now != nil {
 		return s.now().UTC()
 	}
@@ -40,7 +67,37 @@ func (s *SessionStore) clock() time.Time {
 }
 
 func NewSessionStore() *SessionStore {
-	return &SessionStore{byHash: map[string]*Session{}}
+	return NewSessionStoreWith(SessionIdle, SessionAbsolute)
+}
+
+// NewSessionStoreWith builds a store with the given idle and absolute
+// lengths. A non-positive value uses the default; idle never exceeds
+// absolute. The lengths do not depend on the 2FA state.
+func NewSessionStoreWith(idle, absolute time.Duration) *SessionStore {
+	if absolute <= 0 {
+		absolute = SessionAbsolute
+	}
+	if idle <= 0 {
+		idle = SessionIdle
+	}
+	if idle > absolute {
+		idle = absolute
+	}
+	return &SessionStore{byHash: map[string]*Session{}, idle: idle, absolute: absolute}
+}
+
+// Idle and Absolute are the effective session lengths.
+func (s *SessionStore) Idle() time.Duration     { return s.idle }
+func (s *SessionStore) Absolute() time.Duration { return s.absolute }
+
+// Now is the store's clock (UTC), for age checks made outside the store.
+func (s *SessionStore) Now() time.Time { return s.clock() }
+
+// SetClock replaces the clock (tests only; nil restores time.Now).
+func (s *SessionStore) SetClock(now func() time.Time) {
+	s.mu.Lock()
+	s.now = now
+	s.mu.Unlock()
 }
 
 func (s *SessionStore) Create(ip string) (rawToken string, err error) {
@@ -50,9 +107,9 @@ func (s *SessionStore) Create(ip string) (rawToken string, err error) {
 	}
 	sum := sha256.Sum256(raw)
 	hash := hex.EncodeToString(sum[:])
-	now := s.clock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.clockLocked()
 	// Evict oldest if at cap.
 	for len(s.byHash) >= MaxSessions {
 		var oldestHash string
@@ -84,12 +141,12 @@ func (s *SessionStore) Lookup(rawToken string, extendIdle bool) (*Session, bool)
 	if sess == nil {
 		return nil, false
 	}
-	now := s.clock()
-	if now.Sub(sess.CreatedAt) > SessionAbsolute {
+	now := s.clockLocked()
+	if now.Sub(sess.CreatedAt) > s.absolute {
 		delete(s.byHash, hash)
 		return nil, false
 	}
-	if now.Sub(sess.LastSeen) > SessionIdle {
+	if now.Sub(sess.LastSeen) > s.idle {
 		delete(s.byHash, hash)
 		return nil, false
 	}
@@ -98,6 +155,15 @@ func (s *SessionStore) Lookup(rawToken string, extendIdle bool) (*Session, bool)
 	}
 	cp := *sess
 	return &cp, true
+}
+
+func hashRaw(rawToken string) (string, bool) {
+	raw, err := hex.DecodeString(rawToken)
+	if err != nil || len(raw) != 32 {
+		return "", false
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), true
 }
 
 func (s *SessionStore) RevokeRaw(rawToken string) {
@@ -110,6 +176,58 @@ func (s *SessionStore) RevokeRaw(rawToken string) {
 	s.mu.Lock()
 	delete(s.byHash, hash)
 	s.mu.Unlock()
+}
+
+// StampStepUp records a successful step-up on the session. False when the
+// session no longer exists.
+func (s *SessionStore) StampStepUp(rawToken string) (time.Time, bool) {
+	hash, ok := hashRaw(rawToken)
+	if !ok {
+		return time.Time{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.byHash[hash]
+	if sess == nil {
+		return time.Time{}, false
+	}
+	sess.StepUpAt = s.clockLocked()
+	return sess.StepUpAt, true
+}
+
+// ObserveIP records ip as the session's current client address. changed is
+// true (with the previous address) only when it differs from the last one
+// recorded, so each change is reported once. There is no binding: the
+// session stays valid.
+func (s *SessionStore) ObserveIP(rawToken, ip string) (prev string, changed bool) {
+	hash, ok := hashRaw(rawToken)
+	if !ok || ip == "" {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.byHash[hash]
+	if sess == nil || sess.IP == ip {
+		return "", false
+	}
+	prev, sess.IP = sess.IP, ip
+	return prev, true
+}
+
+// RevokeAllExcept revokes every session but the one for keepRaw and returns
+// how many were revoked.
+func (s *SessionStore) RevokeAllExcept(keepRaw string) int {
+	keep, _ := hashRaw(keepRaw)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for h := range s.byHash {
+		if h != keep {
+			delete(s.byHash, h)
+			n++
+		}
+	}
+	return n
 }
 
 func (s *SessionStore) RevokeAll() int {
@@ -127,14 +245,19 @@ func CookieName(devHTTP bool) string {
 	return CookieHost
 }
 
-func SetSessionCookie(w http.ResponseWriter, rawToken string, devHTTP bool) {
+// SetSessionCookie sets the admin cookie; MaxAge is the absolute session
+// length. Flags: HttpOnly, SameSite=Strict, Secure unless devHTTP.
+func SetSessionCookie(w http.ResponseWriter, rawToken string, devHTTP bool, absolute time.Duration) {
+	if absolute <= 0 {
+		absolute = SessionAbsolute
+	}
 	c := &http.Cookie{
 		Name:     CookieName(devHTTP),
 		Value:    rawToken,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(SessionAbsolute.Seconds()),
+		MaxAge:   int(absolute.Seconds()),
 	}
 	if !devHTTP {
 		c.Secure = true

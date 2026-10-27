@@ -60,7 +60,7 @@ func TestTOTPRemoveRegenAuditFailures(t *testing.T) {
 	ac := adminClient(t, ts, cfg)
 
 	// Enroll so the second-factor branch is reachable.
-	code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", "{}")
+	code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/start", `{"password":"`+cfg.AdminPassword+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("enroll start: %d %s", code, b)
 	}
@@ -74,7 +74,7 @@ func TestTOTPRemoveRegenAuditFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, b = postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"`+otpCode+`"}`)
+	code, b = postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"password":"`+cfg.AdminPassword+`","code":"`+otpCode+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("enroll confirm: %d %s", code, b)
 	}

@@ -18,6 +18,7 @@ var sessionOnlyRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/admin/2fa/status"},
 	{http.MethodPost, "/admin/2fa/enroll/start"},
 	{http.MethodPost, "/admin/2fa/enroll/confirm"},
+	{http.MethodPost, "/admin/step-up"},
 }
 
 func doReq(t *testing.T, c *http.Client, ts *httptest.Server, cfg *config.Config, method, path, bearer string) (int, string) {
@@ -154,7 +155,7 @@ func TestSessionRoutesRefuseAuthorizationHeader(t *testing.T) {
 								t.Fatalf("session_logout records: %d, want 0", n)
 							}
 							// enroll/start did not run: there is no pending enrollment.
-							code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"code":"000000"}`)
+							code, b := postJSON(t, ac, ts, cfg, "/admin/2fa/enroll/confirm", `{"password":"`+cfg.AdminPassword+`","code":"000000"}`)
 							if code != http.StatusBadRequest || !strings.Contains(string(b), "no pending enrollment") {
 								t.Fatalf("cookie confirm after refusal: %d %s, want 400 no pending enrollment", code, b)
 							}
@@ -192,6 +193,9 @@ func TestSessionRoutesCookieSessionWorks(t *testing.T) {
 
 // requireAdmin is unchanged: with MASTER_KEY_ADMIN=true the master Bearer is
 // accepted and writes admin_key_use; with it false the Bearer gets 401.
+// admin_key_use is aggregated per client address per minute: the first use
+// is written at once, repeats in the same minute are counted (see
+// TestAuditAggregatorAdminKeyUse).
 func TestRequireAdminMasterKeyBearerUnchanged(t *testing.T) {
 	ts, cfg, _ := newTestServer(t)
 	master := keymaker.MasterKey(cfg.APIKeySeed)
@@ -212,9 +216,10 @@ func TestRequireAdminMasterKeyBearerUnchanged(t *testing.T) {
 		}
 	}
 	evs := auditEvents(t, ac, ts)
-	for _, p := range []string{"/admin/status", "/admin/keys"} {
-		if !hasAudit(evs, "admin_key_use", "ok", p) {
-			t.Fatalf("missing admin_key_use ok for %s: %#v", p, evs)
-		}
+	if !hasAudit(evs, "admin_key_use", "ok", "/admin/status") {
+		t.Fatalf("missing admin_key_use ok for /admin/status: %#v", evs)
+	}
+	if n := countAudit(evs, "admin_key_use"); n != 1 {
+		t.Fatalf("admin_key_use lines in the first minute: %d, want 1 (aggregated)", n)
 	}
 }

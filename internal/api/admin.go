@@ -25,8 +25,24 @@ func recordsForAdminJSON(recs []keymaker.Record) []keymaker.Record {
 	return out
 }
 
+// handleListKeys (GET /admin/keys) lists the keys masked. With reveal=1 it
+// returns the full keys only to a cookie session that logged in or stepped
+// up (POST /admin/step-up) within StepUpMaxAge; otherwise 401
+// step_up_required. It takes no credentials itself. Over a Bearer token
+// reveal is refused earlier (refuseRevealOverBearer).
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
+	reveal := revealRequested(r)
+	if reveal {
+		auth := adminAuthFrom(r)
+		if auth.bearer || auth.session == nil {
+			http.Error(w, "key reveal needs an admin session", http.StatusForbidden)
+			return
+		}
+		if !auth.session.Fresh(s.sessions.Now(), StepUpMaxAge) {
+			http.Error(w, errMsgStepUp, http.StatusUnauthorized)
+			return
+		}
+	}
 	out := map[string]any{
 		"keys":   recordsForAdminJSON(s.store.ListKeys()),
 		"masked": !reveal,
@@ -35,7 +51,8 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		// Explicit reveal only — master key is never returned by default.
 		out["masterKey"] = s.masterKey
 		out["promptKey"] = s.promptKey
-		s.audit.Record("key_reveal", s.lockout.ClientIP(r), "admin revealed master/prompt keys")
+		ip := s.lockout.ClientIP(r)
+		s.writeAudit(AuditStreamFor("key_reveal", "ok"), AuditEvent{Kind: "key_reveal", Actor: ip, IP: ip, Result: "ok", Message: "admin revealed master/prompt keys"})
 	} else {
 		out["masterKey"] = maskSecret(s.masterKey)
 		out["promptKey"] = maskSecret(s.promptKey)
@@ -222,6 +239,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"masterKeyAdmin": s.cfg.MasterKeyAdmin,
 		"configWarn":     s.cfg.MalformedBoolVars,
 	}
+	status["adminSession"] = s.adminSessionStatus(auth.On())
 	writeJSON(w, http.StatusOK, status)
 }
 
@@ -522,4 +540,27 @@ func fileSizeBestEffort(path string) int64 {
 		return 0
 	}
 	return fi.Size()
+}
+
+// adminSessionStatus reports the effective admin session lengths
+// (ADMIN_SESSION_IDLE / ADMIN_SESSION_ABSOLUTE, env only). The "2FA is off"
+// warning is informational: session validity does not depend on 2FA.
+func (s *Server) adminSessionStatus(twoFactorOn bool) map[string]any {
+	warnings := []string{}
+	if !twoFactorOn {
+		warnings = append(warnings, "2FA is off")
+	}
+	configWarn := s.cfg.AdminSessionWarnings
+	if configWarn == nil {
+		configWarn = []string{}
+	}
+	return map[string]any{
+		"idle":            s.sessions.Idle().String(),
+		"idleSec":         int(s.sessions.Idle().Seconds()),
+		"absolute":        s.sessions.Absolute().String(),
+		"absoluteSec":     int(s.sessions.Absolute().Seconds()),
+		"stepUpMaxAgeSec": int(StepUpMaxAge.Seconds()),
+		"warnings":        warnings,
+		"configWarn":      configWarn,
+	}
 }

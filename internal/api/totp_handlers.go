@@ -1,11 +1,12 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
@@ -24,9 +25,8 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		raw := adminauth.ReadSessionCookie(r, s.cfg.DevHTTP)
-		poll := r.Header.Get("X-Uplink-Poll") == "1"
-		if _, ok := s.sessions.Lookup(raw, !poll); !ok {
+		raw, sess, ok := s.cookieSession(r)
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -34,11 +34,28 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), adminAuthKey{}, adminAuth{session: sess, raw: raw})))
 	}
 }
 
+// handleTOTPEnrollStart (POST /admin/2fa/enroll/start {password}) needs the
+// admin password in the body (lockout applies) before a secret is issued.
 func (s *Server) handleTOTPEnrollStart(w http.ResponseWriter, r *http.Request) {
+	ip := s.lockout.ClientIP(r)
+	if s.lockedOut(w, ip) {
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := decodeCredBody(w, r, &req); err != nil {
+		http.Error(w, `{"password":"..."} required`, http.StatusBadRequest)
+		return
+	}
+	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
+		s.failAuth(w, "2fa_enroll", ip, "bad_password", "unauthorized")
+		return
+	}
 	key, err := adminauth.GenerateTOTP("Morpheus-Uplink", "admin")
 	if err != nil {
 		http.Error(w, "totp generate failed", http.StatusInternalServerError)
@@ -92,19 +109,26 @@ var (
 	errBadCode         = errors.New("invalid code")
 )
 
-// handleTOTPEnrollConfirm checks the first code against the pending secret
-// and, in the same store update, stores the secret, turns the 2FA switch on
-// and issues recovery codes.
+// handleTOTPEnrollConfirm (POST /admin/2fa/enroll/confirm {password, code})
+// checks the password, then the first code against the pending secret and,
+// in the same store update, stores the secret, turns the 2FA switch on and
+// issues recovery codes. On success every admin session is revoked and the
+// caller gets a new one.
 func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request) {
 	ip := s.lockout.ClientIP(r)
 	if s.lockedOut(w, ip) {
 		return
 	}
 	var req struct {
-		Code string `json:"code"`
+		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
-		http.Error(w, `{"code":"..."} required`, http.StatusBadRequest)
+	if err := decodeCredBody(w, r, &req); err != nil || req.Code == "" {
+		http.Error(w, `{"password":"...","code":"..."} required`, http.StatusBadRequest)
+		return
+	}
+	if subtleCompare(req.Password, s.cfg.AdminPassword) != 1 {
+		s.failAuth(w, "2fa_enroll", ip, "bad_password", "unauthorized")
 		return
 	}
 	codes, hashes, err := s.issueRecoveryCodes()
@@ -167,7 +191,15 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.lockout.Success(ip)
-	s.auditEvent("2fa_enroll", ip, "ok", "")
+	// Only now (password and code both checked, enrolment stored): sign out
+	// every other admin session and re-issue the caller's.
+	n := s.sessions.RevokeAll()
+	if raw, err := s.sessions.Create(ip); err == nil {
+		adminauth.SetSessionCookie(w, raw, s.cfg.DevHTTP, s.sessions.Absolute())
+	} else {
+		adminauth.ClearSessionCookie(w, s.cfg.DevHTTP)
+	}
+	s.auditEvent("2fa_enroll", ip, "ok", "sessions_revoked="+strconv.Itoa(n))
 	s.auditEvent("recovery_codes_issued", ip, "ok", "count="+strconv.Itoa(len(codes)))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":            true,
@@ -178,8 +210,10 @@ func (s *Server) handleTOTPEnrollConfirm(w http.ResponseWriter, r *http.Request)
 // passwordAndFactor runs the shared checks for the password + second factor
 // endpoints (remove, regenerate, reset): lockout, body, password, then an
 // atomic second-factor consume. then runs inside the same store update on
-// success. Returns false after writing the error response.
-func (s *Server) passwordAndFactor(w http.ResponseWriter, r *http.Request, event string, then func(*store.AuthState)) (factorResult, bool) {
+// success. With allowRecovery false (regenerate) only a TOTP code is
+// accepted, and a recovery code is refused before anything is consumed.
+// Returns false after writing the error response.
+func (s *Server) passwordAndFactor(w http.ResponseWriter, r *http.Request, event string, allowRecovery bool, then func(*store.AuthState)) (factorResult, bool) {
 	ip := s.lockout.ClientIP(r)
 	if s.lockedOut(w, ip) {
 		return factorResult{}, false
@@ -188,7 +222,7 @@ func (s *Server) passwordAndFactor(w http.ResponseWriter, r *http.Request, event
 		Password string `json:"password"`
 		Code     string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeCredBody(w, r, &req); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return factorResult{}, false
 	}
@@ -200,7 +234,17 @@ func (s *Server) passwordAndFactor(w http.ResponseWriter, r *http.Request, event
 		http.Error(w, "not enrolled", http.StatusBadRequest)
 		return factorResult{}, false
 	}
-	res := s.consumeSecondFactor(req.Code, then)
+	if !allowRecovery && adminauth.LooksLikeRecoveryCode(strings.TrimSpace(req.Code)) {
+		// Refused before consumeFactor: the recovery code stays unused.
+		s.failAuth(w, event, ip, "recovery_code_refused", errMsgTOTPOnly)
+		return factorResult{}, false
+	}
+	var res factorResult
+	if allowRecovery {
+		res = s.consumeSecondFactor(req.Code, then)
+	} else {
+		res = s.consumeTOTP(req.Code, then)
+	}
 	if !res.ok {
 		if res.reason == "not_enrolled" {
 			http.Error(w, "not enrolled", http.StatusBadRequest)
@@ -237,7 +281,7 @@ func turnOff2FA(a *store.AuthState) {
 // and revokes every admin session including this one. The next login is
 // password-only.
 func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.passwordAndFactor(w, r, "2fa_remove", turnOff2FA); !ok {
+	if _, ok := s.passwordAndFactor(w, r, "2fa_remove", true, turnOff2FA); !ok {
 		return
 	}
 	n := s.sessions.RevokeAll()
@@ -252,7 +296,7 @@ func (s *Server) handleTOTPRemove(w http.ResponseWriter, r *http.Request) {
 // The 2FA switch stays on, so the next (password-only) session can only
 // enroll again (requireAdmin), and enrolling issues new recovery codes.
 func (s *Server) handleTOTPReset(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.passwordAndFactor(w, r, "2fa_reset", wipe2FA); !ok {
+	if _, ok := s.passwordAndFactor(w, r, "2fa_reset", true, wipe2FA); !ok {
 		return
 	}
 	n := s.sessions.RevokeAll()
@@ -264,6 +308,8 @@ func (s *Server) handleTOTPReset(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRecoveryRegen (POST /admin/2fa/recovery/regen) needs the password
+// plus a current TOTP code; a recovery code is not accepted here.
 func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 	codes, hashes, err := s.issueRecoveryCodes()
 	if err != nil {
@@ -273,7 +319,7 @@ func (s *Server) handleRecoveryRegen(w http.ResponseWriter, r *http.Request) {
 	replace := func(a *store.AuthState) {
 		a.RecoveryCodes = hashes
 	}
-	if _, ok := s.passwordAndFactor(w, r, "recovery_codes_regenerated", replace); !ok {
+	if _, ok := s.passwordAndFactor(w, r, "recovery_codes_regenerated", false, replace); !ok {
 		return
 	}
 	s.auditEvent("recovery_codes_regenerated", s.lockout.ClientIP(r), "ok", "count="+strconv.Itoa(len(codes)))
