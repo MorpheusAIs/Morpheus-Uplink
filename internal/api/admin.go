@@ -334,7 +334,7 @@ func bigStr(n *big.Int) string {
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"usage": s.store.Usage()})
+	writeJSON(w, http.StatusOK, map[string]any{"usage": s.usageViews(s.store.Usage())})
 }
 
 func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {

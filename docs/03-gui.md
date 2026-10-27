@@ -136,6 +136,11 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 - **Usage** counters are stored on the Uplink data volume: they survive
   restarts and redeploys, and reset on a fresh deploy or when the volume is
   deleted. Funds do not depend on them.
+- Usage is counted per model registration: a call by name and a call by
+  id to the same model land in one row, shown as `name (0x + 6 hex)`, for
+  example `deepseek-v4-pro (0xb2c4a6)`. An id the catalog no longer lists
+  shows its short id. Rows saved by an older version under a model name
+  join the matching row when the name still resolves.
 
 ---
 

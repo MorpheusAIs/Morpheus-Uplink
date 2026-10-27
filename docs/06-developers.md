@@ -197,7 +197,14 @@ everything. Time range defaults to **7d** (UTC day buckets; no hourly precision)
 
 ### `GET /v1/usage` (self-scoped)
 
-Bearer API keys only (`requireAPIKey`). Response `{"usage":[ UsageRow… ]}`.
+Bearer API keys only (`requireAPIKey`). Response `{"usage":[ row… ]}`, the
+same row shape as `GET /admin/usage`:
+`{day, keyId, model, modelId, requests, promptTokens, completionTokens, sessionSeconds}`.
+Usage is recorded by the resolved registration id, so name and id calls
+share a row. `model` is the display label `name (0x + 6 hex)`, or the short
+id when the catalog does not list the id; `modelId` is the full id. Rows
+stored under a model name by older versions are resolved and merged on
+read; a name that no longer resolves is shown as stored with no `modelId`.
 
 | Caller | Scope |
 |--------|--------|

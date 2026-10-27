@@ -109,7 +109,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 			return
 		}
 		if ensured.Opened {
-			s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
+			s.store.TrackSessionOpen(ensured.SessionID, keyID, modelID)
 		}
 		sessionID := ensured.SessionID
 
@@ -133,7 +133,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 					return
 				}
 				if ensured.Opened {
-					s.store.TrackSessionOpen(ensured.SessionID, keyID, reqModel)
+					s.store.TrackSessionOpen(ensured.SessionID, keyID, modelID)
 				}
 				sessionID = ensured.SessionID
 				res, err = s.router.Forward(w, routerPath, sessionID, r.Header, body, false)
@@ -159,7 +159,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		if res.MidStreamProviderError {
 			s.afterStreamProviderError(reqModel, modelID, sessionID, durationSec, res.MidStreamStatus)
 		}
-		s.store.RecordUsage(keyID, reqModel, res.PromptTokens, res.CompletionTokens)
+		s.store.RecordUsage(keyID, modelID, res.PromptTokens, res.CompletionTokens) // by resolved id (#56)
 	}
 }
 
@@ -188,7 +188,7 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 		return nil, "", errAnswered
 	}
 	if fr.Opened {
-		s.store.TrackSessionOpen(fr.SessionID, keyID, reqModel)
+		s.store.TrackSessionOpen(fr.SessionID, keyID, modelID)
 	}
 	res, err := s.router.Forward(w, routerPath, fr.SessionID, r.Header, body, true)
 	if fr.Replaced {
@@ -358,5 +358,5 @@ func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = filtered
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"usage": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"usage": s.usageViews(rows)})
 }

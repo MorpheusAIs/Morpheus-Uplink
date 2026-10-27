@@ -60,11 +60,12 @@ func main() {
 			log.Printf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
 			return
 		}
+		// Usage is keyed by the registration id (#56); the name is for the log.
+		st.RecordSessionClose(sessionID, sec, detail.ModelAgentID)
 		model := cat.NameByID(detail.ModelAgentID)
 		if model == "" {
-			model = detail.ModelAgentID
+			model = pool.ShortID(detail.ModelAgentID)
 		}
-		st.RecordSessionClose(sessionID, sec, model)
 		src := "receipt"
 		if detail.ClosedAt <= 0 {
 			src = "open+now"
