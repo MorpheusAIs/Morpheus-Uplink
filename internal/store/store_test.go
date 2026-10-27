@@ -300,3 +300,60 @@ func TestSymlinkedStateFileRefused(t *testing.T) {
 		t.Fatalf("target written: %q", b)
 	}
 }
+
+// Conformance NIT-3 / security gate: orphan temp files from a crash are
+// removed at boot — only regular files matching the save pattern directly
+// in DATA_DIR. A matching symlink, a matching directory, a non-matching
+// file and anything in a subdirectory are left alone.
+func TestOpenRemovesOnlyOrphanTemps(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(dir, "uplink-state.json.123456.tmp")
+	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "uplink-state.json.777.tmp")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	subdir := filepath.Join(dir, "uplink-state.json.55.tmp")
+	if err := os.Mkdir(subdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(subdir, "uplink-state.json.66.tmp")
+	keep := []string{
+		filepath.Join(dir, "uplink-state.json.abc.tmp"),
+		filepath.Join(dir, "uplink-state.json.tmp"),
+		filepath.Join(dir, "other.123.tmp"),
+		nested,
+	}
+	for _, k := range keep {
+		if err := os.WriteFile(k, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan temp not removed: %v", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("matching symlink touched: %v", err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("symlink target touched: %q", b)
+	}
+	if fi, err := os.Lstat(subdir); err != nil || !fi.IsDir() {
+		t.Fatalf("matching directory touched: %v", err)
+	}
+	for _, k := range keep {
+		if _, err := os.Lstat(k); err != nil {
+			t.Fatalf("%s removed: %v", filepath.Base(k), err)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -63,6 +64,7 @@ func Open(dataDir string) (*Store, error) {
 		path: filepath.Join(dataDir, "uplink-state.json"),
 		st:   state{Usage: map[string]*UsageRow{}},
 	}
+	removeOrphanTemps(dataDir)
 	if err := refuseSymlink(s.path); err != nil {
 		return nil, err
 	}
@@ -139,6 +141,32 @@ func (s *Store) save() error {
 		d.Close()
 	}
 	return nil
+}
+
+// orphanTemp matches the temp files save creates (os.CreateTemp with
+// "uplink-state.json.*.tmp": the * is decimal digits).
+var orphanTemp = regexp.MustCompile(`^uplink-state\.json\.[0-9]+\.tmp$`)
+
+// removeOrphanTemps deletes temp files a crash between CreateTemp and
+// rename left behind: only regular files (Lstat; symlinks and anything
+// else are left alone) whose name matches orphanTemp, directly inside
+// dataDir. Nothing is followed and nothing outside dataDir is touched.
+func removeOrphanTemps(dataDir string) {
+	ents, err := os.ReadDir(dataDir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if !orphanTemp.MatchString(e.Name()) {
+			continue
+		}
+		p := filepath.Join(dataDir, e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		_ = os.Remove(p)
+	}
 }
 
 // refuseSymlink errors when p exists and is a symlink.
