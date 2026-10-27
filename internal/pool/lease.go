@@ -270,7 +270,7 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 	if !short {
 		// Memory miss: prefer an already-staked on-chain session.
 		if err := p.RehydrateForce(); err != nil {
-			log.Printf("pool: rehydrate before open for %s: %v", modelID, err)
+			warnf("pool: rehydrate before open for %s: %v", modelID, err)
 			if p.gated.Load() && !p.stateKnown.Load() {
 				return nil, AcquireResult{}, ErrSessionStateUnknown
 			}
@@ -439,7 +439,7 @@ func (p *Pool) closeState(sessionID string) bool {
 			st.closeFails++
 		}
 		p.mu.Unlock()
-		log.Printf("pool: close session %s: %v (retired; retried by the sweep)", short(sessionID), err)
+		warnf("pool: close session %s: %v (retired; retried by the sweep)", short(sessionID), err)
 		return false
 	}
 	p.notifyClosed(sessionID)

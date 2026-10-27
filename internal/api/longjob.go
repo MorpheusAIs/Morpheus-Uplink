@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -310,7 +309,7 @@ func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID 
 		return nil, res, false
 	}
 	if err != nil {
-		log.Printf("api: open session for %s (%s): %v", reqModel, modelID, err)
+		warnf("api: open session for %s (%s): %v", reqModel, modelID, err)
 		writeOpenAIError(w, http.StatusBadGateway, "failed to open session") // detail logged above; it names router internals
 		return nil, res, false
 	}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
@@ -128,7 +127,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		// with the router's real status.
 		res, err := s.router.ForwardWith(r.Context(), w, routerPath, sessionID, r.Header, body, true, fo)
 		if err != nil {
-			log.Printf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+			warnf("api: forward attempt 1 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 			var te *router.TimeoutError
 			switch dec := classifyForwardError(err); {
 			case errors.As(err, &te):
@@ -148,7 +147,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				sessionID = ensured.SessionID
 				res, err = s.router.ForwardWith(r.Context(), w, routerPath, sessionID, r.Header, body, false, fo)
 				if err != nil {
-					log.Printf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
+					warnf("api: forward attempt 2 (model %s, session %s): %v", reqModel, pool.ShortID(sessionID), err)
 					if errors.As(err, &te) {
 						writeTimeout504(w, te.Kind)
 						return
@@ -180,7 +179,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		case res.Cut != router.CutNone:
 			// Our client or our own timer ended it: logged, never a
 			// provider fault (no cool-down, retire or failover).
-			log.Printf("api: stream ended early (model %s, session %s): %s", reqModel, pool.ShortID(sessionID), res.Cut)
+			warnf("api: stream ended early (model %s, session %s): %s", reqModel, pool.ShortID(sessionID), res.Cut)
 		}
 		s.store.RecordUsage(keyID, modelID, res.PromptTokens, res.CompletionTokens) // by resolved id (#56)
 	}
@@ -208,7 +207,7 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 		case errors.Is(ferr, pool.ErrLongSessionLimit):
 			outcome = "long_session_limit" // the long replacement would pass a limit
 		}
-		log.Printf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
+		warnf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
 		relayRouterError(w, firstErr) // the original status and body
 		return nil, "", nil, errAnswered
@@ -249,7 +248,7 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 		return res, fr.SessionID, lease, nil
 	}
 	if err != nil {
-		log.Printf("api: forward retry after failover (model %s, session %s): %v", reqModel, pool.ShortID(fr.SessionID), err)
+		warnf("api: forward retry after failover (model %s, session %s): %v", reqModel, pool.ShortID(fr.SessionID), err)
 		if classifyForwardError(err) == decFailover {
 			s.pool.MarkSessionCooling(modelID, fr.SessionID)
 		}
@@ -328,7 +327,7 @@ func isSessionDeadError(err error) bool {
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.catalog.List()
 	if err != nil {
-		log.Printf("api: model catalog: %v", err)
+		warnf("api: model catalog: %v", err)
 		writeOpenAIError(w, http.StatusBadGateway, "model catalog unavailable")
 		return
 	}
@@ -393,7 +392,7 @@ func (s *Server) handleUsageV1(w http.ResponseWriter, r *http.Request) {
 	caller := r.Header.Get("X-Uplink-Key-Id")
 	if caller == "" {
 		// Fail closed: never fall back to unfiltered store.Usage().
-		log.Printf("api: /v1/usage missing X-Uplink-Key-Id after auth")
+		warnf("api: /v1/usage missing X-Uplink-Key-Id after auth")
 		writeOpenAIError(w, http.StatusUnauthorized, "missing key identity")
 		return
 	}

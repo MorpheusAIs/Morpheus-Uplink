@@ -67,7 +67,7 @@ func main() {
 	pl.SetOnSessionClosed(func(sessionID string) {
 		detail, sec, err := rc.AwaitActualDuration(sessionID, 8, 2*time.Second)
 		if err != nil {
-			log.Printf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
+			warnf("usage: closed session %s: %v", pool.ShortID(sessionID), err)
 			return
 		}
 		// Usage is keyed by the registration id (#56); the name is for the log.

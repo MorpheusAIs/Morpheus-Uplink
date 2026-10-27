@@ -3,7 +3,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -160,7 +159,7 @@ func FromEnv() (*Config, error) {
 	// The cap wins: the default is clamped down to the max, never the
 	// max raised to the default.
 	if c.SessionDurationSec > c.SessionDurationMax {
-		log.Printf("config: SESSION_DURATION_SECONDS is above UPLINK_SESSION_DURATION_MAX; using %d", c.SessionDurationMax)
+		warnf("config: SESSION_DURATION_SECONDS is above UPLINK_SESSION_DURATION_MAX; using %d", c.SessionDurationMax)
 		c.SessionDurationSec = c.SessionDurationMax
 	}
 
@@ -251,7 +250,7 @@ func getenvNonNegInt(key string, def int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
-		log.Printf("config: %s is not a whole number >= 0; using the default %d", key, def)
+		warnf("config: %s is not a whole number >= 0; using the default %d", key, def)
 		return def
 	}
 	return n
@@ -282,13 +281,13 @@ func ParseProviderExclude(v string) map[string][]string {
 		model, provs, ok := strings.Cut(ent, "=")
 		model = strings.ToLower(strings.TrimSpace(model))
 		if !ok || (!reModelID.MatchString(model) && (strings.HasPrefix(model, "0x") || !reModelName.MatchString(model))) {
-			log.Printf("config: UPLINK_PROVIDER_EXCLUDE entry %d is not <model>=<provider>[,<provider>]; ignored", i+1)
+			warnf("config: UPLINK_PROVIDER_EXCLUDE entry %d is not <model>=<provider>[,<provider>]; ignored", i+1)
 			continue
 		}
 		for j, pr := range strings.Split(provs, ",") {
 			pr = strings.ToLower(strings.TrimSpace(pr))
 			if !reProviderAddr.MatchString(pr) {
-				log.Printf("config: UPLINK_PROVIDER_EXCLUDE entry %d provider %d is not a 0x address; ignored", i+1, j+1)
+				warnf("config: UPLINK_PROVIDER_EXCLUDE entry %d provider %d is not a 0x address; ignored", i+1, j+1)
 				continue
 			}
 			out[model] = append(out[model], pr)
@@ -304,7 +303,7 @@ func getenvRangeInt(key string, def, lo, hi int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < lo || n > hi {
-		log.Printf("config: %s must be a whole number %d…%d; using the default %d", key, lo, hi, def)
+		warnf("config: %s must be a whole number %d…%d; using the default %d", key, lo, hi, def)
 		return def
 	}
 	return n
@@ -396,7 +395,7 @@ func getenvLogLevel(key string) string {
 	if l := ParseLogLevel(v); l != "" {
 		return l
 	}
-	log.Printf("config: %s is not debug, info, warn or error; using info", key)
+	warnf("config: %s is not debug, info, warn or error; using info", key)
 	return "info"
 }
 

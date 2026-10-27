@@ -8,7 +8,6 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -55,7 +54,7 @@ type Server struct {
 func NewServer(cfg *config.Config, st *store.Store, cat *catalog.Catalog, pl *pool.Pool, rc *router.Client, hk *housekeep.Runner) *Server {
 	lo, err := adminauth.NewLockout(cfg.TrustedProxyCIDRs)
 	if err != nil {
-		log.Printf("adminauth: trusted proxy CIDR: %v (using RemoteAddr only)", err)
+		warnf("adminauth: trusted proxy CIDR: %v (using RemoteAddr only)", err)
 		lo, _ = adminauth.NewLockout(nil)
 	}
 	s := &Server{

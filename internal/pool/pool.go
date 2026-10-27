@@ -314,7 +314,7 @@ func (p *Pool) rehydrate(force bool) error {
 			if err := p.client.CloseSession(s.ID); err != nil {
 				ev.Result = "failed"
 				p.emitRescan(ev)
-				log.Printf("pool: close expired session %s: %v", short(s.ID), err)
+				warnf("pool: close expired session %s: %v", short(s.ID), err)
 				// Still show it — close failed, stake remains active.
 				display = append(display, ChainSession{
 					ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stakeStr,
@@ -443,7 +443,7 @@ func (p *Pool) CloseAll() CloseAllResult {
 			if len(res.Errors) < 5 {
 				res.Errors = append(res.Errors, msg)
 			}
-			log.Printf("pool: close session %s: %v", short(sessionID), err)
+			warnf("pool: close session %s: %v", short(sessionID), err)
 			return
 		}
 		res.Closed++
@@ -490,7 +490,7 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 		if left <= 0 {
 			for _, r := range targets[i:] {
 				res.Left++
-				log.Printf("pool: session %s (%s) left for boot reconcile (shutdown deadline)", short(r.id), r.label)
+				warnf("pool: session %s (%s) left for boot reconcile (shutdown deadline)", short(r.id), r.label)
 			}
 			break
 		}
@@ -508,7 +508,7 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 				if len(res.Errors) < 5 {
 					res.Errors = append(res.Errors, t.label+": close failed")
 				}
-				log.Printf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
+				warnf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
 				continue
 			}
 			res.Closed++
@@ -516,7 +516,7 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 			p.notifyClosed(t.id)
 		case <-time.After(wait):
 			res.Left++
-			log.Printf("pool: session %s (%s) left for boot reconcile (close timed out after %s)", short(t.id), t.label, wait)
+			warnf("pool: session %s (%s) left for boot reconcile (close timed out after %s)", short(t.id), t.label, wait)
 		}
 	}
 	return res

@@ -223,7 +223,7 @@ func (p *Pool) sessionProvider(modelID, sessionID string) (string, time.Time) {
 	}
 	s, err := p.client.GetSession(sessionID)
 	if err != nil {
-		log.Printf("pool: provider of session %s: %v", short(sessionID), err)
+		warnf("pool: provider of session %s: %v", short(sessionID), err)
 		return "", time.Time{}
 	}
 	end := time.Time{}
@@ -290,7 +290,7 @@ func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string
 		id, err := p.client.OpenSessionByBid(b.ID, durationSec)
 		if err != nil {
 			lastErr = err
-			log.Printf("pool: open bid %s (provider %s) for model %s: %v", short(b.ID), short(b.Provider), modelID, err)
+			warnf("pool: open bid %s (provider %s) for model %s: %v", short(b.ID), short(b.Provider), modelID, err)
 			p.MarkCooling(modelID, b.Provider)
 			continue
 		}

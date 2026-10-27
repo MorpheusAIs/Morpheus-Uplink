@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -112,7 +111,7 @@ func relayRouterError(w http.ResponseWriter, err error) {
 	var se *router.StatusError
 	if !errors.As(err, &se) {
 		// Transport detail (router host, URL) stays in the log.
-		log.Printf("api: inference failed: %v", err)
+		warnf("api: inference failed: %v", err)
 		writeOpenAIError(w, http.StatusBadGateway, "inference failed")
 		return
 	}
