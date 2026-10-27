@@ -118,7 +118,7 @@ func FromEnv() (*Config, error) {
 		GatewayBidsURL:       getenv("GATEWAY_BIDS_URL", "https://active.mor.org/gateway_bids.json"),
 		SessionDurationSec:   getenvRangeInt("SESSION_DURATION_SECONDS", 600, 600, 86400),
 		SessionFailover:      getenvBool("SESSION_FAILOVER", true),
-		ProviderCooldownSec:  getenvNonNegInt("UPLINK_PROVIDER_COOLDOWN_SECONDS", 600),
+		ProviderCooldownSec:  getenvClampInt("UPLINK_PROVIDER_COOLDOWN_SECONDS", 600, 0, MaxProviderCooldownSec),
 		DirectPaymentIgnored: getenvBool("SESSION_DIRECT_PAYMENT", false),
 		CloseSessionsOnExit:  getenvBool("CLOSE_SESSIONS_ON_EXIT", true),
 		DiamondAddress:       getenv("DIAMOND_CONTRACT_ADDRESS", "0x6aBE1d282f72B474E54527D93b979A4f64d3030a"),
@@ -241,17 +241,29 @@ func getenvInt(key string, def int) int {
 	return def
 }
 
-// getenvNonNegInt is getenvInt for settings that cannot be negative: a
-// malformed or negative value logs a warning (name only) and uses def.
-func getenvNonNegInt(key string, def int) int {
+// MaxProviderCooldownSec caps UPLINK_PROVIDER_COOLDOWN_SECONDS (one day).
+const MaxProviderCooldownSec = 86400
+
+// getenvClampInt reads a whole number at most hi: a larger value is
+// clamped to hi with a warning (name only). Unset: def. Malformed or below
+// lo: a warning and def.
+func getenvClampInt(key string, def, lo, hi int) int {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		warnf("config: %s is not a whole number >= 0; using the default %d", key, def)
+	if err != nil {
+		warnf("config: %s is not a whole number; using the default %d", key, def)
 		return def
+	}
+	if n < lo {
+		warnf("config: %s is below %d; using the default %d", key, lo, def)
+		return def
+	}
+	if n > hi {
+		warnf("config: %s is above %d; using %d", key, hi, hi)
+		return hi
 	}
 	return n
 }
