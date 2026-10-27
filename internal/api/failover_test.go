@@ -116,8 +116,8 @@ func ok200(n int, w http.ResponseWriter) {
 }
 
 type openRec struct {
-	omit, bid, provider string
-	body                map[string]any
+	bid, provider string
+	body          map[string]any
 }
 
 type fakeSess struct {
@@ -142,8 +142,8 @@ type fakeMarket struct {
 	closeStatus int
 	closeBody   string // router error text on a failed close
 	next        int
-	ignoreOmit  bool // open by model ignores omitProvider (router misbehaving)
-	bidsFail    bool // rated bids answer 500
+	bidsFail    bool            // rated bids answer 500
+	openFail    map[string]bool // provider whose opens answer 500
 	// sessionLookup: "" normal; "fail" session detail answers 500;
 	// "empty" session detail has no provider.
 	sessionLookup string
@@ -168,18 +168,24 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 	if v := body["directPayment"]; v != false {
 		m.t.Errorf("open body directPayment=%v", v)
 	}
-	omit, _ := body["omitProvider"].(string)
+	for k := range body {
+		if k != "sessionDuration" && k != "failover" && k != "directPayment" {
+			m.t.Errorf("open body carries %q (staking-only body; avoidance goes by bid)", k)
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	prov := ""
 	for _, p := range m.providers {
-		if byBid != "" && bidOf(p) == byBid || byBid == "" && (m.ignoreOmit || !strings.EqualFold(p, omit)) {
+		// An open by model takes the best rated provider, whatever Uplink
+		// avoids: avoidance is only ever enforced by the bid walk.
+		if byBid == "" || bidOf(p) == byBid {
 			prov = p
 			break
 		}
 	}
-	m.opens = append(m.opens, openRec{omit: omit, bid: byBid, provider: prov, body: body})
-	if prov == "" {
+	m.opens = append(m.opens, openRec{bid: byBid, provider: prov, body: body})
+	if prov == "" || m.openFail[prov] {
 		http.Error(w, `{"error":"no provider accepting session"}`, http.StatusInternalServerError)
 		return
 	}
@@ -374,7 +380,7 @@ func (e *failoverEnv) pooled() string {
 const provA, provB, provC = "0xaaaa", "0xbbbb", "0xcccc"
 
 // 1. 402 on A, 200 on B: the client gets B's answer; one close of A, one
-// open omitting A with failover:false; audited; A cooling.
+// open by B's bid with failover:false; audited; A cooling.
 func TestFailoverProviderErrorMovesToOtherProvider(t *testing.T) {
 	m := newFakeMarket(t, provA, provB)
 	m.behave[provA] = pme402
@@ -384,7 +390,7 @@ func TestFailoverProviderErrorMovesToOtherProvider(t *testing.T) {
 		t.Fatalf("got %d %s", code, body)
 	}
 	opens, closes := m.snapshot()
-	if len(opens) != 2 || opens[0].provider != provA || opens[1].omit != provA || opens[1].provider != provB {
+	if len(opens) != 2 || opens[0].provider != provA || opens[1].bid != bidOf(provB) || opens[1].provider != provB {
 		t.Fatalf("opens %+v", opens)
 	}
 	if opens[1].body["failover"] != false {
@@ -495,7 +501,7 @@ func TestFailoverBidWalkSkipsCooling(t *testing.T) {
 		t.Fatalf("got %d %s", code, body)
 	}
 	opens, closes := m.snapshot()
-	if len(opens) != 2 || opens[0].omit != provB || opens[0].provider != provA || opens[1].bid != bidOf(provC) || len(closes) != 1 {
+	if len(opens) != 2 || opens[0].bid != bidOf(provA) || opens[0].provider != provA || opens[1].bid != bidOf(provC) || len(closes) != 1 {
 		t.Fatalf("opens %+v closes %v", opens, closes)
 	}
 
@@ -507,7 +513,7 @@ func TestFailoverAllOthersCoolingNoAlternate(t *testing.T) {
 	m.behave[provA] = pme402
 	e := newFailoverEnv(t, m, nil)
 	e.srv.pool.MarkCooling(testModelID, provB)
-	// Normal open: B cooling, so omit B -> A.
+	// Normal open: B cooling, so by bid on A.
 	code, body := e.chat(t, false)
 	if code != 402 {
 		t.Fatalf("got %d %s", code, body)
@@ -521,8 +527,8 @@ func TestFailoverAllOthersCoolingNoAlternate(t *testing.T) {
 	}
 }
 
-// 6. Cool-down 0: the immediate retry still omits A, and a later B failure
-// can go back to A.
+// 6. Cool-down 0: the immediate retry still avoids A (by bid on B), and a
+// later B failure can go back to A.
 func TestFailoverCooldownZero(t *testing.T) {
 	m := newFakeMarket(t, provA, provB)
 	m.behave[provA] = func(n int, w http.ResponseWriter) {
@@ -547,7 +553,7 @@ func TestFailoverCooldownZero(t *testing.T) {
 		t.Fatalf("second %d", code)
 	}
 	opens, _ := m.snapshot()
-	if len(opens) != 3 || opens[1].omit != provA || opens[2].omit != provB || opens[2].provider != provA {
+	if len(opens) != 3 || opens[1].bid != bidOf(provB) || opens[2].bid != bidOf(provA) || opens[2].provider != provA {
 		t.Fatalf("opens %+v", opens)
 	}
 	if e.srv.pool.IsCooling(testModelID, provA) || e.srv.pool.IsCooling(testModelID, provB) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // S4: an upstream EOF without [DONE] or finish_reason cools A and retires
 // its session; the client gets the SSE error event; the next open walks
-// the bids (by bid, not omitProvider) and lands on B.
+// the bids by bid and lands on B.
 func TestS4EOFWithoutDoneCoolsAndRetires(t *testing.T) {
 	for _, cool := range []int{600, 0} {
 		m := newFakeMarket(t, provA, provB)
@@ -312,10 +313,11 @@ func TestS4ProviderExcludeConfig(t *testing.T) {
 	}
 }
 
-// S4 ruling: the soft avoidances (cool-down, the one-shot after-cut
-// exclusion) fall back to a plain open when nothing else is left; a
-// configured exclusion is never overridden, and when only configured-
-// excluded providers remain the answer is 503 with no ids.
+// A2 fail fast (DETAIL §14.4 #1-3, #6, #9): an avoidance is never dropped
+// to get a session. Every eligible provider avoided → 503
+// no_available_provider, nothing opened; only configured-excluded
+// providers → 503 no_eligible_provider; anything avoided with a provider
+// left → open by bid on it (never a plain open).
 func TestS4FallbackRules(t *testing.T) {
 	a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
 	type tc struct {
@@ -325,19 +327,24 @@ func TestS4FallbackRules(t *testing.T) {
 		cooling   []string
 		cut       string
 		code      int
-		notOn     string // the open must not land on this provider
-		plain     bool   // the open is a plain open (no omit, no bid)
+		typ       string // 503 error type
+		retry     bool   // a Retry-After header is expected
+		on        string // 200: the provider the open must land on
 	}
 	for _, c := range []tc{
-		{name: "all cooling → plain", providers: []string{a40, b40}, cooling: []string{a40, b40}, code: 200, plain: true},
-		{name: "after-cut only provider → plain", providers: []string{a40}, cut: a40, code: 200, plain: true},
-		{name: "cooling fallback keeps the configured exclusion", providers: []string{a40, b40, c40}, exclude: []string{a40}, cooling: []string{b40, c40}, code: 200, notOn: a40},
-		{name: "after-cut fallback keeps the configured exclusion", providers: []string{a40, b40}, exclude: []string{a40}, cut: b40, code: 200, notOn: a40},
-		{name: "two exclusions, rest cooling", providers: []string{a40, b40, c40}, exclude: []string{a40, b40}, cooling: []string{c40}, code: 200, notOn: a40},
-		{name: "only excluded remain → 503", providers: []string{a40}, exclude: []string{a40}, code: 503},
-		{name: "only excluded remain, two → 503", providers: []string{a40, b40}, exclude: []string{a40, b40}, cooling: []string{a40}, code: 503},
+		{name: "all cooling → no_available", providers: []string{a40, b40}, cooling: []string{a40, b40}, code: 503, typ: "no_available_provider", retry: true},
+		{name: "after-cut only provider → no_available", providers: []string{a40}, cut: a40, code: 503, typ: "no_available_provider"},
+		{name: "configured + rest cooling → no_available", providers: []string{a40, b40, c40}, exclude: []string{a40}, cooling: []string{b40, c40}, code: 503, typ: "no_available_provider", retry: true},
+		{name: "configured + rest cut → no_available", providers: []string{a40, b40}, exclude: []string{a40}, cut: b40, code: 503, typ: "no_available_provider"},
+		{name: "two exclusions, rest cooling → no_available", providers: []string{a40, b40, c40}, exclude: []string{a40, b40}, cooling: []string{c40}, code: 503, typ: "no_available_provider", retry: true},
+		{name: "only excluded remain → no_eligible", providers: []string{a40}, exclude: []string{a40}, code: 503, typ: "no_eligible_provider"},
+		{name: "only excluded remain, two → no_eligible", providers: []string{a40, b40}, exclude: []string{a40, b40}, cooling: []string{a40}, code: 503, typ: "no_eligible_provider"},
+		{name: "one configured exclusion → by bid", providers: []string{a40, b40}, exclude: []string{a40}, code: 200, on: b40},
+		{name: "one cooling → by bid", providers: []string{a40, b40}, cooling: []string{a40}, code: 200, on: b40},
+		{name: "after cut → by bid", providers: []string{a40, b40}, cut: a40, code: 200, on: b40},
 	} {
 		m := newFakeMarket(t, c.providers...)
+		// A by-model open on the stub lands on the first provider.
 		e := newFailoverEnv(t, m, nil)
 		if len(c.exclude) > 0 {
 			e.srv.pool.SetProviderExclude(map[string][]string{testModelID: c.exclude}, nil)
@@ -348,86 +355,116 @@ func TestS4FallbackRules(t *testing.T) {
 		if c.cut != "" {
 			e.srv.pool.MarkStreamCut(testModelID, c.cut)
 		}
-		code, body := e.chat(t, false)
+		code, hdr, body := chatFull(t, e, "test-model")
 		if code != c.code {
 			t.Errorf("%s: %d %s", c.name, code, body)
 			continue
 		}
 		opens, _ := m.snapshot()
 		if c.code == 503 {
-			if len(opens) != 0 || strings.Contains(body, "0x") || !strings.Contains(body, "no_eligible_provider") {
+			if len(opens) != 0 || strings.Contains(body, "0x") || !strings.Contains(body, `"type":"`+c.typ+`"`) {
 				t.Errorf("%s: opens %d body %s", c.name, len(opens), body)
+			}
+			ra := hdr.Get("Retry-After")
+			if c.retry != (ra != "") || ra != "" && !retryAfterOK(ra, 600) {
+				t.Errorf("%s: Retry-After %q", c.name, ra)
 			}
 			continue
 		}
-		last := opens[len(opens)-1]
-		if c.notOn != "" {
-			for _, o := range opens {
-				for _, ex := range c.exclude {
-					if o.provider == ex {
-						t.Errorf("%s: opened on excluded provider %s", c.name, ex[:6])
-					}
-				}
-			}
-		}
-		if c.plain && (last.omit != "" || last.bid != "") {
-			t.Errorf("%s: want a plain open, got %+v", c.name, last)
+		if len(opens) != 1 || opens[0].bid != bidOf(c.on) || opens[0].provider != c.on {
+			t.Errorf("%s: want one by-bid open on %s, got %+v", c.name, c.on[:6], opens)
 		}
 	}
 }
 
-// Conformance SHOULD-A: an omitProvider open that lands on a configured
-// exclusion anyway (router not honouring omitProvider) is closed, and the
-// request gets 503 with no ids.
-func TestS4OmitOpenOnExcludedClosed(t *testing.T) {
-	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
-	for _, bidsFail := range []bool{false, true} {
-		m := newFakeMarket(t, a40, b40)
-		m.ignoreOmit, m.bidsFail = true, bidsFail
-		e := newFailoverEnv(t, m, nil)
-		e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
-		code, body := e.chat(t, false)
-		opens, closes := m.snapshot()
-		if code != 503 || strings.Contains(body, "0x") || !strings.Contains(body, "no_eligible_provider") {
-			t.Errorf("bidsFail=%v: %d %s", bidsFail, code, body)
-		}
-		if len(opens) != 1 || opens[0].omit != a40 || opens[0].provider != a40 || len(closes) != 1 {
-			t.Errorf("bidsFail=%v: opens %d closes %d", bidsFail, len(opens), len(closes))
-		}
-		if len(e.srv.pool.Snapshot()) != 0 {
-			t.Errorf("bidsFail=%v: excluded session pooled", bidsFail)
-		}
-	}
+// retryAfterOK: digits only, 1..max.
+func retryAfterOK(v string, max int) bool {
+	n, err := strconv.Atoi(v)
+	return err == nil && strconv.Itoa(n) == v && n >= 1 && n <= max
 }
 
-// Conformance SHOULD-B: bids unreadable. One configured exclusion: the
-// open sends omitProvider and does not land on it. Two or more: nothing is
-// opened and the request gets 502.
+// chatFull is chatModel with the response headers.
+func chatFull(t *testing.T, e *failoverEnv, model string) (int, http.Header, string) {
+	t.Helper()
+	body := `{"model":"` + model + `","messages":[{"role":"user","content":"hi"}]}`
+	req, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+e.key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, resp.Header, string(raw)
+}
+
+// MUST-1 (DETAIL §14.4 #8): rated bids unreadable while any provider is
+// avoided (cooling, cut, one or two configured exclusions) → 503
+// no_available_provider, no ids, and ZERO open attempts of any kind
+// (counted by model and by bid on a router stub whose open by model
+// ignores any avoidance),
+// again on a second request; Retry-After only when a cool-down is known.
+// With nothing avoided, one normal open.
 func TestS4BidsUnreadableFallback(t *testing.T) {
 	a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
-
+	for _, c := range []struct {
+		name    string
+		exclude []string
+		cooling []string
+		cut     string
+		retry   bool
+	}{
+		{name: "cooling", cooling: []string{a40}, retry: true},
+		{name: "cut", cut: a40},
+		{name: "one configured exclusion", exclude: []string{a40}},
+		{name: "two configured exclusions", exclude: []string{a40, b40}},
+		{name: "configured + cooling", exclude: []string{a40}, cooling: []string{b40}, retry: true},
+	} {
+		m := newFakeMarket(t, a40, b40, c40)
+		m.bidsFail = true
+		e := newFailoverEnv(t, m, nil)
+		if len(c.exclude) > 0 {
+			e.srv.pool.SetProviderExclude(map[string][]string{testModelID: c.exclude}, nil)
+		}
+		for _, p := range c.cooling {
+			e.srv.pool.MarkCooling(testModelID, p)
+		}
+		if c.cut != "" {
+			e.srv.pool.MarkStreamCut(testModelID, c.cut)
+		}
+		code, hdr, body := chatFull(t, e, "test-model")
+		if code != 503 || !strings.Contains(body, `"type":"no_available_provider"`) || strings.Contains(body, "0x") {
+			t.Errorf("%s: %d %s", c.name, code, body)
+		}
+		if ra := hdr.Get("Retry-After"); c.retry != (ra != "") || ra != "" && !retryAfterOK(ra, 600) {
+			t.Errorf("%s: Retry-After %q", c.name, ra)
+		}
+		if opens, _ := m.snapshot(); len(opens) != 0 {
+			t.Errorf("%s: %d open attempts, want 0: %+v", c.name, len(opens), opens)
+		}
+		code, _, _ = chatFull(t, e, "test-model")
+		opens, _ := m.snapshot()
+		if c.cut != "" {
+			// The refusal consumed the cut: nothing is avoided any more.
+			if code != 200 || len(opens) != 1 || opens[0].bid != "" {
+				t.Errorf("%s: after the cut was consumed: %d opens %+v", c.name, code, opens)
+			}
+			continue
+		}
+		if code != 503 || len(opens) != 0 {
+			t.Errorf("%s: second request %d, %d open attempts", c.name, code, len(opens))
+		}
+	}
+	// Nothing avoided: one normal open by model.
 	m := newFakeMarket(t, a40, b40)
 	m.bidsFail = true
 	e := newFailoverEnv(t, m, nil)
-	e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
 	if code, body := e.chat(t, false); code != 200 {
-		t.Fatalf("one exclusion: %d %s", code, body)
+		t.Fatalf("nothing avoided: %d %s", code, body)
 	}
-	opens, _ := m.snapshot()
-	if len(opens) != 1 || opens[0].omit != a40 || opens[0].bid != "" || opens[0].provider != b40 {
-		t.Fatalf("one exclusion: opens %+v", opens)
-	}
-
-	m2 := newFakeMarket(t, a40, b40, c40)
-	m2.bidsFail = true
-	e2 := newFailoverEnv(t, m2, nil)
-	e2.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40, b40}}, nil)
-	code, body := e2.chat(t, false)
-	if code != 502 || strings.Contains(body, "0x") {
-		t.Fatalf("two exclusions: %d %s", code, body)
-	}
-	if opens, _ := m2.snapshot(); len(opens) != 0 {
-		t.Fatalf("two exclusions opened %d", len(opens))
+	if opens, _ := m.snapshot(); len(opens) != 1 || opens[0].bid != "" {
+		t.Fatalf("nothing avoided: opens %+v", opens)
 	}
 }
 
@@ -475,83 +512,6 @@ func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
 		if o.provider == a40 {
 			t.Fatal("opened on the name-keyed excluded provider")
 		}
-	}
-}
-
-// Review NIT (omit-path lookup): after an omitProvider open, when the
-// session's provider cannot be read (detail lookup fails or has no
-// provider) and a configured exclusion applies, the session is closed and
-// a fresh open gets 503 with no ids. Without configured exclusions the
-// session is used as before.
-func TestS4OmitOpenProviderUnknownFailsClosed(t *testing.T) {
-	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
-	for _, look := range []string{"fail", "empty"} {
-		m := newFakeMarket(t, a40, b40)
-		m.bidsFail, m.sessionLookup = true, look
-		e := newFailoverEnv(t, m, nil)
-		e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
-		code, body := e.chat(t, false)
-		opens, closes := m.snapshot()
-		if code != 503 || strings.Contains(body, "0x") || !strings.Contains(body, "no_eligible_provider") {
-			t.Errorf("lookup=%s: %d %s", look, code, body)
-		}
-		if len(opens) != 1 || opens[0].omit != a40 || len(closes) != 1 {
-			t.Errorf("lookup=%s: opens %+v closes %v", look, opens, closes)
-		}
-		if len(e.srv.pool.Snapshot()) != 0 {
-			t.Errorf("lookup=%s: unverified session pooled", look)
-		}
-	}
-	// No configured exclusion: an unknown provider is not a reason to refuse.
-	m := newFakeMarket(t, a40, b40)
-	m.sessionLookup = "fail"
-	e := newFailoverEnv(t, m, nil)
-	if code, body := e.chat(t, false); code != 200 {
-		t.Fatalf("no exclusions: %d %s", code, body)
-	}
-}
-
-// Review NIT (omit-path lookup), failover side: a pooled session is on a
-// provider that is then configured as excluded; it fails with a 402, the
-// replacement is opened with omitProvider, and its provider cannot be
-// read. The replacement is closed and the caller gets the original
-// upstream error, as when a replacement lands on an excluded provider.
-func TestS4FailoverOmitProviderUnknownRelaysOriginal(t *testing.T) {
-	m := newFakeMarket(t, provA, provB)
-	e := newFailoverEnv(t, m, nil)
-	if code, body := e.chat(t, false); code != 200 {
-		t.Fatalf("warm: %d %s", code, body)
-	}
-	m.mu.Lock()
-	m.behave[provA] = pme402
-	m.sessionLookup = "fail"
-	m.mu.Unlock()
-	e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {provA}}, nil)
-	code, body := e.chat(t, false)
-	opens, closes := m.snapshot()
-	if code != 402 || strings.Contains(body, "0x") {
-		t.Fatalf("got %d %s, want the original 402 with no ids", code, body)
-	}
-	if len(opens) != 2 || opens[1].omit != provA {
-		t.Fatalf("opens %+v", opens)
-	}
-	replacement := ""
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id := range m.sessions {
-		if strings.HasPrefix(id, "0xsess02") {
-			replacement = id
-		}
-	}
-	closed := false
-	for _, c := range closes {
-		closed = closed || c == replacement
-	}
-	if replacement == "" || !closed {
-		t.Fatalf("replacement %q not closed: %v", replacement, closes)
-	}
-	if a := e.failoverAudits(); len(a) != 1 || a[0] != "reopen_failed" {
-		t.Errorf("audits %v", a)
 	}
 }
 

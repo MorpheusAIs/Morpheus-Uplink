@@ -223,19 +223,15 @@ func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, er
 // always off ("failover": false).
 type OpenSessionRequest struct {
 	SessionDuration int `json:"sessionDuration"`
-	// OmitProvider, when set, excludes that provider address from the
-	// router's bid selection (one address; the router takes no list).
-	OmitProvider string `json:"omitProvider,omitempty"`
 }
 
 // MarshalJSON pins directPayment and failover to false.
 func (r OpenSessionRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		SessionDuration int    `json:"sessionDuration"`
-		Failover        bool   `json:"failover"`
-		DirectPayment   bool   `json:"directPayment"`
-		OmitProvider    string `json:"omitProvider,omitempty"`
-	}{r.SessionDuration, false, false, strings.TrimSpace(r.OmitProvider)})
+		SessionDuration int  `json:"sessionDuration"`
+		Failover        bool `json:"failover"`
+		DirectPayment   bool `json:"directPayment"`
+	}{r.SessionDuration, false, false})
 }
 
 // ErrDirectPayment is returned instead of sending any router request whose
@@ -306,8 +302,8 @@ func (c *Client) OpenSession(modelID string, req OpenSessionRequest) (string, er
 }
 
 // OpenSessionByBid opens a session on one specific bid (and so one specific
-// provider). Used when more than one provider has to be excluded, which the
-// router's single omitProvider cannot express. Same staking-only body.
+// provider). Used whenever a provider has to be avoided: avoidance is never
+// left to the router's own selection. Same staking-only body.
 func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
 	bidID = strings.TrimSpace(bidID)
 	if bidID == "" {

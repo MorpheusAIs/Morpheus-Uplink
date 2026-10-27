@@ -42,6 +42,8 @@ var opsKinds = map[string]bool{
 	"session_release":     true,
 	"provider_failover":   true,
 	"session_reconcile":   true,
+	// Fail-fast refusals (aggregated per model per minute).
+	"provider_unavailable": true,
 }
 
 // loopableKinds are high-value but repeatable by a credential holder; they

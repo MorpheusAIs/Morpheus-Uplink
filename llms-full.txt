@@ -1568,7 +1568,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | `SESSION_DURATION_SECONDS` | `600` | Default session length (stake scales), 600…86400; above `UPLINK_SESSION_DURATION_MAX` it is clamped down to the max |
 | `SESSION_FAILOVER` | `true` | Uplink moves a model to another provider when the provider fails a prompt ([Provider failover](#provider-failover)); `false` relays the provider's error. The router's own failover is always off (`failover:false` on every open) |
 | `UPLINK_PROVIDER_EXCLUDE` | (empty) | Providers never opened for a model: `<model>=<provider>[,<provider>]…`, entries separated by `;`; model is an id or a catalog name ([Provider failover](#provider-failover)). Bad entries are warned and ignored |
-| `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed) |
+| `UPLINK_PROVIDER_COOLDOWN_SECONDS` | `600` | How long a provider that failed a prompt or an open is avoided for that model; `0` keeps no memory across requests (the immediate retry still avoids the provider that just failed); at most `86400` (larger values are clamped, with a warning) |
 | `UPLINK_SESSION_DURATION_MAX` | `1800` | Longest session a client may ask for with `X-Uplink-Session-Duration`, 600…86400; every open is capped at it, with or without headers; never raised by the default ([Long jobs](#long-jobs)) |
 | `UPLINK_FORWARD_IDLE_SECONDS` | `180` | Default idle timer per inference call (no bytes from upstream), 30…600 |
 | `UPLINK_SESSION_IDLE_GRACE_SECONDS` | `300` | A session with nothing in flight and no use for this long is closed early, 60…3600 |
@@ -1787,10 +1787,9 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   is open, so a close and reopen onto no other provider only ties up
   liquidity) and relays the original error (`no_alternate`).
 - *Order:* under the model's open lock, Uplink closes the failed session
-  first (synchronously, up to 30 s) and then opens on another provider:
-  with one excluded provider, by model with the router's `omitProvider`;
-  with more, by bid over the rated bids (best score first, at most 3
-  tries, one per provider). A failed close is logged and the session is
+  first (synchronously, up to 30 s) and then opens on another provider by
+  bid over the rated bids (best score first, at most 3 tries, one per
+  provider). Avoiding a provider is never left to the router's own pick. A failed close is logged and the session is
   retired: Rehydrate never adopts it back.
 - *Once:* one failover and one retry per request. A provider failure on the
   retry puts that provider in cool-down too and is relayed. Concurrent
@@ -1798,9 +1797,25 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   the replacement.
 - *Cool-down* (`UPLINK_PROVIDER_COOLDOWN_SECONDS`, default 600): per model
   and provider, in memory (a restart forgets it). New opens and Rehydrate
-  avoid cooling providers; if every provider of the model is cooling, a
-  normal open is made (it still avoids configured exclusions). `0` keeps no memory across requests; the immediate
-  retry still avoids the provider that just failed.
+  avoid cooling providers. `0` keeps no memory across requests; the
+  immediate retry still avoids the provider that just failed. Values
+  above 86400 are clamped to 86400 (with a config warning).
+- *Fail fast:* a new open never drops an avoidance to get a session. When
+  every eligible provider is cooling or just cut a stream, when each
+  provider the bid walk tried failed to open, or when the rated bids
+  cannot be read while any provider is avoided (cooling, cut or
+  configured), nothing is opened and the request gets `503`
+  `no_available_provider` ("no provider is available for this model right
+  now; retry later", no ids). `Retry-After` is the shortest remaining
+  cool-down of a provider that is in the bids and not configured-excluded,
+  capped at 600 s and rounded up to whole seconds (at least 1); it is left
+  off when no cool-down is known (for example only a stream cut, or a
+  cool-down of `0`). A refusal consumes a pending stream cut. Refusals are
+  audited on the ops stream as `provider_unavailable`, one line per model
+  per minute with a count. In a failover, the retired-session reopen that
+  finds nothing available relays the original error (audit
+  `no_available`). With nothing avoided, the normal open by model is
+  unchanged.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
   the answer cannot be restarted. Two upstream events count as a
@@ -1821,23 +1836,19 @@ turns Uplink's failover off: errors are relayed and the session is kept.
 - *Configured exclusions* (`UPLINK_PROVIDER_EXCLUDE`): providers never
   opened for a model, as `<model>=<provider>[,<provider>]…` with entries
   separated by `;`. The model is a registration id or a catalog name; a
-  provider is its `0x` address. Opens and Rehydrate never use them, not
-  even in the fallback when every other provider is cooling or was just
-  cut. When only excluded providers serve the model, the request gets
-  `503` `no_eligible_provider` (no ids in the body) and nothing is opened.
-  A session the router opened on an excluded provider anyway is closed at
-  once and answered the same way, and so is one whose provider cannot be
-  read back after an `omitProvider` open (on failover the caller gets the
-  original upstream error). When the rated bids cannot be read, one
-  exclusion is sent as `omitProvider`; with two or more nothing is opened
-  (`502`). An entry keyed by catalog name needs the model's name: while the
+  provider is its `0x` address. Opens and Rehydrate never use them. With
+  any exclusion the open goes by bid over the providers left. When only
+  excluded providers serve the model, the request gets `503`
+  `no_eligible_provider` (no ids in the body, no `Retry-After`) and
+  nothing is opened. When the rated bids cannot be read, nothing is opened
+  (`503` `no_available_provider`, above). An entry keyed by catalog name needs the model's name: while the
   catalog has no name for the requested id (for example the model feed is
   down at boot and the client sends the `0x` id), opens for that model are
   refused with `503` `no_eligible_provider`, failover keeps the session,
   and on-chain sessions are not adopted, until the name resolves; the
   console Status page shows a warning while that refusal lasts. The
   warning counts well-formed model ids (`0x` + 64 hex) refused while the
-  catalog has never loaded, up to 64 ("at least 64" past that); reading it
+  catalog has never loaded, up to 64 ("64 or more" past that); reading it
   fetches nothing, and it clears once the catalog loads. An id the loaded
   catalog does not list is still refused but not counted. After a failed
   catalog fetch no new fetch starts for 10 seconds (stale data is served,

@@ -44,9 +44,41 @@ var ErrNoAlternate = errors.New("no alternate provider for this model")
 // exclusion is never overridden, unlike a cool-down).
 var ErrNoEligibleProvider = errors.New("no eligible provider for this model")
 
+// ErrNoAvailableProvider means every eligible provider of the model is
+// avoided right now (cooling, or cut a stream just before): nothing is
+// opened. Unlike ErrNoEligibleProvider it clears on its own; the error
+// value (*NoAvailableError) carries when to retry.
+var ErrNoAvailableProvider = errors.New("no provider is available for this model right now")
+
+// NoAvailableError is the ErrNoAvailableProvider value. RetryAfter is the
+// shortest remaining cool-down of an eligible provider, rounded up to whole
+// seconds within 1s..MaxRetryAfter; 0 when none is cooling.
+type NoAvailableError struct{ RetryAfter time.Duration }
+
+func (e *NoAvailableError) Error() string        { return ErrNoAvailableProvider.Error() }
+func (e *NoAvailableError) Is(target error) bool { return target == ErrNoAvailableProvider }
+
+// MaxRetryAfter caps the Retry-After of ErrNoAvailableProvider.
+const MaxRetryAfter = 600 * time.Second
+
+// errBidWalkExhausted means a by-bid walk tried at least one provider and
+// every open failed (each tried provider is now cooling).
+var errBidWalkExhausted = errors.New("every provider tried failed to open")
+
+// walkError wraps the last open error of an exhausted walk.
+type walkError struct {
+	tried int
+	last  error
+}
+
+func (e *walkError) Error() string {
+	return fmt.Sprintf("open on another provider (%d tried): %v", e.tried, e.last)
+}
+func (e *walkError) Unwrap() []error { return []error{errBidWalkExhausted, e.last} }
+
 // SetProviderCooldown sets the per model+provider cool-down. 0 turns off
-// memory across requests; an immediate failover still omits the provider
-// that just failed.
+// memory across requests; an immediate failover still walks the bids
+// without the provider that just failed.
 func (p *Pool) SetProviderCooldown(d time.Duration) {
 	if d < 0 {
 		d = 0
@@ -347,45 +379,13 @@ func alternates(bids []router.RatedBid, exclude map[string]bool) ([]router.Rated
 	return out, len(seen)
 }
 
-// openExcluding opens a session that avoids the excluded providers: one
-// exclusion uses the router's omitProvider on the model open; more than
-// one walks the filtered rated bids by bid (at most MaxBidAttempts opens,
-// one per provider). A failed open puts that provider in cool-down.
-//
-// byBid forces the bid walk even for one exclusion (the open after a
-// stream cut, [F3]).
-func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string]bool, alts []router.RatedBid, byBid bool) (string, string, error) {
-	if len(exclude) == 1 && !byBid {
-		var omit string
-		for k := range exclude {
-			omit = k
-		}
-		id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec, OmitProvider: omit})
-		if err != nil {
-			return "", "", err
-		}
-		prov, _ := p.sessionProvider(modelID, id)
-		// Do not rely on the router alone: a session that landed on a
-		// configured exclusion is closed and nothing is handed out. When
-		// the provider cannot be read (lookup failed or empty) and any
-		// configured exclusion applies to the model, it cannot be shown
-		// to be safe, so it is closed too (fail closed).
-		unknown := prov == "" && len(p.excludedProviders(modelID)) > 0
-		if unknown || prov != "" && p.isConfiguredExcluded(modelID, prov) {
-			if unknown {
-				warnf("pool: open with omitProvider for model %s: provider of session %s unknown and exclusions are configured; closing session", modelID, short(id))
-			} else {
-				warnf("pool: open with omitProvider landed on an excluded provider for model %s; closing session %s", modelID, short(id))
-			}
-			if err := p.closeBounded(id); err != nil {
-				warnf("pool: close session %s on an excluded provider: %v (left for the sweep)", short(id), err)
-			} else {
-				p.notifyClosed(id)
-			}
-			return "", "", ErrNoEligibleProvider
-		}
-		return id, prov, nil
-	}
+// openExcluding opens a session on a provider outside the avoided set by
+// walking alts (the rated bids already filtered of it) by bid: at most
+// MaxBidAttempts opens, one per provider. Avoidance is never left to the
+// router's own provider pick. A failed open puts that provider in cool-down; a
+// walk where every open failed returns an error matching
+// errBidWalkExhausted.
+func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.RatedBid) (string, string, error) {
 	tried := map[string]bool{}
 	attempts := 0
 	var lastErr error
@@ -408,31 +408,30 @@ func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string
 		return id, b.Provider, nil
 	}
 	if lastErr == nil {
-		lastErr = ErrNoAlternate
+		return "", "", fmt.Errorf("open on another provider (none tried): %w", ErrNoAlternate)
 	}
-	return "", "", fmt.Errorf("open on another provider (%d tried): %w", attempts, lastErr)
+	return "", "", &walkError{tried: attempts, last: lastErr}
 }
 
-// isConfiguredExcluded reports whether prov is in UPLINK_PROVIDER_EXCLUDE
-// for the model.
-func (p *Pool) isConfiguredExcluded(modelID, prov string) bool {
-	for k := range p.excludedProviders(modelID) {
-		if strings.EqualFold(k, prov) {
-			return true
-		}
-	}
-	return false
-}
-
-// openAvoidingCooling is the normal open: plain open by model when no
-// provider of this model is avoided, else the exclusion open. Cool-downs
-// and the one-shot after-cut exclusion are soft: when every provider is
-// avoided, or the bids cannot be read, or the exclusion open fails, it
-// falls back (best effort: a request needs a session). Exclusions set in
-// UPLINK_PROVIDER_EXCLUDE are hard: the fallback still avoids them, and
-// when only excluded providers remain it returns ErrNoEligibleProvider.
+// openAvoidingCooling is the normal open: a plain open by model when no
+// provider of this model is avoided, else a by-bid open outside the
+// avoided set (cooling, configured exclusions, a pending stream cut). It
+// never drops an avoidance to get a session (fail fast):
+//   - only configured exclusions (UPLINK_PROVIDER_EXCLUDE) serve the model
+//     → ErrNoEligibleProvider;
+//   - every eligible provider is avoided, or each one the walk tried failed
+//     to open, or the rated bids cannot be read → ErrNoAvailableProvider
+//     (with when to retry), and nothing is opened.
+//
+// A refusal consumes a pending stream cut.
 func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
-	plain := func() (string, string, error) {
+	if p.exclusionsUnresolved(modelID) {
+		p.noteUnresolvedRefusal(modelID)
+		warnf("pool: model %s has no catalog name and name-keyed provider exclusions are set; not opening", modelID)
+		return "", "", ErrNoEligibleProvider
+	}
+	exclude := p.avoidSet(modelID)
+	if len(exclude) == 0 {
 		id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec})
 		if err != nil {
 			return "", "", err
@@ -440,67 +439,93 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		prov, _ := p.sessionProvider(modelID, id)
 		return id, prov, nil
 	}
-	if p.exclusionsUnresolved(modelID) {
-		p.noteUnresolvedRefusal(modelID)
-		warnf("pool: model %s has no catalog name and name-keyed provider exclusions are set; not opening", modelID)
-		return "", "", ErrNoEligibleProvider
-	}
 	configured := p.excludedProviders(modelID)
-	// fallback drops the soft avoidances and keeps the configured ones.
-	fallback := func(bids []router.RatedBid, bidsOK bool) (string, string, error) {
-		if len(configured) == 0 {
-			return plain()
-		}
-		if !bidsOK {
-			if len(configured) == 1 {
-				// The router's omitProvider keeps the one exclusion.
-				return p.openExcluding(modelID, durationSec, configured, nil, false)
-			}
-			return "", "", fmt.Errorf("open without bids would ignore %d configured exclusions", len(configured))
-		}
-		alts, n := alternates(bids, configured)
-		if n == 0 {
-			return "", "", ErrNoEligibleProvider
-		}
-		return p.openExcluding(modelID, durationSec, configured, alts, len(configured) > 1)
-	}
-	exclude := p.avoidSet(modelID)
-	if len(exclude) == 0 {
-		return plain()
-	}
 	cut := p.pendingCut(modelID)
+	refuse := func(bids []router.RatedBid, bidsOK bool) (string, string, error) {
+		if cut != "" {
+			p.clearCut(modelID)
+		}
+		return "", "", &NoAvailableError{RetryAfter: p.retryAfter(modelID, bids, bidsOK, configured)}
+	}
 	bids, err := p.client.RatedBids(modelID)
 	if err != nil {
-		slog.Warn("pool: rated bids unavailable; opening without soft exclusions", "model", modelID, "err", err)
-		return fallback(nil, false)
+		// An open by model could land on an avoided provider: refuse.
+		slog.Warn("pool: rated bids unavailable and providers are avoided; not opening", "model", modelID, "err", err)
+		return refuse(nil, false)
+	}
+	if _, m := alternates(bids, configured); m == 0 && len(configured) > 0 {
+		slog.Warn("pool: only configured-excluded providers serve this model", "model", modelID)
+		if cut != "" {
+			p.clearCut(modelID)
+		}
+		return "", "", ErrNoEligibleProvider
 	}
 	alts, n := alternates(bids, exclude)
 	if n == 0 {
-		if len(configured) > 0 {
-			if _, m := alternates(bids, configured); m == 0 {
-				slog.Warn("pool: only configured-excluded providers serve this model", "model", modelID)
-				return "", "", ErrNoEligibleProvider
-			}
-		}
-		slog.Warn("pool: every eligible provider is cooling; opening without soft exclusions", "model", modelID)
-		id, prov, err := fallback(bids, true)
-		if err == nil && cut != "" {
-			p.clearCut(modelID)
-		}
-		return id, prov, err
+		slog.Warn("pool: every eligible provider is avoided; not opening", "model", modelID)
+		return refuse(bids, true)
 	}
-	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, cut != "")
-	if errors.Is(err, ErrNoEligibleProvider) {
-		return "", "", err
+	id, prov, err := p.openExcluding(modelID, durationSec, alts)
+	if errors.Is(err, errBidWalkExhausted) {
+		slog.Warn("pool: every provider tried failed to open; not opening on an avoided one", "model", modelID, "err", err)
+		return refuse(bids, true)
 	}
 	if err != nil {
-		slog.Warn("pool: open avoiding cooling providers failed; opening without soft exclusions", "model", modelID, "err", err)
-		return fallback(bids, true)
+		return "", "", err
 	}
 	if cut != "" {
 		p.clearCut(modelID)
 	}
 	return id, prov, nil
+}
+
+// retryAfter is the shortest remaining cool-down among the model's eligible
+// providers (in the rated bids when they were read, never a configured
+// exclusion), capped at MaxRetryAfter and rounded up to whole seconds
+// (at least 1s). 0 when none is cooling.
+func (p *Pool) retryAfter(modelID string, bids []router.RatedBid, bidsOK bool, configured map[string]bool) time.Duration {
+	inBids := map[string]bool{}
+	for _, b := range bids {
+		inBids[strings.ToLower(strings.TrimSpace(b.Provider))] = true
+	}
+	excluded := map[string]bool{}
+	for pr := range configured {
+		excluded[strings.ToLower(strings.TrimSpace(pr))] = true
+	}
+	prefix := normModel(modelID) + "|"
+	now := time.Now()
+	var best time.Duration
+	p.fmu.Lock()
+	for k, until := range p.cooling {
+		if !strings.HasPrefix(k, prefix) || !now.Before(until) {
+			continue
+		}
+		pr := strings.TrimPrefix(k, prefix)
+		if excluded[pr] || bidsOK && !inBids[pr] {
+			continue
+		}
+		if d := until.Sub(now); best == 0 || d < best {
+			best = d
+		}
+	}
+	p.fmu.Unlock()
+	return clampRetryAfter(best)
+}
+
+// clampRetryAfter caps d at MaxRetryAfter before rounding up to seconds;
+// any positive d is at least 1s, 0 stays 0 (no header).
+func clampRetryAfter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	if d > MaxRetryAfter {
+		d = MaxRetryAfter
+	}
+	sec := (d + time.Second - 1) / time.Second
+	if sec < 1 {
+		sec = 1
+	}
+	return sec * time.Second
 }
 
 // FailoverResult reports what Failover did.
@@ -647,7 +672,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	}
 
 	// 5. Open on another provider. 6. Pool it with its provider, leased.
-	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, false)
+	id, prov, err := p.openExcluding(modelID, durationSec, alts)
 	p.finishFailoverOpen(key, ao, long, stamp, id, prov, durationSec, err, &res)
 	if err != nil {
 		return res, err

@@ -17,7 +17,7 @@
 #                a model id that differs only by case is reused, never closed;
 #                then docker stop closes the sessions before exit, timed.
 #  failover      a client 400 is relayed (no close, no open); a 402 on
-#                provider A closes A and opens on B (omitProvider, router
+#                provider A closes A and opens on B by bid (router
 #                failover off) and the request answers 200; an impaired
 #                400 on B with A cooling keeps the session (no alternate).
 #  2fa           2FA starts off (password-only); turning it on (enroll,
@@ -363,10 +363,10 @@ b=$(chat_body e2e-gamma)
 after=$(gamma_open)
 case "$after" in *" $PB") ;; *) fail "want the e2e-gamma session on provider B, got: $after" ;; esac
 [ "$(opens)" = $((o4 + 1)) ] || fail "want exactly one new open, got $(( $(opens) - o4 ))"
-mockctl GET /e2e/opens | jq -e --arg a "$PA" '.opens | last | .omitProvider == $a and .failover == false and .provider != $a' >/dev/null \
+mockctl GET /e2e/opens | jq -e --arg a "$PA" '.opens | last | .bid != "" and (.fields - ["directPayment", "failover", "sessionDuration"]) == [] and .failover == false and .provider != $a' >/dev/null \
   || fail "failover open: $(mockctl GET /e2e/opens | jq -c '.opens | last')"
 fo_lines | jq -e -s 'map(select(.result == "retried_ok" and .status == "402")) | length == 1' >/dev/null || fail "no provider_failover retried_ok audit: $(fo_lines)"
-echo "OK 402 on A: closed A, opened on B with omitProvider=A and failover:false, answered 200, audited"
+echo "OK 402 on A: closed A, opened on B by bid (staking-only body) and failover:false, answered 200, audited"
 o5=$(opens); c5=$(stats | jq -r .session_closes)
 pfail "$PB" 400 "Rate%20limit%20exceeded"
 b=$(chat_body e2e-gamma)

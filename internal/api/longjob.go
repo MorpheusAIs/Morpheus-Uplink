@@ -308,6 +308,12 @@ func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID 
 		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")
 		return nil, res, false
 	}
+	if errors.Is(err, pool.ErrNoAvailableProvider) {
+		// Every eligible provider is avoided right now: nothing was opened.
+		s.auditProviderUnavailable(modelID, "no_available")
+		writeNoAvailableProvider(w, err)
+		return nil, res, false
+	}
 	if err != nil {
 		warnf("api: open session for %s (%s): %v", reqModel, modelID, err)
 		writeOpenAIError(w, http.StatusBadGateway, "failed to open session") // detail logged above; it names router internals
@@ -356,4 +362,26 @@ func effectiveTotal(cl callLimits, res pool.AcquireResult) int {
 		}
 	}
 	return total
+}
+
+// writeNoAvailableProvider answers ErrNoAvailableProvider: a typed 503 with
+// a fixed message (no ids) and, when a cool-down is known, Retry-After in
+// whole seconds.
+func writeNoAvailableProvider(w http.ResponseWriter, err error) {
+	var na *pool.NoAvailableError
+	if errors.As(err, &na) && na.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(na.RetryAfter/time.Second)))
+	}
+	writeTypedError(w, http.StatusServiceUnavailable, "no_available_provider", "no provider is available for this model right now; retry later")
+}
+
+// auditProviderUnavailable records a fail-fast refusal on the ops stream,
+// aggregated per resolved model per minute (never the request's own model
+// string): model, outcome and, on the summary line, a count.
+func (s *Server) auditProviderUnavailable(modelID, outcome string) {
+	label := s.modelLabel(modelID)
+	s.opsAgg.Record(AuditStreamOps, label, AuditEvent{
+		At: time.Now().UTC(), Kind: "provider_unavailable", Result: outcome,
+		Message: "provider_unavailable " + outcome + " " + label,
+	})
 }

@@ -204,6 +204,8 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 		switch {
 		case errors.Is(ferr, pool.ErrNoAlternate):
 			outcome = "no_alternate"
+		case errors.Is(ferr, pool.ErrNoAvailableProvider):
+			outcome = "no_available" // every eligible provider is avoided; nothing opened
 		case errors.Is(ferr, pool.ErrLongSessionLimit):
 			outcome = "long_session_limit" // the long replacement would pass a limit
 		}

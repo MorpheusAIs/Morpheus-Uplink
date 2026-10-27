@@ -20,7 +20,7 @@ func TestOpenSessionNeverDirectPayment(t *testing.T) {
 	}))
 	defer ts.Close()
 	c := New(ts.URL, "u", "p")
-	if _, err := c.OpenSession("0xmodel", OpenSessionRequest{SessionDuration: 600, OmitProvider: "0xabc"}); err != nil {
+	if _, err := c.OpenSession("0xmodel", OpenSessionRequest{SessionDuration: 600}); err != nil {
 		t.Fatal(err)
 	}
 	if v, ok := body["directPayment"]; !ok || v != false {
@@ -30,8 +30,11 @@ func TestOpenSessionNeverDirectPayment(t *testing.T) {
 	if v, ok := body["failover"]; !ok || v != false {
 		t.Fatalf("failover must be present and false: %v", body)
 	}
-	if body["omitProvider"] != "0xabc" {
-		t.Fatalf("omitProvider not sent: %v", body)
+	// Staking-only body: nothing beyond these fields is sent.
+	for k := range body {
+		if k != "sessionDuration" && k != "failover" && k != "directPayment" {
+			t.Fatalf("unexpected open body field %q: %v", k, body)
+		}
 	}
 }
 
