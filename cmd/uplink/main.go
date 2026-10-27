@@ -39,6 +39,10 @@ func main() {
 		// Name only: the value is never logged.
 		slog.Warn(name + " is not true or false; using the safe value (MASTER_KEY_ADMIN: off). Set it to true or false.")
 	}
+	for _, msg := range cfg.AdminSessionWarnings {
+		slog.Warn(msg)
+	}
+	slog.Info("admin session lengths", "idle", cfg.AdminSessionIdle.String(), "absolute", cfg.AdminSessionAbsolute.String())
 	if cfg.DirectPaymentIgnored {
 		slog.Warn("SESSION_DIRECT_PAYMENT is ignored (set to true): Uplink only opens staking-mode sessions (stake locked and returned, never paid out)")
 	}
