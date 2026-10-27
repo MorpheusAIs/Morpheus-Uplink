@@ -115,6 +115,9 @@ func relayRouterError(w http.ResponseWriter, err error) {
 		writeOpenAIError(w, http.StatusBadGateway, "inference failed")
 		return
 	}
+	// The full router text goes to the ops log only; the client gets it
+	// scrubbed (scrubRouterText) and capped.
+	warnf("api: router error %d on %s %s: %s", se.Code, se.Method, se.Path, se.Body)
 	code := se.Code
 	if code < 400 || code > 599 {
 		code = http.StatusBadGateway
@@ -128,11 +131,14 @@ func relayRouterError(w http.ResponseWriter, err error) {
 	}
 	if isObj && !hasPME {
 		if raw := obj["error"]; len(raw) > 0 && raw[0] == '{' {
-			// Already OpenAI-shaped.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(code)
-			_, _ = w.Write([]byte(se.Body))
-			return
+			// Already OpenAI-shaped: relayed with every string scrubbed,
+			// when it fits the cap (else reshaped below).
+			if body, ok := scrubbedJSON([]byte(se.Body)); ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(code)
+				_, _ = w.Write(body)
+				return
+			}
 		}
 	}
 	typ := "invalid_request_error"
@@ -143,7 +149,11 @@ func relayRouterError(w http.ResponseWriter, err error) {
 		"message": routerErrorMessage(obj, se.Body), "type": typ, "code": code,
 	}}
 	if hasPME {
-		out["providerModelError"] = obj["providerModelError"]
+		if pme, ok := scrubbedJSON(obj["providerModelError"]); ok {
+			out["providerModelError"] = pme
+		} else {
+			out["providerModelError"] = map[string]any{"error": map[string]any{"message": routerErrorMessage(obj, se.Body)}}
+		}
 	}
 	writeJSON(w, code, out)
 }
@@ -152,11 +162,11 @@ func relayRouterError(w http.ResponseWriter, err error) {
 func routerErrorMessage(obj map[string]json.RawMessage, body string) string {
 	for _, k := range []string{"providerModelError", "error", "message"} {
 		if s := nestedMessage(obj[k], 3); s != "" {
-			return truncate(s, 1000)
+			return truncate(scrubRouterText(s), 1000)
 		}
 	}
 	if s := strings.TrimSpace(body); s != "" {
-		return truncate(s, 1000)
+		return truncate(scrubRouterText(s), 1000)
 	}
 	return "the router returned an error"
 }
@@ -181,13 +191,6 @@ func nestedMessage(raw json.RawMessage, depth int) string {
 		}
 	}
 	return ""
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }
 
 // statusClass is the audit form of a status: the code itself for 4xx
