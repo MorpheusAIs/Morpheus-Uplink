@@ -273,6 +273,17 @@ func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string
 			return "", "", err
 		}
 		prov, _ := p.sessionProvider(modelID, id)
+		// Do not rely on the router alone: a session that landed on a
+		// configured exclusion is closed and nothing is handed out.
+		if prov != "" && p.isConfiguredExcluded(modelID, prov) {
+			warnf("pool: open with omitProvider landed on an excluded provider for model %s; closing session %s", modelID, short(id))
+			if err := p.closeBounded(id); err != nil {
+				warnf("pool: close session %s on an excluded provider: %v (left for the sweep)", short(id), err)
+			} else {
+				p.notifyClosed(id)
+			}
+			return "", "", ErrNoEligibleProvider
+		}
 		return id, prov, nil
 	}
 	tried := map[string]bool{}
@@ -300,6 +311,17 @@ func (p *Pool) openExcluding(modelID string, durationSec int, exclude map[string
 		lastErr = ErrNoAlternate
 	}
 	return "", "", fmt.Errorf("open on another provider (%d tried): %w", attempts, lastErr)
+}
+
+// isConfiguredExcluded reports whether prov is in UPLINK_PROVIDER_EXCLUDE
+// for the model.
+func (p *Pool) isConfiguredExcluded(modelID, prov string) bool {
+	for k := range p.excludedProviders(modelID) {
+		if strings.EqualFold(k, prov) {
+			return true
+		}
+	}
+	return false
 }
 
 // openAvoidingCooling is the normal open: plain open by model when no
@@ -363,6 +385,9 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		return id, prov, err
 	}
 	id, prov, err := p.openExcluding(modelID, durationSec, exclude, alts, cut != "")
+	if errors.Is(err, ErrNoEligibleProvider) {
+		return "", "", err
+	}
 	if err != nil {
 		slog.Warn("pool: open avoiding cooling providers failed; opening without soft exclusions", "model", modelID, "err", err)
 		return fallback(bids, true)

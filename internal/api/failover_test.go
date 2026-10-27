@@ -142,6 +142,8 @@ type fakeMarket struct {
 	closeStatus int
 	closeBody   string // router error text on a failed close
 	next        int
+	ignoreOmit  bool // open by model ignores omitProvider (router misbehaving)
+	bidsFail    bool // rated bids answer 500
 }
 
 func newFakeMarket(t *testing.T, providers ...string) *fakeMarket {
@@ -168,7 +170,7 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 	defer m.mu.Unlock()
 	prov := ""
 	for _, p := range m.providers {
-		if byBid != "" && bidOf(p) == byBid || byBid == "" && !strings.EqualFold(p, omit) {
+		if byBid != "" && bidOf(p) == byBid || byBid == "" && (m.ignoreOmit || !strings.EqualFold(p, omit)) {
 			prov = p
 			break
 		}
@@ -238,6 +240,10 @@ func (m *fakeMarket) server() *httptest.Server {
 	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if m.bidsFail {
+			http.Error(w, `{"error":"bids unavailable"}`, http.StatusInternalServerError)
+			return
+		}
 		bids := []map[string]any{}
 		for i, p := range m.providers {
 			bids = append(bids, map[string]any{"ID": bidOf(p), "Bid": map[string]any{"Id": bidOf(p), "Provider": p}, "Score": float64(10 - i)})

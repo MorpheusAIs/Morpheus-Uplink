@@ -1820,6 +1820,10 @@ turns Uplink's failover off: errors are relayed and the session is kept.
   even in the fallback when every other provider is cooling or was just
   cut. When only excluded providers serve the model, the request gets
   `503` `no_eligible_provider` (no ids in the body) and nothing is opened.
+  A session the router opened on an excluded provider anyway is closed at
+  once and answered the same way. When the rated bids cannot be read, one
+  exclusion is sent as `omitProvider`; with two or more nothing is opened
+  (`502`).
   Bad entries are logged by position and ignored.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short

@@ -358,13 +358,70 @@ func TestS4FallbackRules(t *testing.T) {
 		last := opens[len(opens)-1]
 		if c.notOn != "" {
 			for _, o := range opens {
-				if o.provider == c.notOn || (len(c.exclude) > 1 && o.provider == c.exclude[1]) {
-					t.Errorf("%s: opened on an excluded provider", c.name)
+				for _, ex := range c.exclude {
+					if o.provider == ex {
+						t.Errorf("%s: opened on excluded provider %s", c.name, ex[:6])
+					}
 				}
 			}
 		}
 		if c.plain && (last.omit != "" || last.bid != "") {
 			t.Errorf("%s: want a plain open, got %+v", c.name, last)
 		}
+	}
+}
+
+// Conformance SHOULD-A: an omitProvider open that lands on a configured
+// exclusion anyway (router not honouring omitProvider) is closed, and the
+// request gets 503 with no ids.
+func TestS4OmitOpenOnExcludedClosed(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	for _, bidsFail := range []bool{false, true} {
+		m := newFakeMarket(t, a40, b40)
+		m.ignoreOmit, m.bidsFail = true, bidsFail
+		e := newFailoverEnv(t, m, nil)
+		e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
+		code, body := e.chat(t, false)
+		opens, closes := m.snapshot()
+		if code != 503 || strings.Contains(body, "0x") || !strings.Contains(body, "no_eligible_provider") {
+			t.Errorf("bidsFail=%v: %d %s", bidsFail, code, body)
+		}
+		if len(opens) != 1 || opens[0].omit != a40 || opens[0].provider != a40 || len(closes) != 1 {
+			t.Errorf("bidsFail=%v: opens %d closes %d", bidsFail, len(opens), len(closes))
+		}
+		if len(e.srv.pool.Snapshot()) != 0 {
+			t.Errorf("bidsFail=%v: excluded session pooled", bidsFail)
+		}
+	}
+}
+
+// Conformance SHOULD-B: bids unreadable. One configured exclusion: the
+// open sends omitProvider and does not land on it. Two or more: nothing is
+// opened and the request gets 502.
+func TestS4BidsUnreadableFallback(t *testing.T) {
+	a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
+
+	m := newFakeMarket(t, a40, b40)
+	m.bidsFail = true
+	e := newFailoverEnv(t, m, nil)
+	e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
+	if code, body := e.chat(t, false); code != 200 {
+		t.Fatalf("one exclusion: %d %s", code, body)
+	}
+	opens, _ := m.snapshot()
+	if len(opens) != 1 || opens[0].omit != a40 || opens[0].bid != "" || opens[0].provider != b40 {
+		t.Fatalf("one exclusion: opens %+v", opens)
+	}
+
+	m2 := newFakeMarket(t, a40, b40, c40)
+	m2.bidsFail = true
+	e2 := newFailoverEnv(t, m2, nil)
+	e2.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40, b40}}, nil)
+	code, body := e2.chat(t, false)
+	if code != 502 || strings.Contains(body, "0x") {
+		t.Fatalf("two exclusions: %d %s", code, body)
+	}
+	if opens, _ := m2.snapshot(); len(opens) != 0 {
+		t.Fatalf("two exclusions opened %d", len(opens))
 	}
 }
