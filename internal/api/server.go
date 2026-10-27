@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
@@ -44,6 +45,9 @@ type Server struct {
 
 	settings   *runtimeSettings // S6: effective operator settings
 	settingsMu sync.Mutex       // serialises setting changes
+	// Console restart (restart.go): set by cmd/uplink; nil means no restart.
+	restartHook func()
+	restarting  atomic.Bool
 
 	walletMu   sync.Mutex
 	lastWallet string // last address the router returned (never blanked)
@@ -137,6 +141,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/settings", s.requireConsoleSession(s.handleSettingsSet))
 	mux.HandleFunc("GET /admin/settings/export", s.requireConsoleSession(s.handleSettingsExport))
 	mux.HandleFunc("POST /admin/settings/import", s.requireConsoleSession(s.handleSettingsImport))
+	mux.HandleFunc("POST /admin/restart", s.requireConsoleSession(s.handleRestart))
 
 	// GUI + health.
 	mux.Handle("/gui/", http.StripPrefix("/gui", gui.Handler()))

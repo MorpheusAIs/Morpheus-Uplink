@@ -181,11 +181,32 @@ func main() {
 		}
 	}()
 
+	// Console restart (POST /admin/restart): the same graceful HTTP stop as
+	// SIGTERM, then this binary starts again in place (restart.go). Open
+	// sessions are left for the next boot reconcile to adopt; the router is
+	// not touched.
+	restart := make(chan struct{}, 1)
+	srv.SetRestartHook(func() {
+		select {
+		case restart <- struct{}{}:
+		default:
+		}
+	})
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	restarting := false
+	select {
+	case <-stop:
+	case <-restart:
+		restarting = true
+	}
 
-	log.Println("shutting down…")
+	if restarting {
+		log.Println("restarting Uplink…")
+	} else {
+		log.Println("shutting down…")
+	}
 	t0 := time.Now()
 	hkCancel()
 	reconcileCancel()
@@ -193,6 +214,13 @@ func main() {
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
 	log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
+	if restarting {
+		srv.FlushAudit()
+		err := restartSelf()
+		// Only reached when the new process could not start: exit non-zero
+		// so the container's restart policy starts Uplink again.
+		log.Fatalf("restart: %v", err)
+	}
 	if cfg.CloseSessionsOnExit {
 		// Finish inside the 45 s stop grace: 40 s from SIGTERM in total,
 		// at most 8 s per close. Whatever is left is closed (expired) or

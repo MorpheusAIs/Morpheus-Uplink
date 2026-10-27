@@ -164,9 +164,16 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 - Every setting the console can change, one row each: the name and
   tooltip, then a toggle, number field, list or text field. The tooltip
   gives the range or values, the default, and whether it applies at once
-  or after an Uplink restart. **Save** stores it in `DATA_DIR`; **Reset**
-  returns to the default. Saving a setting that applies after an Uplink
-  restart asks for the password (and 2FA code) again, like key export.
+  or after an Uplink restart.
+- One set of buttons at the bottom: **Save** stores every edited row in
+  `DATA_DIR`; **Cancel changes** puts back the last saved values; **Use
+  defaults** fills the form with the defaults (Save applies them). Saving
+  a setting that applies after an Uplink restart asks for the password
+  (and 2FA code) again, like key export.
+- **Restart Uplink** restarts the Uplink process (not the router) so
+  those settings take effect. It asks to confirm and, like those saves,
+  for the password again; calls in progress finish first, and you sign
+  in again once Uplink is back.
 - A value set in `.env` wins and is read-only, with a note to remove it
   from `.env` to manage it here. Router settings, `MASTER_KEY_ADMIN`,
   `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are set in
