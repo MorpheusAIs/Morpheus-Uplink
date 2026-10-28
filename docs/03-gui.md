@@ -134,7 +134,7 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   dedicated wallet: the boot check and the stop act on every session of
   the wallet.
 - A session with no call in flight and no use for 5 minutes
-  (`UPLINK_SESSION_IDLE_GRACE_SECONDS`) is closed early so its unused stake
+  (the `sessionIdleGrace` setting) is closed early so its unused stake
   returns. A session is never closed while a call is still running on it;
   apps can release their hold when done ([Long jobs](04-clients.md#long-jobs-timeouts-session-length-release)).
   The **Sessions** table shows, per session, when it opened and ends, the

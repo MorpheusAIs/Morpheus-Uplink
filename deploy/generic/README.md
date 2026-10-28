@@ -19,10 +19,10 @@ for it; kept in the data volume). 2FA emergency recovery:
 `UPLINK_RESET_2FA=true` for one restart, then remove it (2FA comes back
 off).
 
-- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
-  SESSION_FAILOVER, UPLINK_PROVIDER_COOLDOWN_SECONDS, HOUSEKEEPING; wiring
+- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL; wiring
   defaults UPLINK_LISTEN, ROUTER_URL,
   DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
+  Session, failover, provider, audit, housekeeping and log settings are set on the console Settings page, not in `.env`.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router** (proxy-router process env): PROXY_STORE_CHAT_CONTEXT,
   PROXY_FORWARD_CHAT_CONTEXT, LOG_LEVEL_APP/TCP/ETH_RPC, ETH_NODE_CHAIN_ID,

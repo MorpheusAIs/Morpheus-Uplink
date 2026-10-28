@@ -7,13 +7,14 @@ fields: SecretVM makes a field of every `environment:` key (literals too),
 so the compose has no other. Tunables change via compose/code, not
 Encrypted Secrets:
 
-- **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
-  UPLINK_PROVIDER_COOLDOWN_SECONDS,
-  ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
+- **Uplink** (`uplink_bake_env`): ACTIVE_MODELS_URL, GATEWAY_BIDS_URL (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
   CLOSE_SESSIONS_ON_EXIT), and master key admin access fixed off
   (MASTER_KEY_ADMIN=false; bake values win over environment:). Diamond /
   ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **Console settings** (session lengths and timers, failover, provider
+  cool-down and exclusions, session release, audit retention,
+  housekeeping, log level) are set on the console Settings page, not here.
 - **2FA** is off by default and turned on with the switch on the GUI
   Security tab (recommended); there is no variable for it. The switch is
   kept in the uplink data volume, so it survives redeploys.
