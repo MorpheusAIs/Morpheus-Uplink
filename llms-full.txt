@@ -1215,6 +1215,29 @@ unlock `/v1/usage`.
 
 ---
 
+## Upgrading to a build with settings in one place
+
+Console settings are no longer read from `.env` or the platform's
+variables. A value set there for a setting on the console **Settings** tab
+is ignored: Uplink logs one warning at startup naming the variable (never
+its value) and uses the default until the value is saved on the tab.
+
+- After upgrading, re-enter on the **Settings** tab every console setting
+  you had set in `.env`, in particular **provider exclusions** and **audit
+  retention** (also session lengths, failover, provider cooldown, session
+  release, housekeeping and the log level, if you set them there).
+- **Audit retention** falls back to the default of **90 days** until it is
+  saved. The audit prune deletes rotated security audit files older than the
+  retention, and it runs at startup, so the first start after the upgrade
+  uses 90 days. If you kept a longer retention, back up the audit files in
+  the data directory before upgrading. Audit retention takes effect at the
+  next restart after it is saved.
+- Secrets, router settings and the remaining wiring (`WEB_PUBLIC_URL`,
+  `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `MASTER_KEY_ADMIN`) stay in
+  `.env`.
+
+---
+
 ## Upgrading from an earlier test build
 
 Upgrades do not remove services that were dropped from the compose file
