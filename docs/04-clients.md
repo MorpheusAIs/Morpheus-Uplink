@@ -103,8 +103,8 @@ curl -sS https://YOUR_HOST/v1/chat/completions \
   Whole numbers only, sent once; a bad value is a `400` naming the header.
   Each call's total timer is 600 s.
 - The response then carries `X-Uplink-Timeouts: idle=…;total=…`.
-- A session is used until it expires or is closed for being idle; the
-  next call opens a new one.
+- A session is used until it expires, is closed for being idle, is
+  released, or is replaced in a failover; the next call opens a new one.
 - A timeout before any answer is a `504` with `"type":"timeout"`. In a
   stream it ends with an error event, `finish_reason:
   "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.

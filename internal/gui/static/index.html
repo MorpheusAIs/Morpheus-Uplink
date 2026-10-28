@@ -318,6 +318,16 @@
   .hidden { display: none !important; }
   .tf-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
   .tf-switch input { width: 18px; height: 18px; margin: 0; }
+  /* Settings tab: one row per setting, label and tip, then the control in a
+     fixed-width cell so every control starts at the same place. */
+  .setting-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .setting-label { flex: 0 0 240px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .setting-label label { overflow-wrap: anywhere; }
+  .setting-cell { flex: 0 0 280px; display: flex; align-items: center; }
+  .setting-cell input, .setting-cell select { width: 100%; }
+  .setting-cell input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
+  .setting-row .note { margin: 0; flex: 1 1 220px; min-width: 0; }
+  @media (max-width: 640px) { .setting-label, .setting-cell { flex-basis: 100%; } }
   .otp-input {
     width: 9ch;
     font-family: var(--mono, ui-monospace, monospace);
@@ -1203,9 +1213,10 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         <h2>Settings</h2>
         <p class="note" style="margin-top:0">
           Saved in DATA_DIR with the admin state. Some apply at once; others say
-          they take effect after an Uplink or router restart. A value set in the
+          they take effect after an Uplink restart. A value set in the
           environment wins and is read-only here: remove it from .env to manage it
-          in the console. Secrets stay in .env only. Every change is logged.
+          in the console. Settings that live in .env only, router settings and
+          secrets are not shown here. Every change is logged.
         </p>
         <div class="row" style="margin-bottom:8px">
           <button class="ghost" type="button" id="settingsExportBtn" onclick="exportSettings()">Export settings</button>
@@ -1213,7 +1224,16 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <input type="file" id="settingsImportFile" accept="application/json,.json" class="hidden" onchange="importSettingsFile(this)">
         </div>
         <div id="settingsList" class="stack" style="gap:8px;margin-top:10px">Loading…</div>
+        <div class="row" id="settingsActions" style="margin-top:14px">
+          <button type="button" id="settingsSaveBtn" onclick="saveSettings()" disabled>Save</button>
+          <button class="ghost" type="button" id="settingsCancelBtn" onclick="cancelSettings()" disabled>Cancel changes</button>
+          <button class="ghost" type="button" id="settingsDefaultsBtn" onclick="useDefaultSettings()">Use defaults</button>
+          <button class="danger-ghost" type="button" id="settingsRestartBtn" onclick="restartUplink()">Restart Uplink</button>
+        </div>
         <p id="settingsMsg" class="note" style="margin:6px 0 0" role="status"></p>
+        <p class="note" id="settingsEnvDocs">
+          <a href="https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/06-developers.md#environment-variables" target="_blank" rel="noopener noreferrer">All .env settings</a>
+        </p>
       </section>
     </div>
 
@@ -1667,13 +1687,16 @@ async function api(path, opts = {}) {
   return res.text();
 }
 
-/** Operator settings (#51): one row per registry setting. Env-pinned,
- * router and env-only rows are read-only. */
+/** Operator settings (#51): one row per setting the console can change.
+ * .env-only and router rows are not shown; env-pinned rows are read-only. */
+// settingsLast is the last loaded view: Cancel changes renders it again.
+let settingsLast = [];
 async function loadSettings() {
   const msg = document.getElementById('settingsMsg');
   try {
     const v = await api('/admin/settings');
-    renderSettings((v && v.settings) || []);
+    settingsLast = (v && v.settings) || [];
+    renderSettings(settingsLast);
     msg.textContent = '';
   } catch (e) {
     msg.textContent = 'Could not load settings: ' + e.message;
@@ -1688,9 +1711,11 @@ function settingTip(s) {
   t += ' Default: ' + settingText(s.default) + '.';
   return t;
 }
+// settingShown: only rows the console can change (live or Uplink restart).
+function settingShown(s) {
+  return s.scope !== 'env' && s.scope !== 'router' && s.settable !== false;
+}
 function settingNote(s) {
-  if (s.scope === 'router') return 'router setting: set ' + s.env + ' in the router\u2019s .env and restart the router';
-  if (s.scope === 'env') return 'set in .env only (' + s.env + ')';
   if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
   if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
   if (s.source === 'persisted') return 'saved';
@@ -1699,18 +1724,22 @@ function settingNote(s) {
 function renderSettings(list) {
   const box = document.getElementById('settingsList');
   box.textContent = '';
-  for (const s of list) {
+  for (const s of list.filter(settingShown)) {
     const row = document.createElement('div');
-    row.className = 'row';
+    row.className = 'setting-row';
+    const head = document.createElement('div');
+    head.className = 'setting-label';
     const label = document.createElement('label');
     label.textContent = s.name;
     label.title = s.env;
-    label.style.minWidth = '200px';
+    label.htmlFor = 'setting-' + s.name;
     const tip = document.createElement('span');
     tip.className = 'tip';
     tip.tabIndex = 0;
     setTip(tip, settingTip(s));
     tip.textContent = '\u24D8';
+    head.appendChild(label);
+    head.appendChild(tip);
     let input;
     if (s.kind === 'bool') {
       input = document.createElement('input');
@@ -1728,61 +1757,127 @@ function renderSettings(list) {
     } else if (s.kind === 'string') {
       input = document.createElement('input');
       input.type = 'text';
-      input.style.minWidth = '280px';
       input.value = s.value == null ? '' : String(s.value);
     } else {
       input = document.createElement('input');
       input.type = 'number';
       if (s.min != null) input.min = String(s.min);
       if (s.max != null) input.max = String(s.max);
-      input.style.maxWidth = '140px';
       input.value = s.value == null ? '' : String(s.value);
     }
     input.id = 'setting-' + s.name;
-    input.disabled = !!s.pinned || s.settable === false;
-    row.appendChild(label);
-    row.appendChild(tip);
-    row.appendChild(input);
-    if (!input.disabled) {
-      const save = document.createElement('button');
-      save.type = 'button'; save.className = 'ghost'; save.textContent = 'Save';
-      save.onclick = () => saveSetting(s.name, s.kind === 'bool' ? input.checked : input.value, s.kind);
-      const reset = document.createElement('button');
-      reset.type = 'button'; reset.className = 'ghost'; reset.textContent = 'Reset';
-      reset.disabled = s.source !== 'persisted';
-      reset.onclick = () => saveSetting(s.name, null);
-      row.appendChild(save);
-      row.appendChild(reset);
-    }
+    input.disabled = !!s.pinned;
+    input.onchange = updateSettingsDirty;
+    input.oninput = updateSettingsDirty;
+    const cell = document.createElement('div');
+    cell.className = 'setting-cell';
+    cell.appendChild(input);
+    row.appendChild(head);
+    row.appendChild(cell);
     const note = document.createElement('span');
     note.className = 'note';
-    note.style.margin = '0';
     note.textContent = settingNote(s);
     row.appendChild(note);
     box.appendChild(row);
   }
+  updateSettingsDirty();
 }
 function settingValue(value, kind) {
   if (kind === 'bool') return !!value;
   if (kind === 'int') return Number(value);
   return String(value);
 }
-async function saveSetting(name, value, kind) {
-  const msg = document.getElementById('settingsMsg');
-  const body = value === null ? { name, reset: true } : { name, value: settingValue(value, kind || 'int') };
-  try {
-    // Restart-scope rows need a fresh step-up (like import); live rows never ask.
-    const res = await stepUpFetch('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!res) { msg.textContent = name + ' needs your password first.'; return; }
-    if (!res.ok) { msg.textContent = name + ': ' + ((await res.text()) || res.statusText); return; }
-    msg.textContent = value === null ? name + ' reset' : name + ' saved';
-    await loadSettings();
-  } catch (e) {
-    msg.textContent = name + ': ' + e.message;
+// settingInputValue reads a row's control as the API's string form.
+function settingInputValue(s) {
+  const el = document.getElementById('setting-' + s.name);
+  if (!el) return null;
+  return s.kind === 'bool' ? String(!!el.checked) : String(el.value);
+}
+function settingSavedValue(s) {
+  return s.value == null ? '' : String(s.value);
+}
+// settingsChanges compares the form with the last loaded values: one
+// entry per edited row; a row put back to its default is a reset.
+function settingsChanges(list) {
+  const out = [];
+  for (const s of list.filter(settingShown)) {
+    if (s.pinned) continue;
+    const v = settingInputValue(s);
+    if (v === null || v === settingSavedValue(s)) continue;
+    const def = s.default == null ? '' : String(s.default);
+    if (v === def && s.source === 'persisted') out.push({ name: s.name, body: { name: s.name, reset: true } });
+    else out.push({ name: s.name, body: { name: s.name, value: settingValue(s.kind === 'bool' ? v === 'true' : v, s.kind) } });
   }
+  return out;
+}
+function updateSettingsDirty() {
+  const n = settingsChanges(settingsLast).length;
+  document.getElementById('settingsSaveBtn').disabled = n === 0;
+  document.getElementById('settingsCancelBtn').disabled = n === 0;
+}
+// saveSettings sends each edited row. A save that needs a step-up asks
+// once (stepUpFetch); a row refused because of another row's value (the
+// default above the max) is tried again after the others.
+async function saveSettings() {
+  const msg = document.getElementById('settingsMsg');
+  let todo = settingsChanges(settingsLast);
+  if (!todo.length) { msg.textContent = 'No changes to save.'; return; }
+  const saved = [];
+  let failed = [];
+  for (let pass = 0; pass < 2 && todo.length; pass++) {
+    failed = [];
+    for (const c of todo) {
+      const res = await stepUpFetch('/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) });
+      if (!res) { msg.textContent = 'Saving needs your password first.' + (saved.length ? ' Saved: ' + saved.join(', ') + '.' : ''); await loadSettings(); return; }
+      if (res.ok) saved.push(c.name);
+      else failed.push({ c, text: c.name + ': ' + ((await res.text()) || res.statusText).trim() });
+    }
+    todo = failed.map((f) => f.c);
+  }
+  await loadSettings();
+  msg.textContent = (saved.length ? 'Saved: ' + saved.join(', ') + '.' : '') +
+    (failed.length ? ' Not saved: ' + failed.map((f) => f.text).join('; ') : '');
+}
+function cancelSettings() {
+  renderSettings(settingsLast);
+  document.getElementById('settingsMsg').textContent = 'Changes cancelled.';
+}
+// useDefaultSettings fills the form with the defaults; Save applies them.
+function useDefaultSettings() {
+  for (const s of settingsLast.filter(settingShown)) {
+    if (s.pinned) continue;
+    const el = document.getElementById('setting-' + s.name);
+    if (!el) continue;
+    if (s.kind === 'bool') el.checked = s.default === true || s.default === 'true';
+    else el.value = s.default == null ? '' : String(s.default);
+  }
+  updateSettingsDirty();
+  document.getElementById('settingsMsg').textContent = 'Defaults filled in. Save to apply them.';
+}
+// restartUplink restarts the Uplink process only (the router keeps
+// running) so "Uplink restart" settings take effect; it asks first.
+async function restartUplink() {
+  const msg = document.getElementById('settingsMsg');
+  const unsaved = settingsChanges(settingsLast).length;
+  const q = 'Restart Uplink now? Calls in progress get up to 30 s to finish, then Uplink starts again in a few seconds and you sign in again. The router is not restarted.' +
+    (unsaved ? ' Unsaved changes on this page are lost.' : '');
+  if (!confirm(q)) return;
+  const res = await stepUpFetch('/admin/restart', { method: 'POST' });
+  if (!res) { msg.textContent = 'Restart needs your password first.'; return; }
+  if (res.status !== 202) { msg.textContent = 'Restart refused: ' + ((await res.text()) || res.statusText).trim(); return; }
+  msg.textContent = 'Restarting Uplink…';
+  await new Promise((r) => setTimeout(r, 3000));
+  for (let i = 0; i < 60; i++) {
+    try {
+      const h = await fetch('/healthcheck', { cache: 'no-store' });
+      if (h.ok) { location.reload(); return; }
+    } catch (e) { /* still starting */ }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  msg.textContent = 'Uplink has not come back yet. Reload the page in a moment.';
 }
 // stepUpFetch is fetch for routes that need a fresh step-up (settings
-// export, import and restart-scope saves): on 401 step_up_required it asks once, then retries.
+// export, import, restart-scope saves and the restart): on 401 step_up_required it asks once, then retries.
 // null when cancelled or the session is gone.
 async function stepUpFetch(path, opts) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1823,7 +1918,8 @@ async function importSettingsFile(input) {
   if (!res) { msg.textContent = 'Import needs your password first.'; return; }
   if (!res.ok) { msg.textContent = 'Import refused: ' + ((await res.text()) || res.statusText); return; }
   const v = await res.json();
-  renderSettings((v && v.settings) || []);
+  settingsLast = (v && v.settings) || [];
+  renderSettings(settingsLast);
   const pinned = (v && v.pinned) || [];
   msg.textContent = 'Settings imported.' + (pinned.length ? ' Set by environment, so the env value still wins: ' + pinned.join(', ') + '.' : '');
 }

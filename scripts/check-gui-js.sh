@@ -628,11 +628,17 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 const mk = (tag) => ({ tag, children: [], style: {}, attrs: {}, disabled: false, value: '', checked: false, textContent: '',
   setAttribute(k, v) { this.attrs[k] = v; }, appendChild(c) { this.children.push(c); return c; } });
 const box = mk('div');
-global.document = { getElementById: () => box, createElement: mk };
-const names = ['renderSettings', 'settingText', 'settingTip', 'settingNote', 'setTip', 'settingValue'];
+// Like the DOM: setting textContent on the list drops its rows.
+Object.defineProperty(box, 'textContent', { get() { return ''; }, set() { this.children = []; } });
+const walkAll = (n) => [n].concat(...(n.children || []).map(walkAll));
+const stubs = {};
+global.document = { createElement: mk, getElementById: (id) => id === 'settingsList' ? box
+  : (walkAll(box).find((c) => c.id === id) || (stubs[id] = stubs[id] || mk('stub'))) };
+const names = ['renderSettings', 'settingShown', 'settingText', 'settingTip', 'settingNote', 'setTip', 'settingValue',
+  'settingInputValue', 'settingSavedValue', 'settingsChanges', 'updateSettingsDirty', 'cancelSettings', 'useDefaultSettings'];
 for (const n of ['renderSettings', 'settingTip', 'settingNote']) if (/innerHTML/.test(extract(n))) fail(n + ' must not use innerHTML');
-eval(names.map(extract).join('\n') + '\nObject.assign(global, { renderSettings, settingValue });');
-renderSettings([
+eval('var settingsLast = [];\n' + names.map(extract).join('\n') + '\nObject.assign(global, { renderSettings, settingValue, settingsChanges, cancelSettings, useDefaultSettings, setLast: (l) => { settingsLast = l; } });');
+const fixture = [
   { name: 'forwardIdle', kind: 'int', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
   { name: 'logLevel', kind: 'enum', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false, settable: true, scope: 'live', help: 'Log level.' },
   { name: 'sessionFailover', kind: 'bool', value: false, default: true, source: 'persisted', env: 'SESSION_FAILOVER', pinned: false, settable: true, scope: 'restart', restart: 'uplink', pendingRestart: true, effective: true, help: 'Fail over (true or false). Takes effect after an Uplink restart.' },
@@ -640,31 +646,66 @@ renderSettings([
   { name: 'routerLogLevelApp', kind: 'enum', value: null, default: 'warn', options: ['debug', 'warn'], source: 'router', env: 'LOG_LEVEL_APP', pinned: false, settable: false, scope: 'router', help: 'Router log level. Router setting: change it in the router\u2019s .env and restart the router.' },
   { name: 'masterKeyAdmin', kind: 'bool', value: false, default: false, source: 'default', env: 'MASTER_KEY_ADMIN', pinned: false, settable: false, scope: 'env', help: 'Security switch.' },
   { name: 'webPublicUrl', kind: 'string', value: 'https://console.example', default: '', source: 'env', env: 'WEB_PUBLIC_URL', pinned: true, settable: false, scope: 'env', help: 'Console origin. Set in .env only.' },
-]);
-const [pinned, free, bool, str, router, envOnly, envOnlySet] = box.children;
-const ctl = (row) => row.children.find((c) => c.id && c.id.startsWith('setting-'));
+];
+setLast(fixture);
+renderSettings(fixture);
+if (box.children.length !== 4) fail('only settable rows are shown: ' + box.children.length);
+const [pinned, free, bool, str] = box.children;
+const shownNames = box.children.map((r) => r.children[0].children[0].textContent);
+for (const n of ['routerLogLevelApp', 'masterKeyAdmin', 'webPublicUrl']) if (shownNames.includes(n)) fail(n + ' must not be shown');
+const walk = (n) => [n].concat(...(n.children || []).map(walk));
+const ctl = (row) => walk(row).find((c) => c.id && c.id.startsWith('setting-'));
 const note = (row) => row.children[row.children.length - 1].textContent;
 const buttons = (row) => row.children.filter((c) => c.tag === 'button').length;
-const tipOf = (row) => row.children.find((c) => c.className === 'tip').attrs['data-tip'] || '';
-if (!ctl(pinned).disabled || buttons(pinned)) fail('env-pinned field must be disabled with no Save/Reset');
+const tipOf = (row) => walk(row).find((c) => c.className === 'tip').attrs['data-tip'] || '';
+// One layout for every row: label and tip first, then the control in its
+// fixed-width cell; no inline widths on the controls.
+for (const row of box.children) {
+  const [head, cell] = row.children;
+  if (row.className !== 'setting-row' || head.className !== 'setting-label' || cell.className !== 'setting-cell') fail('row layout: ' + row.className);
+  if (head.children.length !== 2 || head.children[0].tag !== 'label' || head.children[1].className !== 'tip') fail('label and tip go together on the left');
+  if (cell.children.length !== 1 || !cell.children[0].id.startsWith('setting-')) fail('the cell holds only the control');
+  if (Object.keys(cell.children[0].style).length) fail('controls take their width from the cell, not inline styles');
+}
+for (const row of box.children) if (buttons(row)) fail('no per-row Save or Reset buttons');
+if (!ctl(pinned).disabled) fail('env-pinned field must be disabled');
 if (note(pinned) !== 'set by environment (UPLINK_FORWARD_IDLE_SECONDS) \u2014 remove it from .env to manage it here') fail('env note: ' + note(pinned));
 if (ctl(pinned).type !== 'number' || ctl(pinned).min !== '30' || ctl(pinned).max !== '600') fail('number field');
 if (!tipOf(pinned).includes('30–600') || !tipOf(pinned).includes('Default: 180')) fail('tooltip needs range and default: ' + tipOf(pinned));
-if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || buttons(free) !== 2) fail('enum select with Save and Reset');
-if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false || buttons(bool) !== 2) fail('bool must be a switch');
+if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || false) fail('enum select');
+if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false) fail('bool must be a switch');
 if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
 if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
-if (!ctl(router).disabled || buttons(router) || !note(router).includes('router') || !tipOf(router).includes('restart the router')) fail('router row must be read-only with the router note');
-if (!ctl(envOnly).disabled || buttons(envOnly) || !note(envOnly).includes('.env only')) fail('env-only row must be read-only');
-if (!ctl(envOnlySet).disabled || buttons(envOnlySet) || note(envOnlySet) !== 'set in .env only (WEB_PUBLIC_URL)') fail('env-only row set in .env must say .env only, not "remove it": ' + note(envOnlySet));
-if (!/stepUpFetch\('\/admin\/settings'/.test(extract('saveSetting')) || /\bapi\('\/admin\/settings'/.test(extract('saveSetting'))) fail('a single-setting save must use the step-up retry');
+if (!/href="https:\/\/github\.com\/MorpheusAIs\/Morpheus-Uplink\/blob\/main\/docs\/06-developers\.md#environment-variables"/.test(html.slice(html.indexOf('id="tab-settings"'), html.indexOf('id="tab-playground"')))) fail('Settings needs one link to the .env reference');
+// One set of values: no edits → nothing to save; edits are collected per
+// row (a row put back to its default is a reset); pinned rows never.
+if (settingsChanges(fixture).length || !stubs.settingsSaveBtn.disabled || !stubs.settingsCancelBtn.disabled) fail('fresh form must have no changes and Save/Cancel disabled');
+ctl(free).value = 'warn'; ctl(bool).checked = true; ctl(pinned).value = '99';
+let ch = settingsChanges(fixture);
+if (JSON.stringify(ch.map((c) => c.body)) !== JSON.stringify([{ name: 'logLevel', value: 'warn' }, { name: 'sessionFailover', reset: true }])) fail('changes: ' + JSON.stringify(ch));
+cancelSettings();
+if (settingsChanges(fixture).length || ctl(box.children[1]).value !== 'debug') fail('Cancel changes must restore the loaded values');
+useDefaultSettings();
+ch = settingsChanges(fixture).map((c) => c.body);
+if (JSON.stringify(ch) !== JSON.stringify([{ name: 'logLevel', reset: true }, { name: 'sessionFailover', reset: true }, { name: 'providerExclude', reset: true }])) fail('Use defaults: ' + JSON.stringify(ch));
+if (ctl(box.children[0]).value !== '60') fail('Use defaults must not touch env-pinned rows');
+if (stubs.settingsSaveBtn.disabled) fail('Save must enable with changes');
+const saveSrc = extract('saveSettings');
+if (!/stepUpFetch\('\/admin\/settings'/.test(saveSrc) || /\bapi\('\/admin\/settings'/.test(saveSrc)) fail('Save must use the step-up retry');
+const bar = html.slice(html.indexOf('id="settingsActions"'), html.indexOf('id="settingsMsg"'));
+for (const id of ['settingsSaveBtn', 'settingsCancelBtn', 'settingsDefaultsBtn', 'settingsRestartBtn']) if (!bar.includes('id="' + id + '"')) fail('bottom bar needs ' + id);
+for (const label of ['>Save<', '>Cancel changes<', '>Use defaults<', '>Restart Uplink<']) if (!bar.includes(label)) fail('bottom bar label ' + label);
+const rs = extract('restartUplink');
+if (!/confirm\(/.test(rs) || rs.indexOf('confirm(') > rs.indexOf('stepUpFetch(')) fail('restart must confirm before the request');
+if (!/stepUpFetch\('\/admin\/restart', \{ method: 'POST' \}\)/.test(rs)) fail('restart must POST /admin/restart through the step-up retry');
+if (/router|8082|\/v1\//.test(rs.replace(/The router is not restarted\./, '').replace(/router keeps/, ''))) fail('restart must not call the router');
 if (settingValue('64', 'int') !== 64 || settingValue(true, 'bool') !== true || settingValue('x', 'string') !== 'x') fail('typed values');
 if (!html.includes('data-tab="settings"') || !html.includes('id="tab-settings"')) fail('Settings must be its own tab');
 const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-keys"'));
 if (sec.includes('settingsList')) fail('settings must leave the Security tab');
 if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
 if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
-console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, env/router/env-only rows read-only, saves, export and import behind step-up');
+console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, only settable rows shown (env-pinned read-only), .env reference link, one Save / Cancel changes / Use defaults bar, Restart Uplink confirms and steps up, export and import behind step-up');
 NODE
 
 # Sessions page: per-session lease state (opened, ends, in flight, holders)

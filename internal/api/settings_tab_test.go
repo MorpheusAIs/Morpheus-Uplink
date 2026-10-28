@@ -26,6 +26,13 @@ type settingsEnv struct {
 
 func newSettingsEnv(t *testing.T, env map[string]string, persist map[string]string) *settingsEnv {
 	t.Helper()
+	return newSettingsEnvPrep(t, env, persist, nil)
+}
+
+// newSettingsEnvPrep is newSettingsEnv with prep run on the server before
+// the test server starts listening (for fields set before serving).
+func newSettingsEnvPrep(t *testing.T, env map[string]string, persist map[string]string, prep func(*Server)) *settingsEnv {
+	t.Helper()
 	for _, d := range config.Settings {
 		t.Setenv(d.Env, "")
 	}
@@ -52,6 +59,9 @@ func newSettingsEnv(t *testing.T, env map[string]string, persist map[string]stri
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	if cfg.WebPublicURL == "" {
 		cfg.WebPublicURL = "http://" + ts.Listener.Addr().String()
+	}
+	if prep != nil {
+		prep(srv)
 	}
 	ts.Start()
 	t.Cleanup(ts.Close)

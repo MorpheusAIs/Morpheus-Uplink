@@ -172,6 +172,19 @@ func main() {
 		}
 	}()
 
+	// Console restart (POST /admin/restart): the same graceful HTTP stop as
+	// SIGTERM, then this binary starts again in place (restart.go). Open
+	// sessions are left for the next boot reconcile to adopt; the router is
+	// not touched. Set before the listener starts, so the handler never sees
+	// it unset.
+	restart := make(chan struct{}, 1)
+	srv.SetRestartHook(func() {
+		select {
+		case restart <- struct{}{}:
+		default:
+		}
+	})
+
 	httpServer := api.NewHTTPServer(cfg.Listen, srv.Handler())
 
 	go func() {
@@ -183,16 +196,35 @@ func main() {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	restarting := false
+	select {
+	case <-stop:
+	case <-restart:
+		restarting = true
+	}
 
-	log.Println("shutting down…")
+	if restarting {
+		log.Println("restarting Uplink…")
+	} else {
+		log.Println("shutting down…")
+	}
 	t0 := time.Now()
 	hkCancel()
 	reconcileCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = httpServer.Shutdown(ctx)
-	log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
+	// The drain runs once. After a restart request the audit is flushed,
+	// then either this binary starts again in place, or (a SIGTERM or
+	// SIGINT arrived during the drain) Uplink takes the normal shutdown
+	// path below and exits 0. A failed re-exec exits 1 once, so the
+	// container's restart policy starts Uplink again.
+	code := finishStop(restarting, stop, func() {
+		_ = httpServer.Shutdown(ctx)
+		log.Printf("shutdown: in-flight requests finished in %s", time.Since(t0).Round(time.Millisecond))
+	}, srv.FlushAudit, restartSelf)
+	if code != 0 {
+		os.Exit(code)
+	}
 	if cfg.CloseSessionsOnExit {
 		// Finish inside the 45 s stop grace: 40 s from SIGTERM in total,
 		// at most 8 s per close. Whatever is left is closed (expired) or

@@ -65,7 +65,7 @@ with `O_NOFOLLOW`, mode 0600:
 
 | File | Holds |
 |---|---|
-| `audit-security.jsonl` | Successful admin and credential events: `login`, `step_up`, `key_reveal`, `key_create` / `key_import` / `key_revoke`, 2FA changes, `setting_change`, `settings_export` / `settings_import`, `pool_close` / `pool_close_all`, `admin_session_ip_change`, `admin_key_use`, `balance_drop` |
+| `audit-security.jsonl` | Successful admin and credential events: `login`, `step_up`, `key_reveal`, `key_create` / `key_import` / `key_revoke`, 2FA changes, `setting_change`, `settings_export` / `settings_import`, `uplink_restart`, `pool_close` / `pool_close_all`, `admin_session_ip_change`, `admin_key_use`, `balance_drop` |
 | `audit.jsonl` | Failures and agent or system events: `admin_bearer_reject`, login and step-up failures, other rejects, `session_release`, `setting_ignored`, `provider_failover`, `session_reconcile*` |
 
 - **Aggregation**: unauthenticated failures (`login`, `login_lockout`,
@@ -646,8 +646,9 @@ timers and session handling. Source: `internal/api/longjob.go`,
   `X-Uplink-Timeouts: idle=<s>;total=<s>`. Without them responses are
   unchanged. Other `X-Uplink-` headers are not read.
 - *Session reuse.* A pooled session is reused until it expires (less the
-  90 s buffer) or the idle sweep closes it; the next call then opens a new
-  one at the requested or default length, capped at the max.
+  90 s buffer), the idle sweep closes it, a release ends it, or a failover
+  retires it; the next call then opens a new one at the requested or
+  default length, capped at the max.
 - *Leases.* Every call holds a lease on its session; a session is closed
   (release, idle sweep, failover) only when no call is in flight.
   A failover on a session another call is still using retires it and
@@ -734,7 +735,10 @@ enrolment gate applies as on other admin routes.
   `MASTER_KEY_ADMIN` (a security switch), `WEB_PUBLIC_URL` (the origin the
   admin CSRF check is anchored to), `ACTIVE_MODELS_URL` (the catalog feed,
   which decides the model-id mapping) and `GATEWAY_BIDS_URL` (stored but
-  not fetched today, so it has no effect).
+  not fetched today, so it has no effect). The tab shows only the "at
+  once" and "Uplink restart" rows; router and `.env`-only rows stay in the
+  `GET` answer but are not shown, and the tab links to the
+  [environment variables](#environment-variables) instead.
 - *Saving.* `POST {"name":"forwardIdle","value":240}` or
   `{"name":"forwardIdle","reset":true}` (one JSON object, body ≤ 1 KiB;
   unknown fields or trailing data → `400`). Saving or resetting an
@@ -757,6 +761,21 @@ enrolment gate applies as on other admin routes.
   rows, out-of-range or mistyped values are `400`. A valid file replaces
   the saved set; values the environment pins are saved but still lose to
   env and are listed in the answer's `pinned`.
+- *Restart.* `POST /admin/restart` (the tab's **Restart Uplink**, after
+  a confirm) restarts the Uplink process so "Uplink restart" rows take
+  effect. Same guard as the settings API plus a fresh login or step-up
+  (`401` `step_up_required` otherwise); `202` when accepted, `409` while
+  a restart is under way. Uplink stops taking requests, lets calls in
+  flight finish (up to 30 s), writes pending audit summaries and starts
+  its own binary again in place (same process id, arguments and
+  environment), so the container keeps running and the proxy-router is
+  not restarted. Open sessions are not closed: the boot reconcile adopts
+  them. Admin sessions are held in memory, so the console signs in again.
+  Audited as `uplink_restart`. A SIGTERM or SIGINT during the drain
+  cancels the restart: Uplink finishes the drain, writes pending audit
+  summaries and shuts down as usual (exit 0). If the new start fails,
+  Uplink writes pending audit summaries, exits non-zero once, and the
+  container's restart policy starts it again.
 - *Secrets* (wallet key, ETH node URL, router cookie, admin password, API
   key seed, master key) are `.env` only: they never appear in the tab, the
   API answers or the settings file, and naming one is `400`.
