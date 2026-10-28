@@ -103,8 +103,9 @@ streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
 ## Edge allowlist / rate limit
 
 Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
-on the VM's host name (`Host(...)` in `routes_config`; `/`, `/gui*`, `/v1*`,
-`/admin` and `/admin/*`, `/healthcheck`; anything else, or another host
-name, is a 404 via the low-priority deny router; change the host name in the
-rule when deploying to another VM), and an average/burst rate limit middleware on the allowlist
-router. Router `:8082` is not published. Traefik still gets zero secrets.
+(`/`, `/gui*`, `/v1*`, `/admin` and `/admin/*`, `/healthcheck`; else 404 via
+low-priority deny router), and an average/burst rate limit middleware on the
+allowlist router. Router `:8082` is not published. Traefik still gets zero
+secrets. The edge does not match on the host name; Uplink itself answers
+`/admin*` and `/gui*` only on the host of `WEB_PUBLIC_URL` (see
+[Console host check](../../docs/02-bootstrap.md#console-host-check)).

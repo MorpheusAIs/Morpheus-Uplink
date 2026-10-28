@@ -739,7 +739,7 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
-   `WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); otherwise admin changes are refused and the Status page warns.
+   `WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); on any other host name the console is a 404 (see [Console host check](#console-host-check)), and from another scheme admin changes are refused and the Status page warns.
 4. Deploy. Wait until `uplink` is healthy (proxy-router has no container
    healthcheck); after login, the GUI Status line should read Healthy.
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
@@ -767,7 +767,28 @@ docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 
 Open `https://$PUBLIC_HOST/gui/` and turn 2FA on with the switch on the
 Security tab (recommended; off by default, as on every deploy).
-`WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); otherwise admin changes are refused and the Status page warns.
+`WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); on any other host name the console is a 404 (see [Console host check](#console-host-check)), and from another scheme admin changes are refused and the Status page warns.
+
+### Console host check
+
+When `WEB_PUBLIC_URL` is set, Uplink answers the console paths (`/admin`,
+`/admin/*`, `/gui`, `/gui/*`) only for requests whose `Host` header is the
+host of `WEB_PUBLIC_URL`. Any other host name, or a bare IP address, gets a
+plain 404 before any login check. `/v1/*`, `/healthcheck` and `/` are not
+host-checked.
+
+- Host names compare case-insensitively; a trailing dot is ignored.
+- `WEB_PUBLIC_URL` without a port (or with the scheme's default port, 443
+  for `https`, 80 for `http`) accepts a `Host` with no port or with that
+  default port.
+- `WEB_PUBLIC_URL` with any other port (for example
+  `https://uplink.yourdomain.com:8443`) accepts only a `Host` carrying
+  exactly that port; the same name with no port or another port is a 404.
+- Only the `Host` header is read. `X-Forwarded-Host` and `Forwarded` are
+  ignored, so a proxy in front of Uplink must pass the original `Host`
+  through (the shipped Traefik and Caddy configs do).
+- When `WEB_PUBLIC_URL` is unset, every host is served, as before (admin
+  changes are still refused without it).
 
 ---
 
@@ -1589,7 +1610,9 @@ in one warning at startup.
 (default off, recommended on; see [Admin 2FA](#admin-2fa-and-recovery-codes)),
 stored in `DATA_DIR`. Keep `DATA_DIR` on a persistent volume.
 
-The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
+The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` (open
+the console at `http://localhost:8080/gui/`; on `127.0.0.1` it is a 404, see
+[Console host check](02-bootstrap.md#console-host-check)) and
 takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
 does not run compose, so `${VAR:-default}` is not evaluated there; set
 plain values in the service variables (Railway's own reference syntax is
@@ -2001,7 +2024,7 @@ enrolment gate applies as on other admin routes.
 | `housekeeping` | — | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
 | `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | https URL | `https://active.mor.org/gateway_models.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.New |
 | `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | https URL | `https://active.mor.org/gateway_bids.json` | .env (read-only; no effect today) | cmd/uplink catalog.WithBidsURL (stored, not fetched) |
-| `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF and settings origin checks (Config.WebPublicURL) |
+| `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF, settings origin and console host checks (Config.WebPublicURL) |
 | `masterKeyAdmin` | `MASTER_KEY_ADMIN` | bool | `true` `false` | `false` | .env + Uplink restart (read-only) | api requireAdmin (Config.MasterKeyAdmin) |
 | `proxyStoreChatContext` | `PROXY_STORE_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
 | `proxyForwardChatContext` | `PROXY_FORWARD_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
@@ -2337,11 +2360,12 @@ streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
 ## Edge allowlist / rate limit
 
 Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
-on the VM's host name (`Host(...)` in `routes_config`; `/`, `/gui*`, `/v1*`,
-`/admin` and `/admin/*`, `/healthcheck`; anything else, or another host
-name, is a 404 via the low-priority deny router; change the host name in the
-rule when deploying to another VM), and an average/burst rate limit middleware on the allowlist
-router. Router `:8082` is not published. Traefik still gets zero secrets.
+(`/`, `/gui*`, `/v1*`, `/admin` and `/admin/*`, `/healthcheck`; else 404 via
+low-priority deny router), and an average/burst rate limit middleware on the
+allowlist router. Router `:8082` is not published. Traefik still gets zero
+secrets. The edge does not match on the host name; Uplink itself answers
+`/admin*` and `/gui*` only on the host of `WEB_PUBLIC_URL` (see
+[Console host check](../../docs/02-bootstrap.md#console-host-check)).
 
 
 ================================================================

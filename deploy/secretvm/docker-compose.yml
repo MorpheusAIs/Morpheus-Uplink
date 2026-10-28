@@ -168,9 +168,7 @@ configs:
               path: /__denied__
         routers:
           uplink-allowed:
-            # Host: this VM's name, a literal (a variable would add a
-            # SecretVM form field). Change it when deploying elsewhere.
-            rule: "Host(`gray-beaver.vm.scrtlabs.com`) && (PathPrefix(`/gui`) || PathPrefix(`/v1`) || PathPrefix(`/admin/`) || Path(`/admin`) || Path(`/healthcheck`) || Path(`/`))"
+            rule: "PathPrefix(`/gui`) || PathPrefix(`/v1`) || PathPrefix(`/admin/`) || Path(`/admin`) || Path(`/healthcheck`) || Path(`/`)"
             entryPoints:
               - websecure
             tls: {}

@@ -215,7 +215,7 @@ session of the wallet (see [06-developers](06-developers.md#sessions-across-rest
 1. Create a SecretVM that accepts Docker Compose + encrypted secrets.
 2. Download **`docker-compose.secretvm.deployed.yml`** from the [latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest) and paste it as the VM compose.
 3. Fill Encrypted Secrets from the SecretVM block above (**six keys only**, including `WEB_PUBLIC_URL=https://<vm-host>`).
-   `WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); otherwise admin changes are refused and the Status page warns.
+   `WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); on any other host name the console is a 404 (see [Console host check](#console-host-check)), and from another scheme admin changes are refused and the Status page warns.
 4. Deploy. Wait until `uplink` is healthy (proxy-router has no container
    healthcheck); after login, the GUI Status line should read Healthy.
 5. Open `https://<that-host>/gui/` — `admin` / your `ADMIN_PASSWORD`.
@@ -243,7 +243,28 @@ docker compose -f docker-compose.generic.deployed.yml --env-file .env up -d
 
 Open `https://$PUBLIC_HOST/gui/` and turn 2FA on with the switch on the
 Security tab (recommended; off by default, as on every deploy).
-`WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); otherwise admin changes are refused and the Status page warns.
+`WEB_PUBLIC_URL` must be exactly the scheme + host you open the GUI at (update it on a redeploy to a new host); on any other host name the console is a 404 (see [Console host check](#console-host-check)), and from another scheme admin changes are refused and the Status page warns.
+
+### Console host check
+
+When `WEB_PUBLIC_URL` is set, Uplink answers the console paths (`/admin`,
+`/admin/*`, `/gui`, `/gui/*`) only for requests whose `Host` header is the
+host of `WEB_PUBLIC_URL`. Any other host name, or a bare IP address, gets a
+plain 404 before any login check. `/v1/*`, `/healthcheck` and `/` are not
+host-checked.
+
+- Host names compare case-insensitively; a trailing dot is ignored.
+- `WEB_PUBLIC_URL` without a port (or with the scheme's default port, 443
+  for `https`, 80 for `http`) accepts a `Host` with no port or with that
+  default port.
+- `WEB_PUBLIC_URL` with any other port (for example
+  `https://uplink.yourdomain.com:8443`) accepts only a `Host` carrying
+  exactly that port; the same name with no port or another port is a 404.
+- Only the `Host` header is read. `X-Forwarded-Host` and `Forwarded` are
+  ignored, so a proxy in front of Uplink must pass the original `Host`
+  through (the shipped Traefik and Caddy configs do).
+- When `WEB_PUBLIC_URL` is unset, every host is served, as before (admin
+  changes are still refused without it).
 
 ---
 

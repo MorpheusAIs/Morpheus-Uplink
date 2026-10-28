@@ -47,6 +47,7 @@ COOKIE_SECRET="e2e-cookie-$(openssl rand -hex 12)"
 export COOKIE_CONTENT="admin:$COOKIE_SECRET"
 export WALLET_PRIVATE_KEY="0x$(openssl rand -hex 32)"
 export ETH_NODE_ADDRESS="https://rpc.invalid"
+# Console requests send its host as Host: /admin and /gui answer only on it.
 export WEB_PUBLIC_URL="https://uplink.example"
 export E2E_MOCK_MOR=1000000
 E2E_BOOT_DIR=$(mktemp -d); export E2E_BOOT_DIR
@@ -114,7 +115,7 @@ UCODE=""
 login() {
   local hdr
   hdr=$("${C:-dc}" exec -T uplink curl -sS -D - -o /dev/null -X POST \
-    -H 'Content-Type: application/json' -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+    -H 'Content-Type: application/json' -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
     --data-binary @- http://127.0.0.1:8080/admin/login <<<"{\"password\":\"$ADMIN_PASSWORD\"}")
   SESSION=$(printf '%s' "$hdr" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
   [ -n "$SESSION" ] || fail "admin login failed: $hdr"
@@ -123,7 +124,7 @@ login() {
 uapi() {
   local out
   out=$("${C:-dc}" exec -T uplink curl -sS -w '\n%{http_code}' -X "$1" \
-    -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
+    -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
     -H 'Content-Type: application/json' ${3:+--data-binary "$3"} "http://127.0.0.1:8080$2")
   UCODE=$(printf '%s' "$out" | tail -n 1)
   printf '%s' "$UCODE" > "$E2E_BOOT_DIR/ucode"   # survives $(...) subshells
@@ -396,7 +397,7 @@ try_login() {
   local out body
   body=$(jq -cn --arg p "$1" --arg c "$2" '{password: $p} + (if $c == "" then {} else {code: $c} end)')
   out=$(dc exec -T uplink curl -sS -D - -o /dev/null -w '%{http_code}' -X POST \
-    -H 'Content-Type: application/json' -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+    -H 'Content-Type: application/json' -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
     --data-binary @- http://127.0.0.1:8080/admin/login <<<"$body")
   LCODE=$(printf '%s' "$out" | tail -n 1)
   LSESSION=$(printf '%s' "$out" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
@@ -410,7 +411,7 @@ enroll_confirm() {
   local out body cookie
   body=$(jq -cn --arg p "$ADMIN_PASSWORD" --arg c "$1" '{password: $p, code: $c}')
   out=$(dc exec -T uplink curl -sS -D - -w '\n%{http_code}' -X POST \
-    -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
+    -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
     -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:8080/admin/2fa/enroll/confirm <<<"$body" | tr -d '\r')
   printf '%s' "$out" | tail -n 1 > "$E2E_BOOT_DIR/ucode"
   cookie=$(printf '%s\n' "$out" | sed -n '1,/^$/s/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)

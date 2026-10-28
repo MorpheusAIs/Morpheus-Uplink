@@ -293,7 +293,9 @@ in one warning at startup.
 (default off, recommended on; see [Admin 2FA](#admin-2fa-and-recovery-codes)),
 stored in `DATA_DIR`. Keep `DATA_DIR` on a persistent volume.
 
-The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` and
+The local compose fixes `WEB_PUBLIC_URL` to `http://localhost:8080` (open
+the console at `http://localhost:8080/gui/`; on `127.0.0.1` it is a 404, see
+[Console host check](02-bootstrap.md#console-host-check)) and
 takes the router credential as `ROUTER_AUTH`. **Railway caveat:** Railway
 does not run compose, so `${VAR:-default}` is not evaluated there; set
 plain values in the service variables (Railway's own reference syntax is
@@ -705,7 +707,7 @@ enrolment gate applies as on other admin routes.
 | `housekeeping` | — | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
 | `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | https URL | `https://active.mor.org/gateway_models.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.New |
 | `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | https URL | `https://active.mor.org/gateway_bids.json` | .env (read-only; no effect today) | cmd/uplink catalog.WithBidsURL (stored, not fetched) |
-| `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF and settings origin checks (Config.WebPublicURL) |
+| `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF, settings origin and console host checks (Config.WebPublicURL) |
 | `masterKeyAdmin` | `MASTER_KEY_ADMIN` | bool | `true` `false` | `false` | .env + Uplink restart (read-only) | api requireAdmin (Config.MasterKeyAdmin) |
 | `proxyStoreChatContext` | `PROXY_STORE_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
 | `proxyForwardChatContext` | `PROXY_FORWARD_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |

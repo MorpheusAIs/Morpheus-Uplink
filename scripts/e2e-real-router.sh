@@ -36,6 +36,7 @@ COOKIE_SECRET="e2e-cookie-$(openssl rand -hex 12)"
 export COOKIE_CONTENT="admin:$COOKIE_SECRET"
 export WALLET_PRIVATE_KEY="0x$(openssl rand -hex 32)"   # throwaway, never funded
 export ETH_NODE_ADDRESS="${E2E_ETH_RPC:-https://mainnet.base.org}"
+# Console requests send its host as Host: /admin and /gui answer only on it.
 export WEB_PUBLIC_URL="https://uplink.example"
 
 PROJECT="uplink-e2e-real-$$"
@@ -89,13 +90,13 @@ SESSION=""
 login() {
   local hdr
   hdr=$(dc exec -T uplink curl -sS -D - -o /dev/null -X POST \
-    -H 'Content-Type: application/json' -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+    -H 'Content-Type: application/json' -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
     --data-binary @- http://127.0.0.1:8080/admin/login <<<"{\"password\":\"$ADMIN_PASSWORD\"}")
   SESSION=$(printf '%s' "$hdr" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
   [ -n "$SESSION" ] || fail "admin login failed"
 }
 status_json() {
-  dc exec -T uplink curl -sS -f -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+  dc exec -T uplink curl -sS -f -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
     -H "Cookie: $SESSION" http://127.0.0.1:8080/admin/status
 }
 login
@@ -107,7 +108,7 @@ echo "== /node passthrough =="
 # node_req METHOD PATH -> HTTP code (admin session + CSRF headers, raw path).
 node_req() {
   dc exec -T uplink curl -sS --path-as-is -o /dev/null -w '%{http_code}' -X "$1" \
-    -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
+    -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
     -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:8080$2"
 }
 rlog() { dc logs --no-color proxy-router 2>&1; }
