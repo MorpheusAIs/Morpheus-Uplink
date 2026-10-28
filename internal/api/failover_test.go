@@ -154,7 +154,8 @@ func newFakeMarket(t *testing.T, providers ...string) *fakeMarket {
 		behaveReq: map[string]func(int, http.ResponseWriter, *http.Request){}, prompts: map[string]int{}, sessions: map[string]*fakeSess{}}
 }
 
-func bidOf(p string) string { return "0xbid" + strings.TrimPrefix(p, "0x") }
+// bidOf is the fake bid id of a provider (0x + 64 hex, like the router's).
+func bidOf(p string) string { return "0x" + strings.Repeat("0", 24) + strings.TrimPrefix(p, "0x") }
 
 func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) {
 	var body map[string]any
@@ -265,7 +266,8 @@ func (m *fakeMarket) server() *httptest.Server {
 		}
 		bids := []map[string]any{}
 		for i, p := range m.providers {
-			bids = append(bids, map[string]any{"ID": bidOf(p), "Bid": map[string]any{"Id": bidOf(p), "Provider": p}, "Score": float64(10 - i)})
+			// Router shape: the outer ID is left unset (zero hash); the bid id is Bid.Id.
+			bids = append(bids, map[string]any{"ID": "0x" + strings.Repeat("0", 64), "Bid": map[string]any{"Id": bidOf(p), "Provider": p}, "Score": float64(10 - i)})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
 	})
@@ -377,7 +379,11 @@ func (e *failoverEnv) pooled() string {
 	return snap[0].SessionID
 }
 
-const provA, provB, provC = "0xaaaa", "0xbbbb", "0xcccc"
+const (
+	provA = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	provB = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	provC = "0xcccccccccccccccccccccccccccccccccccccccc"
+)
 
 // 1. 402 on A, 200 on B: the client gets B's answer; one close of A, one
 // open by B's bid with failover:false; audited; A cooling.

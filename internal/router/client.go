@@ -333,8 +333,16 @@ type RatedBid struct {
 	Score    float64
 }
 
+// ErrRatedBidsIncomplete marks a rated-bids answer with rows that could
+// not be used (no valid bid id or provider). RatedBids returns it with the
+// valid rows; the caller cannot tell which provider the other rows are.
+var ErrRatedBidsIncomplete = errors.New("rated bids contain unusable rows")
+
 // RatedBids lists the model's active bids with the router's score, best
-// first (stable on ties, in router order).
+// first (stable on ties, in router order). A row needs a bid id of 0x + 64
+// hex and a provider of 0x + 40 hex, neither all zeros (both returned
+// lowercase); when any row does not, the valid rows come back with an
+// error matching ErrRatedBidsIncomplete.
 func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
 	var res struct {
 		Bids []struct {
@@ -350,19 +358,49 @@ func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
 		return nil, err
 	}
 	out := make([]RatedBid, 0, len(res.Bids))
+	bad := 0
 	for _, b := range res.Bids {
-		id := b.ID
-		if id == "" {
-			id = b.Bid.Id
+		// The bid id is Bid.Id: the router leaves the outer ID unset (a
+		// zero hash), so it is only a fallback when Bid.Id is not valid.
+		id, ok := hexValue(b.Bid.Id, 64)
+		if !ok {
+			id, ok = hexValue(b.ID, 64)
 		}
-		prov := strings.ToLower(strings.TrimSpace(b.Bid.Provider))
-		if id == "" || prov == "" {
+		prov, provOK := hexValue(b.Bid.Provider, 40)
+		if !ok || !provOK {
+			bad++
 			continue
 		}
 		out = append(out, RatedBid{ID: id, Provider: prov, Score: b.Score})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if bad > 0 {
+		return out, fmt.Errorf("%w (%d of %d)", ErrRatedBidsIncomplete, bad, len(res.Bids))
+	}
 	return out, nil
+}
+
+// hexValue returns s lowercased when it is 0x followed by exactly n hex
+// digits, not all zeros (the zero hash and zero address count as missing).
+func hexValue(s string, n int) (string, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if len(s) != n+2 || !strings.HasPrefix(s, "0x") {
+		return "", false
+	}
+	zero := true
+	for _, r := range s[2:] {
+		switch {
+		case r == '0':
+		case r >= '1' && r <= '9', r >= 'a' && r <= 'f':
+			zero = false
+		default:
+			return "", false
+		}
+	}
+	if zero {
+		return "", false
+	}
+	return s, true
 }
 
 func (c *Client) CloseSession(sessionID string) error {
