@@ -55,6 +55,9 @@ func TestConsoleSettingEnvIgnoredWithOneWarning(t *testing.T) {
 	if n := strings.Count(logs, "now managed in the console Settings"); n != 1 {
 		t.Fatalf("want one warning, got %d: %q", n, logs)
 	}
+	if !strings.Contains(logs, "re-enter any value you need in the Settings tab") {
+		t.Errorf("warning does not say to re-enter the value on the Settings tab: %q", logs)
+	}
 	for _, e := range names {
 		if !strings.Contains(logs, e) {
 			t.Errorf("warning does not name %s: %q", e, logs)

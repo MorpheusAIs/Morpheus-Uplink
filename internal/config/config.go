@@ -135,7 +135,7 @@ func FromEnv() (*Config, error) {
 	applySettingDefaults(c)
 	c.IgnoredEnv = ignoredSettingEnv()
 	if len(c.IgnoredEnv) > 0 {
-		warnf("config: ignoring %s from the environment: now managed in the console Settings", strings.Join(c.IgnoredEnv, ", "))
+		warnf("config: ignoring %s from the environment: now managed in the console Settings; re-enter any value you need in the Settings tab", strings.Join(c.IgnoredEnv, ", "))
 	}
 	// Env-only rows set in the environment (shown as source "env").
 	c.EnvOnlySet = map[string]bool{}
