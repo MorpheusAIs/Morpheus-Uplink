@@ -680,6 +680,15 @@ if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'deb
 if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false) fail('bool must be a switch');
 if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
 if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
+if (ctl(str).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3') fail('providerExclude placeholder: ' + ctl(str).placeholder);
+if (note(str) !== 'saved') fail('providerExclude note: ' + note(str));
+{
+  const empty = [Object.assign({}, fixture[3], { value: '', source: 'default' })];
+  renderSettings(empty);
+  const r = box.children[0];
+  if (ctl(r).value !== '' || ctl(r).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3' || note(r) !== 'default (none)') fail('empty providerExclude: ' + ctl(r).placeholder + ' / ' + note(r));
+  renderSettings(fixture);
+}
 if (!/href="https:\/\/github\.com\/MorpheusAIs\/Morpheus-Uplink\/blob\/main\/docs\/06-developers\.md#environment-variables"/.test(html.slice(html.indexOf('id="tab-settings"'), html.indexOf('id="tab-playground"')))) fail('Settings needs one link to the .env reference');
 // One set of values: no edits → nothing to save; edits are collected per
 // row (a row put back to its default is a reset).

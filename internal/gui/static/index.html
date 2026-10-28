@@ -1754,6 +1754,7 @@ function renderSettings(list) {
       input = document.createElement('input');
       input.type = 'text';
       input.value = s.value == null ? '' : String(s.value);
+      if (s.name === 'providerExclude') input.placeholder = '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3';
     } else {
       input = document.createElement('input');
       input.type = 'number';
