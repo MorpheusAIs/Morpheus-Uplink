@@ -80,12 +80,8 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
-      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
-      - UPLINK_PROVIDER_COOLDOWN_SECONDS=${UPLINK_PROVIDER_COOLDOWN_SECONDS:-600}
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
-      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data

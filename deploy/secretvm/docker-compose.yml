@@ -120,12 +120,8 @@ networks:
 configs:
   uplink_bake_env:
     content: |-
-      SESSION_DURATION_SECONDS=600
-      SESSION_FAILOVER=true
-      UPLINK_PROVIDER_COOLDOWN_SECONDS=600
       ACTIVE_MODELS_URL=https://active.mor.org/gateway_models.json
       GATEWAY_BIDS_URL=https://active.mor.org/gateway_bids.json
-      HOUSEKEEPING=true
       ROUTER_URL=http://proxy-router:8082
       DATA_DIR=/data
       TRUSTED_PROXY_CIDR=172.28.0.0/16

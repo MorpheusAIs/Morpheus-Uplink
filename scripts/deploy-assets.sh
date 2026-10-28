@@ -46,9 +46,8 @@ SIX = ["WALLET_PRIVATE_KEY", "ETH_NODE_ADDRESS", "COOKIE_CONTENT",
        "ADMIN_PASSWORD", "API_KEY_SEED", "WEB_PUBLIC_URL"]
 # Documented env-overridable defaults (docs/06-developers.md, deploy/*/README.md).
 OVERRIDES = {
-    "SESSION_DURATION_SECONDS", "SESSION_FAILOVER", "UPLINK_PROVIDER_COOLDOWN_SECONDS",
     "ACTIVE_MODELS_URL",
-    "GATEWAY_BIDS_URL", "HOUSEKEEPING", "MASTER_KEY_ADMIN",
+    "GATEWAY_BIDS_URL", "MASTER_KEY_ADMIN",
     "UPLINK_RESET_2FA", "ETH_NODE_CHAIN_ID", "ETH_NODE_USE_SUBSCRIPTIONS",
     "BLOCKSCOUT_API_URL", "DIAMOND_CONTRACT_ADDRESS", "MOR_TOKEN_ADDRESS",
     "PROXY_STORE_CHAT_CONTEXT", "PROXY_FORWARD_CHAT_CONTEXT", "LOG_LEVEL_APP",
@@ -303,8 +302,8 @@ PY
   copy_root; edit "$tmp/root/deploy/generic/env.example" '^PUBLIC_HOST=.*$' '# (removed)'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail env-missing-required 'E\(generic\): required PUBLIC_HOST'
   copy_root; printf 'MASTER_KEY_ADMIN=false\n' >> "$tmp/root/deploy/secretvm/env.template"; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-env-seven 'E\(secretvm\)'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '(- ADMIN_PASSWORD=\$\{ADMIN_PASSWORD\})' '\1\n      - MASTER_KEY_ADMIN=false'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-literal-env 'V\(secretvm\): environment key MASTER_KEY_ADMIN'
-  copy_root; printf 'SESSION_FAILOVER=false\n' >> "$tmp/out/env.generic.example"; expect_fail env-asset-drift 'E\(generic\): env.generic.example differs'
-  copy_root; printf '# HOUSEKEEPING=true\n' >> "$tmp/root/.env.example"; expect_fail env-duplicate 'E\(local\): HOUSEKEEPING listed twice'
+  copy_root; printf 'GATEWAY_BIDS_URL=x\n' >> "$tmp/out/env.generic.example"; expect_fail env-asset-drift 'E\(generic\): env.generic.example differs'
+  copy_root; printf '# ACTIVE_MODELS_URL=x\n' >> "$tmp/root/.env.example"; expect_fail env-duplicate 'E\(local\): ACTIVE_MODELS_URL listed twice'
   copy_root; edit "$tmp/root/deploy/generic/docker-compose.yml" '(\$\{MASTER_KEY_ADMIN:-)false\}' '\1true}'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail generic-master-key-true 'D\(generic\): MASTER_KEY_ADMIN defaults to true'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^(\s+MASTER_KEY_ADMIN=)false$' '\1true'; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-master-key-true 'D\(secretvm\): MASTER_KEY_ADMIN defaults to true'
   copy_root; edit "$tmp/root/deploy/secretvm/docker-compose.yml" '^\s+MASTER_KEY_ADMIN=false\n' ''; py generate "$FAKE_IMAGE" "$FAKE_DIGEST" "$tmp/out" "$tmp/root" >/dev/null; expect_fail secretvm-master-key-missing 'D\(secretvm\): MASTER_KEY_ADMIN is missing'
