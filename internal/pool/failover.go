@@ -281,8 +281,10 @@ func alternates(bids []router.RatedBid, exclude map[string]bool) ([]router.Rated
 }
 
 // avoidedBidder reports whether an avoided provider has a bid in bids.
-// When none has, a plain open by model cannot land on one, so the router
-// rates and walks the providers itself.
+// When none has (bids complete and not empty), the open is by model and
+// the router rates and walks the providers from the same rated list. The
+// list is read just before the open: a provider that starts bidding in
+// between is not seen, and the opened session's provider is not checked.
 func avoidedBidder(bids []router.RatedBid, avoid map[string]bool) bool {
 	for _, b := range bids {
 		if avoid[b.Provider] {
@@ -304,8 +306,8 @@ func (p *Pool) openByModel(modelID string, durationSec int) (string, string, err
 
 // openExcluding opens a session on a provider outside the avoided set by
 // walking alts (the rated bids already filtered of it) by bid: at most
-// MaxBidAttempts opens, one per provider. Avoidance is never left to the
-// router's own provider pick. A failed open puts that provider in cool-down; a
+// MaxBidAttempts opens, one per provider. Each open names its bid, so the
+// walk never leaves the pick to the router. A failed open puts that provider in cool-down; a
 // walk where every open failed returns an error matching
 // errBidWalkExhausted.
 func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.RatedBid) (string, string, error) {
@@ -337,14 +339,17 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 }
 
 // openAvoidingCooling is the normal open: a plain open by model when no
-// provider is avoided, or when no avoided provider bids on the model (read
-// from the rated bids); else a by-bid open outside the avoided set
-// (cooling, configured exclusions, a pending stream cut), in the router's
-// rated order. It never drops an avoidance to get a session (fail fast):
+// provider is avoided, or when the model's rated bids are complete, not
+// empty, and none is from an avoided provider; else a by-bid open outside
+// the avoided set (cooling, configured exclusions, a pending stream cut),
+// in the router's rated order. It never drops an avoidance to get a
+// session (fail fast):
 //   - only configured exclusions (the providerExclude setting) serve the model
 //     → ErrNoEligibleProvider;
-//   - every eligible provider is avoided, or each one the walk tried failed
-//     to open, or the rated bids cannot be read → ErrNoAvailableProvider
+//   - every eligible provider is avoided (also with no usable rated bid and
+//     no configured exclusion), or each one the walk tried failed to open,
+//     or the rated bids cannot be read or have unusable rows next to usable
+//     ones → ErrNoAvailableProvider
 //     (with when to retry), and nothing is opened.
 //
 // A refusal consumes a pending stream cut.
@@ -362,12 +367,15 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		return "", "", &NoAvailableError{RetryAfter: p.retryAfter(modelID, bids, bidsOK, configured)}
 	}
 	bids, err := p.client.RatedBids(modelID)
-	if err != nil {
-		// An open by model could land on an avoided provider: refuse.
+	if err != nil && !(errors.Is(err, router.ErrRatedBidsIncomplete) && len(bids) == 0) {
+		// An open by model could land on an avoided provider, and an
+		// unusable row may be one: refuse.
 		slog.Warn("pool: rated bids unavailable and providers are avoided; not opening", "model", modelID, "err", err)
 		return refuse(nil, false)
 	}
-	if !avoidedBidder(bids, exclude) {
+	// No usable rated bid (none, or every row unusable) is handled below
+	// as before: refused, never an open by model.
+	if len(bids) > 0 && !avoidedBidder(bids, exclude) {
 		id, prov, err := p.openByModel(modelID, durationSec)
 		if err == nil && cut != "" {
 			p.clearCut(modelID)

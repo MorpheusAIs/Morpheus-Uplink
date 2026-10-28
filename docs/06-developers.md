@@ -554,7 +554,8 @@ the pool stays in charge of which session is open. Turning the
 - *Order:* under the model's open lock, Uplink closes the failed session
   first (synchronously, up to 30 s) and then opens on another provider by
   bid over the rated bids (best score first, at most 3 tries, one per
-  provider). Avoiding a provider is never left to the router's own pick. A failed close is logged and the session is
+  provider), or by model when no avoided provider bids (the rule under
+  *Fail fast*). A failed close is logged and the session is
   retired: Rehydrate never adopts it back.
 - *Once:* one failover and one retry per request. A provider failure on the
   retry puts that provider in cool-down too and is relayed. Concurrent
@@ -568,7 +569,8 @@ the pool stays in charge of which session is open. Turning the
 - *Fail fast:* a new open never drops an avoidance to get a session. When
   every eligible provider is cooling or just cut a stream, when each
   provider the bid walk tried failed to open, or when the rated bids
-  cannot be read while any provider is avoided (cooling, cut or
+  cannot be read, or have a row without a valid bid id or provider next
+  to usable ones, while any provider is avoided (cooling, cut or
   configured), nothing is opened and the request gets `503`
   `no_available_provider` ("no provider is available for this model right
   now; retry later", no ids). `Retry-After` is the shortest remaining
@@ -579,9 +581,17 @@ the pool stays in charge of which session is open. Turning the
   audited on the ops stream as `provider_unavailable`, one line per model
   per minute with a count. In a failover, the retired-session reopen that
   finds nothing available relays the original error (audit
-  `no_available`). With nothing avoided, or when no avoided provider has
-  a bid for the model, the normal open by model is unchanged (the router
-  rates and walks the providers); a failover reopen follows the same rule.
+  `no_available`). With no rated bid the pool can use (none, or every
+  row lacks a valid bid id or provider) while any provider is avoided,
+  nothing is opened either: `no_eligible_provider` when providers are
+  configured-excluded, else `no_available_provider`. With nothing
+  avoided, or when the rated bids are all usable and none is from an
+  avoided provider, the normal open by model is unchanged (the router
+  rates and walks the providers); a failover reopen follows the same
+  rule, and one whose rated bids have an unusable row keeps the session
+  (`no_alternate`). The rated bids are read just before that open; a
+  provider that starts bidding in between is not seen, and the opened
+  session's provider is not checked afterwards.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
   the answer cannot be restarted. Two upstream events count as a
@@ -611,11 +621,11 @@ the pool stays in charge of which session is open. Turning the
   If the wallet is shared with another client, that client's sessions on
   excluded providers are closed too. When an excluded provider bids on the
   model, the open goes by bid over the providers left (router's rated
-  order, the bid id from `Bid.Id`); when none does, it is the normal open
-  by model.
-  When only excluded providers serve the model, the request gets `503`
-  `no_eligible_provider` (no ids in the body, no `Retry-After`) and
-  nothing is opened. When the rated bids cannot be read, nothing is opened
+  order, the bid id from `Bid.Id`); when the rated bids are all usable
+  and none is from an excluded provider, it is the normal open by model.
+  When only excluded providers serve the model, or no rated bid is usable,
+  the request gets `503` `no_eligible_provider` (no ids in the body, no
+  `Retry-After`) and nothing is opened. When the rated bids cannot be read, nothing is opened
   (`503` `no_available_provider`, above). The model catalog leaves the
   excluded providers' bids out (one filter, in `catalog.List` and the
   name lookup), so listed prices, stake estimates and the choice between

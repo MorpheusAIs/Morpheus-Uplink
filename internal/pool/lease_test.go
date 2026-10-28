@@ -1,6 +1,8 @@
 package pool
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +58,8 @@ type leaseRouter struct {
 	// bidders overrides the providers bidding on a model (default: both
 	// lease providers); an open by model lands on the first of them.
 	bidders map[string][]string
+	// rows, when set for a model, is its rated-bids answer verbatim.
+	rows    map[string][]map[string]any
 	byModel int      // opens by model
 	byBid   []string // bid ids opened by bid
 }
@@ -63,6 +67,24 @@ type leaseRouter struct {
 // zeroHash is the outer ID of every rated-bid row: the router leaves it
 // unset; the bid id is Bid.Id.
 const zeroHash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+// bidID is the mock's bid id for a model and provider (0x + 64 hex).
+func bidID(model, prov string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(model) + "|" + prov))
+	return "0x" + hex.EncodeToString(sum[:])
+}
+
+// bidOwner maps a bid id back to its model and provider.
+func (lr *leaseRouter) bidOwner(id string) (string, string, bool) {
+	for _, m := range []string{modelA, modelB, modelC, modelD} {
+		for _, pv := range []string{leaseProv1, leaseProv2, leaseProv3} {
+			if bidID(m, pv) == id {
+				return m, pv, true
+			}
+		}
+	}
+	return "", "", false
+}
 
 func (lr *leaseRouter) providersOf(model string) []string {
 	if ps, ok := lr.bidders[model]; ok {
@@ -72,7 +94,7 @@ func (lr *leaseRouter) providersOf(model string) []string {
 }
 
 func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
-	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}}
+	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}, rows: map[string][]map[string]any{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"address": "0x1111111111111111111111111111111111111111"})
@@ -127,10 +149,14 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		bids := []map[string]any{}
 		lr.mu.Lock()
 		provs := lr.providersOf(m)
+		raw, isRaw := lr.rows[m]
 		lr.mu.Unlock()
+		if isRaw {
+			_ = json.NewEncoder(w).Encode(map[string]any{"bids": raw})
+			return
+		}
 		for i, pv := range provs {
-			bid := m + "|" + pv
-			bids = append(bids, map[string]any{"ID": zeroHash, "Bid": map[string]any{"Id": bid, "Provider": pv}, "Score": float64(10 - i)})
+			bids = append(bids, map[string]any{"ID": zeroHash, "Bid": map[string]any{"Id": bidID(m, pv), "Provider": pv}, "Score": float64(10 - i)})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
 	})
@@ -153,18 +179,19 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		m := r.PathValue("id")
 		lr.mu.Lock()
 		lr.byModel++
-		prov := leaseProv1
-		if ps := lr.providersOf(m); len(ps) > 0 {
-			prov = ps[0]
-		}
+		ps := lr.providersOf(m)
 		lr.mu.Unlock()
-		open(w, r, m, prov)
+		if len(ps) == 0 { // like the router: no bid, no session
+			http.Error(w, `{"error":"no provider accepting session"}`, 500)
+			return
+		}
+		open(w, r, m, ps[0])
 	})
 	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
 		lr.mu.Lock()
 		lr.byBid = append(lr.byBid, r.PathValue("id"))
 		lr.mu.Unlock()
-		m, pv, ok := strings.Cut(r.PathValue("id"), "|")
+		m, pv, ok := lr.bidOwner(r.PathValue("id"))
 		if !ok {
 			http.Error(w, `{"error":"provider unreachable"}`, 500)
 			return
@@ -592,8 +619,8 @@ func TestS5FailoverReplacementCapped(t *testing.T) {
 }
 
 // The providerExclude setting is one address list for every model: opens
-// for any model go by bid around the listed providers (case and spaces
-// do not matter), and a model served only by listed providers gets
+// for a model that a listed provider bids on go by bid around it (case and
+// spaces do not matter), and a model served only by listed providers gets
 // ErrNoEligibleProvider with nothing opened.
 func TestProviderExcludeAppliesToEveryModel(t *testing.T) {
 	c := newFakeClock()
