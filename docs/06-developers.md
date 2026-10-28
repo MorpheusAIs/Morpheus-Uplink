@@ -435,8 +435,9 @@ before any request may open a session:
   Uplink opened in `DATA_DIR` was considered and not used: a VM wipe or a
   lost volume, the case the reconcile exists for, would lose that record
   too and leave every session orphaned. If the wallet is shared with
-  another client, that client's expired sessions, and its second session
-  for a model Uplink also adopts, may be closed at boot, and a graceful
+  another client, that client's expired sessions, its sessions on providers
+  in `providerExclude`, and its second session for a model Uplink also
+  adopts, may be closed at boot, and a graceful
   `docker stop` closes all of its open sessions (see *Stop* above).
   Closing returns the stake (on hold at most until the next UTC day) and
   costs gas; it is a liveness issue for that client, not a loss.
