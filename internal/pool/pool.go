@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/big"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -278,6 +279,7 @@ func (p *Pool) rehydrate(force bool) error {
 		}
 	}
 
+	scanStart := p.now()
 	addr, err := p.client.WalletAddress()
 	if err != nil {
 		p.setRehydrateErr(err.Error())
@@ -358,6 +360,23 @@ func (p *Pool) rehydrate(force bool) error {
 			p.newStateLocked(modelID, s.ID, time.Unix(s.OpenedAt, 0), ends, "")
 		}
 		adopted++
+	}
+	// Prune pool slots whose session is not in the scanned open list
+	// (closed elsewhere): only with nothing in flight, and never a session
+	// opened after this scan started (the list may predate it). Only a
+	// successful scan gets here.
+	onChain := make(map[string]bool, len(open))
+	for _, s := range open {
+		onChain[strings.ToLower(s.ID)] = true
+	}
+	for modelID, e := range p.entries {
+		if onChain[strings.ToLower(e.sessionID)] {
+			continue
+		}
+		if st := p.sess[e.sessionID]; st != nil && (st.inflight > 0 || !st.openedAt.Before(scanStart)) {
+			continue
+		}
+		delete(p.entries, modelID)
 	}
 	// Mark which display rows are pooled.
 	pooledNow := map[string]bool{}

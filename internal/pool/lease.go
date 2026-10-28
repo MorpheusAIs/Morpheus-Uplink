@@ -3,6 +3,7 @@ package pool
 import (
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -87,10 +88,19 @@ func (p *Pool) newStateLocked(key, sessionID string, openedAt, endsAt time.Time,
 	return st
 }
 
-// forget drops a closed session's lease state.
+// forget drops a closed session's lease state and any pool slot that
+// still points at it (ids compared case-insensitively), so a closed
+// session is never listed or handed out again.
 func (p *Pool) forget(sessionID string) {
 	p.mu.Lock()
 	delete(p.sess, sessionID)
+	if sessionID != "" {
+		for key, e := range p.entries {
+			if strings.EqualFold(e.sessionID, sessionID) {
+				delete(p.entries, key)
+			}
+		}
+	}
 	p.mu.Unlock()
 }
 

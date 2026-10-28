@@ -2837,7 +2837,7 @@ async function doRefresh() {
     setHeaderBalances(mor.liquidWei ?? bal.mor, bal.eth);
     checkForUpdate(st.version || 'dev');
 
-    renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).length);
+    renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).filter(sessionIsReal).length);
     renderMasterKeyBanner(st);
     renderDiskStatus(st.disk || null);
 
@@ -2992,6 +2992,14 @@ function statusHealth(st) {
   return { ok: true, text: UI_COPY.healthy };
 }
 
+/** A real session row: it has an id and a set end time (not the zero
+ * time a stale pool slot would carry). Only these count in the header. */
+function sessionIsReal(s) {
+  if (!s || !s.sessionId || !s.endsAt) return false;
+  const t = new Date(s.endsAt).getTime();
+  return Number.isFinite(t) && t > 0;
+}
+
 /** ● Healthy · N open sessions · Uplink vX · Router vY */
 function renderSysLine(uplinkVer, routerVer, health, openSessions) {
   const el = document.getElementById('stats');
@@ -3068,7 +3076,7 @@ function renderSessions(sessions, sessionsError) {
     return;
   }
   body.innerHTML = sessions.map(s => {
-    const status = s.pooled ? 'reused' : (s.usable ? 'open' : 'past end');
+    const status = s.pooled && s.usable ? 'reused' : (s.usable ? 'open' : 'past end');
     const name = s.modelName || '';
     const modelCell = name
       ? `<span class="model-name">${escapeHtml(name)}</span><code title="${escapeAttr(s.modelId)}">${shortSecret(s.modelId)}</code>`

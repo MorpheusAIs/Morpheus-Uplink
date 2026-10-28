@@ -633,6 +633,11 @@ func sessionRows(chain []pool.ChainSession, snaps []pool.Snapshot, now time.Time
 		if id == "" || seen[id] {
 			continue
 		}
+		// A pooled slot not on the chain list is shown only while it is
+		// live: skip expired ones and ones with no lease state.
+		if !now.Before(sn.ExpiresAt) || (sn.OpenedAt.IsZero() && sn.EndsAt.IsZero()) {
+			continue
+		}
 		seen[id] = true
 		add(pool.ChainSession{ModelID: sn.ModelID, SessionID: sn.SessionID, Usable: now.Before(sn.ExpiresAt), Pooled: true}, sn, true)
 	}

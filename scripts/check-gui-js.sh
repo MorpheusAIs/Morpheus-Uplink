@@ -755,5 +755,15 @@ renderSessions([], '');
 if (!body.innerHTML.includes('colspan=9')) fail('empty row must span 9 columns');
 if (/\blong\b/i.test(extract('renderSessions')) || body.innerHTML.includes('long')) fail('the Sessions table must not show a long flag');
 if (/poolSessions/.test(src)) fail('the GUI must not read poolSessions');
-console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag)');
+// A pooled row is "reused" only while usable; past its end it says so.
+renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', endsAt: 'e1', pooled: true, usable: false, holders: [] }], '');
+const st2 = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim())[7];
+if (st2 !== 'past end') fail('pooled but not usable must not say reused: ' + st2);
+// The header counts only real rows (an id and a set end time).
+eval(extract('sessionIsReal') + '\nglobal.sessionIsReal = sessionIsReal;');
+const rows = [{ sessionId: '0xa', endsAt: '2026-10-28T12:00:00Z' }, { sessionId: '0xghost', endsAt: '0001-01-01T00:00:00Z', pooled: true },
+  { sessionId: '0xb' }, { endsAt: '2026-10-28T12:00:00Z' }, { sessionId: '0xc', endsAt: 'nonsense' }];
+if (rows.filter(sessionIsReal).length !== 1) fail('header must count only real rows: ' + rows.filter(sessionIsReal).length);
+if (!/\(st\.sessions \|\| \[\]\)\.filter\(sessionIsReal\)\.length/.test(src)) fail('the header count must use sessionIsReal');
+console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag); reused only while usable; header counts real rows');
 NODE
