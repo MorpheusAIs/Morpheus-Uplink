@@ -81,17 +81,15 @@ code, Uplink image, or stock router v7.17.0):
 
 Same when unset: `MASTER_KEY_ADMIN`, `UPLINK_RESET_2FA` (both `false`),
 `PROXY_FORWARD_CHAT_CONTEXT`, `ETH_NODE_USE_SUBSCRIPTIONS` (both `false`),
-`SESSION_DURATION_SECONDS`, `SESSION_FAILOVER`,
-`UPLINK_PROVIDER_COOLDOWN_SECONDS`, `HOUSEKEEPING`,
 `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `ROUTER_URL`.
 `scripts/deploy-assets.sh` fails if a checked line is commented out.
 
 Keep ownership separate:
 
-- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, SESSION_DURATION_SECONDS,
-  SESSION_FAILOVER, UPLINK_PROVIDER_COOLDOWN_SECONDS, HOUSEKEEPING; wiring
+- **Uplink**: ACTIVE_MODELS_URL, GATEWAY_BIDS_URL; wiring
   defaults UPLINK_LISTEN, ROUTER_URL,
   DATA_DIR, USAGE_PRUNE_DAYS, CLOSE_SESSIONS_ON_EXIT.
+  Session, failover, provider, audit, housekeeping and log settings are set on the console Settings page, not in `.env`.
   Diamond / ETH_NODE_CHAIN_ID are not Uplink operator knobs.
 - **Router**: PROXY_* / LOG_LEVEL_* / chain / Diamond / MOR (see L1 below).
   Never put router PROXY_*/LOG_LEVEL_* into Uplink bake docs.

@@ -17,8 +17,8 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
 
-// LogLevel is the live slog level (UPLINK_LOG_LEVEL or the persisted
-// setting). main builds the default handler on it; a setting change takes
+// LogLevel is the live slog level (the saved logLevel setting or its
+// default). main builds the default handler on it; a setting change takes
 // effect without a restart.
 var LogLevel = new(slog.LevelVar)
 
@@ -28,7 +28,6 @@ var LogLevel = new(slog.LevelVar)
 // changed from an admin session.
 type settingDef struct {
 	name     string
-	env      string
 	min, max int
 	def      int
 	level    bool // logLevel: a string setting
@@ -43,7 +42,7 @@ func liveSettingDefs() []settingDef {
 			continue
 		}
 		def, _ := strconv.Atoi(d.Default)
-		out = append(out, settingDef{name: d.Name, env: d.Env, min: d.Min, max: d.Max, def: def, level: d.Kind == config.KindEnum})
+		out = append(out, settingDef{name: d.Name, min: d.Min, max: d.Max, def: def, level: d.Kind == config.KindEnum})
 	}
 	return out
 }
@@ -62,7 +61,7 @@ type runtimeSettings struct {
 	mu     sync.RWMutex
 	ints   map[string]int
 	level  string
-	source map[string]string // env | persisted | default
+	source map[string]string // persisted | default
 }
 
 func persistedInt(st store.Settings, name string) *int {
@@ -92,8 +91,8 @@ func setPersistedInt(st *store.Settings, name string, v *int) {
 	}
 }
 
-// cfgInt is the value from the environment (or the built-in default when
-// the env var is unset or invalid: config already fell back to it).
+// cfgInt is the default for a live setting: config seeds these fields with
+// the registry defaults (they are no longer read from the environment).
 func cfgInt(cfg *config.Config, name string, def int) int {
 	v := 0
 	switch name {
@@ -124,7 +123,7 @@ func levelOf(name string) slog.Level {
 	return slog.LevelInfo
 }
 
-// resolveSettings applies env > persisted > default. A persisted value out
+// resolveSettings applies persisted > default. A persisted value out
 // of bounds (hand-edited file) is ignored with a warning (name only); the
 // returned notes are written to the ops audit stream by the caller. The
 // duration cap always wins: a default above the max is clamped down to it.
@@ -132,11 +131,8 @@ func resolveSettings(cfg *config.Config, st store.Settings) (*runtimeSettings, [
 	rs := &runtimeSettings{ints: map[string]int{}, source: map[string]string{}}
 	var notes []string
 	for _, d := range settingDefs {
-		pinned := cfg.EnvPinned[d.env]
 		if d.level {
 			switch l := config.ParseLogLevel(st.LogLevel); {
-			case pinned:
-				rs.level, rs.source[d.name] = config.ParseLogLevel(cfg.LogLevel), "env"
 			case l != "":
 				rs.level, rs.source[d.name] = l, "persisted"
 			default:
@@ -150,8 +146,6 @@ func resolveSettings(cfg *config.Config, st store.Settings) (*runtimeSettings, [
 		}
 		p := persistedInt(st, d.name)
 		switch {
-		case pinned:
-			rs.ints[d.name], rs.source[d.name] = cfgInt(cfg, d.name, d.def), "env"
 		case p != nil && *p >= d.min && *p <= d.max:
 			rs.ints[d.name], rs.source[d.name] = *p, "persisted"
 		default:
@@ -276,14 +270,6 @@ func (s *Server) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 	// Serialise changes so old→new and the cross-field check are exact.
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
-	s.settings.mu.RLock()
-	src := s.settings.source[d.name]
-	s.settings.mu.RUnlock()
-	if src == "env" {
-		http.Error(w, "set by environment ("+d.env+")", http.StatusConflict)
-		return
-	}
-
 	var oldStr, newStr string
 	if d.level {
 		var lv string

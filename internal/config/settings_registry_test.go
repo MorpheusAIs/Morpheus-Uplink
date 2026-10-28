@@ -91,8 +91,10 @@ func TestSettingsRegistryRules(t *testing.T) {
 		}
 		switch d.Scope {
 		case ScopeLive:
-			if strings.Contains(d.Help, "restart") || d.set != nil || !d.Settable() {
-				t.Errorf("%s: live row says restart or has a boot setter", d.Name)
+			// The setter only seeds the default at boot; ApplyPersisted
+			// skips live rows (the API server applies saved values).
+			if strings.Contains(d.Help, "restart") || d.set == nil || !d.Settable() {
+				t.Errorf("%s: live row says restart or lacks its default setter", d.Name)
 			}
 		case ScopeRestart:
 			if !strings.Contains(d.Help, "after an Uplink restart") || d.set == nil || !d.Settable() {
@@ -142,9 +144,6 @@ func TestSettingsRegistryDefaultsMatchConfig(t *testing.T) {
 		if got := d.Effective(c); got != d.Default {
 			t.Errorf("%s: config default %q, registry %q", d.Name, got, d.Default)
 		}
-		if c.EnvPinned[d.Env] {
-			t.Errorf("%s pinned with no env", d.Name)
-		}
 	}
 }
 
@@ -162,36 +161,9 @@ func TestSettingsRegistryHasNoSecrets(t *testing.T) {
 	}
 }
 
-// Env wins: a set env value pins its row (strings whenever set, others
-// when FromEnv accepts the value; the cool-down clamp still pins).
-func TestSettingsEnvPins(t *testing.T) {
-	cases := []struct {
-		env, val string
-		pinned   bool
-	}{
-		{"AUDIT_RETENTION_DAYS", "64", true},
-		{"AUDIT_RETENTION_DAYS", "abc", false},
-		{"AUDIT_RETENTION_DAYS", "0", false},
-		{"UPLINK_SESSION_RELEASE", "false", true},
-		{"UPLINK_PROVIDER_COOLDOWN_SECONDS", "999999", true},
-		{"SESSION_FAILOVER", "false", true},
-		{"SESSION_FAILOVER", "maybe", false},
-		{"UPLINK_PROVIDER_EXCLUDE", "junk", true},
-		{"MASTER_KEY_ADMIN", "true", true},
-		{"UPLINK_LOG_LEVEL", "warning", true},
-		{"AUDIT_RETENTION_DAYS", "3651", false},
-	}
-	for _, c := range cases {
-		clearSettingEnv(t)
-		t.Setenv(c.env, c.val)
-		if got := quietFromEnv(t).EnvPinned[c.env]; got != c.pinned {
-			t.Errorf("%s=%s pinned %v, want %v", c.env, c.val, got, c.pinned)
-		}
-	}
-}
-
-// Restart-scope values persisted in the console reach Config at boot
-// unless the environment pins them; an invalid one is skipped with a note,
+// Restart-scope values persisted in the console reach Config at boot (a
+// former env variable does not override them); an invalid one is skipped
+// with a note,
 // and so is any persisted env-only or router row (even a valid value).
 func TestApplyPersisted(t *testing.T) {
 	clearSettingEnv(t)
@@ -208,7 +180,7 @@ func TestApplyPersisted(t *testing.T) {
 		"forwardIdle":     "60", // live: applied by the API server, not here
 		"webPublicUrl":    "https://console.example",
 	})
-	if c.SessionRelease || c.AuditRetentionDays != 5 || c.SessionFailover || c.Housekeeping || len(c.ProviderExclude["m1"]) != 1 {
+	if c.SessionRelease || c.AuditRetentionDays != 400 || c.SessionFailover || c.Housekeeping || len(c.ProviderExclude["m1"]) != 1 {
 		t.Fatalf("persisted values not applied: %+v", c)
 	}
 	if c.ProviderCooldownSec != 600 || c.ForwardIdleSec != 180 || c.WebPublicURL != "" || c.MasterKeyAdmin ||

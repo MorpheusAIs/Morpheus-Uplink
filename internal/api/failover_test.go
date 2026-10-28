@@ -730,7 +730,7 @@ func TestFailoverStreamBeforeFirstChunk(t *testing.T) {
 	}
 }
 
-// 10. SESSION_FAILOVER=false: no failover, the status is relayed.
+// 10. sessionFailover setting off: no failover, the status is relayed.
 func TestFailoverDisabled(t *testing.T) {
 	m := newFakeMarket(t, provA, provB)
 	m.behave[provA] = pme402

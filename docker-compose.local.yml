@@ -95,10 +95,6 @@ services:
       # Tunables: override via env / .env; defaults shown.
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
-      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
-      - UPLINK_PROVIDER_COOLDOWN_SECONDS=${UPLINK_PROVIDER_COOLDOWN_SECONDS:-600}
-      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       # Break-glass: true for one restart wipes 2FA (docs/06-developers.md).
       - UPLINK_RESET_2FA=${UPLINK_RESET_2FA:-false}
       - DATA_DIR=/data

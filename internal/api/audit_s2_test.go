@@ -274,6 +274,7 @@ func TestS2AuditFlood(t *testing.T) {
 			clk.Advance(time.Minute + time.Second)
 		}
 		req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+		req.Host = ts.Listener.Addr().String() // the console host (WEB_PUBLIC_URL)
 		req.RemoteAddr = fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255)
 		req.Header.Set("Authorization", "Bearer sk-not-a-real-key")
 		rec := httptest.NewRecorder()

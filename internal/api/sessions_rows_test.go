@@ -78,3 +78,59 @@ func TestStatusSessionsCarryLeaseState(t *testing.T) {
 		t.Fatalf("no pooled row with lease state: %s", st["sessions"])
 	}
 }
+
+// A pooled slot the chain does not list is shown only while live: an
+// expired one, or one with no lease state (a closed session's stale
+// slot), adds no row.
+func TestSessionRowsSkipStalePoolSlots(t *testing.T) {
+	now := time.Now()
+	snaps := []pool.Snapshot{
+		{ModelID: "0xm1", SessionID: "0xghost", ExpiresAt: now.Add(time.Hour)},
+		{ModelID: "0xm2", SessionID: "0xexpired", ExpiresAt: now.Add(-time.Second), OpenedAt: now.Add(-time.Hour), EndsAt: now.Add(time.Minute)},
+		{ModelID: "0xm3", SessionID: "0xlive", ExpiresAt: now.Add(time.Hour), OpenedAt: now, EndsAt: now.Add(time.Hour)},
+	}
+	rows := sessionRows(nil, snaps, now)
+	if len(rows) != 1 || rows[0].SessionID != "0xlive" {
+		t.Fatalf("rows %+v", rows)
+	}
+}
+
+// Close then list: after a pooled session is closed (here by the rescan,
+// as past its end on chain), /admin/status lists no row for it and the
+// pool keeps no slot.
+func TestStatusNoGhostRowAfterClose(t *testing.T) {
+	m := newFakeMarket(t, provA)
+	e := newFailoverEnv(t, m, nil)
+	if code, body := e.chat(t, false); code != 200 {
+		t.Fatalf("chat %d %s", code, body)
+	}
+	m.mu.Lock()
+	var id string
+	for k, s := range m.sessions {
+		id = k
+		s.ends = time.Now().Add(-time.Minute).Unix()
+	}
+	m.mu.Unlock()
+	if err := e.srv.pool.RehydrateForce(); err != nil {
+		t.Fatal(err)
+	}
+	if _, closes := m.snapshot(); len(closes) != 1 || closes[0] != id {
+		t.Fatalf("closes %v", closes)
+	}
+	code, body := e.admin(t, "GET", "/admin/status", "")
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	var st struct {
+		Sessions []sessionRow `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Sessions) != 0 {
+		t.Fatalf("ghost rows after close: %+v", st.Sessions)
+	}
+	if snap := e.srv.pool.Snapshot(); len(snap) != 0 {
+		t.Fatalf("pool slot kept after close: %+v", snap)
+	}
+}

@@ -106,6 +106,16 @@ func (a *auditSink) logLine(stream AuditStream, ev AuditEvent) {
 	attrs := []any{"event", ev.Kind, "result", ev.Result, "ip", ev.IP}
 	if ev.reason != "" {
 		attrs = append(attrs, "reason", ev.reason)
+	} else {
+		// No reason code: the actor and the message carry the detail (a
+		// balance_drop line names the amount). "message", not "msg": slog
+		// already uses msg for the line's own text.
+		if ev.Actor != "" {
+			attrs = append(attrs, "actor", ev.Actor)
+		}
+		if ev.Message != "" {
+			attrs = append(attrs, "message", ev.Message)
+		}
 	}
 	if ev.Count > 0 {
 		attrs = append(attrs, "count", ev.Count)

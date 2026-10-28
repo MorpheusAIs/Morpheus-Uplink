@@ -585,7 +585,7 @@ eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['exclusionsWarni
   + '\nObject.assign(global, { exclusionsWarning, renderExclusionsWarn });');
 if (exclusionsWarning({}) !== '' || exclusionsWarning({ exclusionsUnresolved: 0 }) !== '') fail('no warning without refusals');
 const w = exclusionsWarning({ exclusionsUnresolved: 2 });
-if (!w.includes('2 models') || !w.includes('UPLINK_PROVIDER_EXCLUDE') || /0x/.test(w)) fail('warning text: ' + w);
+if (!w.includes('2 models') || !w.includes('providerExclude') || /0x/.test(w)) fail('warning text: ' + w);
 const wc = exclusionsWarning({ exclusionsUnresolved: 64, exclusionsUnresolvedCapped: true });
 if (!wc.includes('64 or more models')) fail('capped warning text: ' + wc);
 if (exclusionsWarning({ exclusionsUnresolved: 3, exclusionsUnresolvedCapped: 'true' }).includes('or more')) fail('capped flag must be a real boolean');
@@ -608,9 +608,9 @@ grep -qF 'id="enrollPw"' "$HTML" || { echo "FAIL: enrollment needs a password fi
 echo "OK: no reveal button; copy and Export all fetch the full keys on demand"
 
 # Settings tab: one row per registry setting. Booleans are switches,
-# numbers number fields, strings text fields, enums selects. Env-pinned,
-# router and env-only rows are disabled with their note; others get Save
-# and Reset; the tooltip carries the range or values, the default and the
+# numbers number fields, strings text fields, enums selects. Router and
+# env-only rows are not shown; every shown row is editable (no env-pinned
+# state, a stale pinned flag is ignored); the tooltip carries the range or values, the default and the
 # restart note; built with textContent (no innerHTML). Export and import
 # go through the step-up retry.
 node - "$OUT" "$HTML" <<'NODE'
@@ -639,7 +639,7 @@ const names = ['renderSettings', 'settingShown', 'settingText', 'settingTip', 's
 for (const n of ['renderSettings', 'settingTip', 'settingNote']) if (/innerHTML/.test(extract(n))) fail(n + ' must not use innerHTML');
 eval('var settingsLast = [];\n' + names.map(extract).join('\n') + '\nObject.assign(global, { renderSettings, settingValue, settingsChanges, cancelSettings, useDefaultSettings, setLast: (l) => { settingsLast = l; } });');
 const fixture = [
-  { name: 'forwardIdle', kind: 'int', value: 60, default: 180, min: 30, max: 600, source: 'env', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
+  { name: 'forwardIdle', kind: 'int', value: 180, default: 180, min: 30, max: 600, source: 'default', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
   { name: 'logLevel', kind: 'enum', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false, settable: true, scope: 'live', help: 'Log level.' },
   { name: 'sessionFailover', kind: 'bool', value: false, default: true, source: 'persisted', env: 'SESSION_FAILOVER', pinned: false, settable: true, scope: 'restart', restart: 'uplink', pendingRestart: true, effective: true, help: 'Fail over (true or false). Takes effect after an Uplink restart.' },
   { name: 'providerExclude', kind: 'string', value: 'm1=0xabc', default: '', source: 'persisted', env: 'UPLINK_PROVIDER_EXCLUDE', pinned: false, settable: true, scope: 'restart', help: 'Excluded providers.' },
@@ -650,7 +650,7 @@ const fixture = [
 setLast(fixture);
 renderSettings(fixture);
 if (box.children.length !== 4) fail('only settable rows are shown: ' + box.children.length);
-const [pinned, free, bool, str] = box.children;
+const [idle, free, bool, str] = box.children;
 const shownNames = box.children.map((r) => r.children[0].children[0].textContent);
 for (const n of ['routerLogLevelApp', 'masterKeyAdmin', 'webPublicUrl']) if (shownNames.includes(n)) fail(n + ' must not be shown');
 const walk = (n) => [n].concat(...(n.children || []).map(walk));
@@ -668,27 +668,33 @@ for (const row of box.children) {
   if (Object.keys(cell.children[0].style).length) fail('controls take their width from the cell, not inline styles');
 }
 for (const row of box.children) if (buttons(row)) fail('no per-row Save or Reset buttons');
-if (!ctl(pinned).disabled) fail('env-pinned field must be disabled');
-if (note(pinned) !== 'set by environment (UPLINK_FORWARD_IDLE_SECONDS) \u2014 remove it from .env to manage it here') fail('env note: ' + note(pinned));
-if (ctl(pinned).type !== 'number' || ctl(pinned).min !== '30' || ctl(pinned).max !== '600') fail('number field');
-if (!tipOf(pinned).includes('30–600') || !tipOf(pinned).includes('Default: 180')) fail('tooltip needs range and default: ' + tipOf(pinned));
+if (ctl(idle).disabled) fail('no row is read-only (a stale pinned flag is ignored)');
+if (note(idle) !== 'default 180') fail('default note: ' + note(idle));
+if (walk(idle).some((c) => c.title)) fail('no env variable name on the row');
+for (const row of box.children) if (/environment|\.env/.test(note(row))) fail('no env note: ' + note(row));
+if (ctl(idle).type !== 'number' || ctl(idle).min !== '30' || ctl(idle).max !== '600') fail('number field');
+if (!tipOf(idle).includes('30–600') || !tipOf(idle).includes('Default: 180')) fail('tooltip needs range and default: ' + tipOf(idle));
+const intro = html.slice(html.indexOf('id="settingsSection"'), html.indexOf('id="settingsExportBtn"'));
+if (/environment wins|read-only here|remove it from \.env/.test(intro) || /set by environment/i.test(src)) fail('no env-pinned wording left');
 if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || false) fail('enum select');
 if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false) fail('bool must be a switch');
 if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
 if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
+if (ctl(str).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3') fail('providerExclude placeholder: ' + ctl(str).placeholder);
+if (note(str) !== 'saved') fail('providerExclude note: ' + note(str));
 if (!/href="https:\/\/github\.com\/MorpheusAIs\/Morpheus-Uplink\/blob\/main\/docs\/06-developers\.md#environment-variables"/.test(html.slice(html.indexOf('id="tab-settings"'), html.indexOf('id="tab-playground"')))) fail('Settings needs one link to the .env reference');
 // One set of values: no edits → nothing to save; edits are collected per
-// row (a row put back to its default is a reset); pinned rows never.
+// row (a row put back to its default is a reset).
 if (settingsChanges(fixture).length || !stubs.settingsSaveBtn.disabled || !stubs.settingsCancelBtn.disabled) fail('fresh form must have no changes and Save/Cancel disabled');
-ctl(free).value = 'warn'; ctl(bool).checked = true; ctl(pinned).value = '99';
+ctl(free).value = 'warn'; ctl(bool).checked = true; ctl(idle).value = '99';
 let ch = settingsChanges(fixture);
-if (JSON.stringify(ch.map((c) => c.body)) !== JSON.stringify([{ name: 'logLevel', value: 'warn' }, { name: 'sessionFailover', reset: true }])) fail('changes: ' + JSON.stringify(ch));
+if (JSON.stringify(ch.map((c) => c.body)) !== JSON.stringify([{ name: 'forwardIdle', value: 99 }, { name: 'logLevel', value: 'warn' }, { name: 'sessionFailover', reset: true }])) fail('changes: ' + JSON.stringify(ch));
 cancelSettings();
 if (settingsChanges(fixture).length || ctl(box.children[1]).value !== 'debug') fail('Cancel changes must restore the loaded values');
 useDefaultSettings();
 ch = settingsChanges(fixture).map((c) => c.body);
 if (JSON.stringify(ch) !== JSON.stringify([{ name: 'logLevel', reset: true }, { name: 'sessionFailover', reset: true }, { name: 'providerExclude', reset: true }])) fail('Use defaults: ' + JSON.stringify(ch));
-if (ctl(box.children[0]).value !== '60') fail('Use defaults must not touch env-pinned rows');
+if (ctl(box.children[0]).value !== '180') fail('Use defaults must fill the default');
 if (stubs.settingsSaveBtn.disabled) fail('Save must enable with changes');
 const saveSrc = extract('saveSettings');
 if (!/stepUpFetch\('\/admin\/settings'/.test(saveSrc) || /\bapi\('\/admin\/settings'/.test(saveSrc)) fail('Save must use the step-up retry');
@@ -705,7 +711,14 @@ const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-
 if (sec.includes('settingsList')) fail('settings must leave the Security tab');
 if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
 if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
-console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, only settable rows shown (env-pinned read-only), .env reference link, one Save / Cancel changes / Use defaults bar, Restart Uplink confirms and steps up, export and import behind step-up');
+// Empty provider exclusions: format placeholder, default note kept.
+{
+  const empty = [Object.assign({}, fixture[3], { value: '', source: 'default' })];
+  renderSettings(empty);
+  const r = box.children[0];
+  if (ctl(r).value !== '' || ctl(r).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3' || note(r) !== 'default (none)') fail('empty providerExclude: ' + ctl(r).placeholder + ' / ' + note(r));
+}
+console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, only settable rows shown (none read-only), .env reference link, one Save / Cancel changes / Use defaults bar, Restart Uplink confirms and steps up, export and import behind step-up');
 NODE
 
 # Sessions page: per-session lease state (opened, ends, in flight, holders)
@@ -742,5 +755,15 @@ renderSessions([], '');
 if (!body.innerHTML.includes('colspan=9')) fail('empty row must span 9 columns');
 if (/\blong\b/i.test(extract('renderSessions')) || body.innerHTML.includes('long')) fail('the Sessions table must not show a long flag');
 if (/poolSessions/.test(src)) fail('the GUI must not read poolSessions');
-console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag)');
+// A pooled row is "reused" only while usable; past its end it says so.
+renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', endsAt: 'e1', pooled: true, usable: false, holders: [] }], '');
+const st2 = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim())[7];
+if (st2 !== 'past end') fail('pooled but not usable must not say reused: ' + st2);
+// The header counts only real rows (an id and a set end time).
+eval(extract('sessionIsReal') + '\nglobal.sessionIsReal = sessionIsReal;');
+const rows = [{ sessionId: '0xa', endsAt: '2026-10-28T12:00:00Z' }, { sessionId: '0xghost', endsAt: '0001-01-01T00:00:00Z', pooled: true },
+  { sessionId: '0xb' }, { endsAt: '2026-10-28T12:00:00Z' }, { sessionId: '0xc', endsAt: 'nonsense' }];
+if (rows.filter(sessionIsReal).length !== 1) fail('header must count only real rows: ' + rows.filter(sessionIsReal).length);
+if (!/\(st\.sessions \|\| \[\]\)\.filter\(sessionIsReal\)\.length/.test(src)) fail('the header count must use sessionIsReal');
+console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag); reused only while usable; header counts real rows');
 NODE

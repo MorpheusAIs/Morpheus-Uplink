@@ -357,7 +357,7 @@ func TestS5NoUplinkLimits(t *testing.T) {
 	}
 }
 
-// UPLINK_SESSION_RELEASE=false turns the release route off (after the
+// The sessionRelease setting off turns the release route off (after the
 // same key auth); the hold stays.
 func TestS5ReleaseDisabled(t *testing.T) {
 	m := newFakeMarket(t, provA)

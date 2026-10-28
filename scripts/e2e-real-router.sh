@@ -36,6 +36,7 @@ COOKIE_SECRET="e2e-cookie-$(openssl rand -hex 12)"
 export COOKIE_CONTENT="admin:$COOKIE_SECRET"
 export WALLET_PRIVATE_KEY="0x$(openssl rand -hex 32)"   # throwaway, never funded
 export ETH_NODE_ADDRESS="${E2E_ETH_RPC:-https://mainnet.base.org}"
+# Console requests send its host as Host: /admin, /gui and /node answer only on it.
 export WEB_PUBLIC_URL="https://uplink.example"
 
 PROJECT="uplink-e2e-real-$$"
@@ -89,13 +90,13 @@ SESSION=""
 login() {
   local hdr
   hdr=$(dc exec -T uplink curl -sS -D - -o /dev/null -X POST \
-    -H 'Content-Type: application/json' -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+    -H 'Content-Type: application/json' -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
     --data-binary @- http://127.0.0.1:8080/admin/login <<<"{\"password\":\"$ADMIN_PASSWORD\"}")
   SESSION=$(printf '%s' "$hdr" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' | head -n 1)
   [ -n "$SESSION" ] || fail "admin login failed"
 }
 status_json() {
-  dc exec -T uplink curl -sS -f -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
+  dc exec -T uplink curl -sS -f -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' \
     -H "Cookie: $SESSION" http://127.0.0.1:8080/admin/status
 }
 login
@@ -107,12 +108,12 @@ echo "== /node passthrough =="
 # node_req METHOD PATH -> HTTP code (admin session + CSRF headers, raw path).
 node_req() {
   dc exec -T uplink curl -sS --path-as-is -o /dev/null -w '%{http_code}' -X "$1" \
-    -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
+    -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Origin: $WEB_PUBLIC_URL" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $SESSION" \
     -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:8080$2"
 }
 rlog() { dc logs --no-color proxy-router 2>&1; }
 c=$(node_req GET /node/healthcheck); [ "$c" = 200 ] || fail "/node/healthcheck did not pass through ($c)"
-spec=$(dc exec -T uplink curl -sS -f -H "Cookie: $SESSION" http://127.0.0.1:8080/node/swagger/doc.json)
+spec=$(dc exec -T uplink curl -sS -f -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Cookie: $SESSION" http://127.0.0.1:8080/node/swagger/doc.json)
 printf '%s' "$spec" | jq -e '.basePath == "/node"' >/dev/null || fail "swagger basePath not rewritten"
 seen_spec() { rlog | grep -q 'HTTP-REQ\] GET /swagger/doc.json'; }
 wait_for "router request log shows the passthrough" 20 seen_spec
@@ -159,7 +160,7 @@ fi
 blocks=$(dc logs --no-color uplink | grep -c '"event":"node_passthrough_block"' || true)
 [ "$blocks" -ge "$n" ] || fail "audit: $blocks node_passthrough_block events, want >= $n"
 echo "OK /node deny list: $n blocked requests -> 403, audited, none in the router request log"
-w=$(dc exec -T uplink curl -sS -f -H "Cookie: $SESSION" http://127.0.0.1:8080/node/wallet)
+w=$(dc exec -T uplink curl -sS -f -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Cookie: $SESSION" http://127.0.0.1:8080/node/wallet)
 st_addr=$(status_json | jq -r .walletAddress)
 [ "$(printf '%s' "$w" | jq -r .address | tr 'A-F' 'a-f')" = "$(printf '%s' "$st_addr" | tr 'A-F' 'a-f')" ] || fail "GET /node/wallet: unexpected body"
 printf '%s' "$w" | jq -e 'keys - ["address","kind","derivationPath"] == []' >/dev/null || fail "GET /node/wallet returned extra fields"

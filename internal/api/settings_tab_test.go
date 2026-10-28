@@ -232,30 +232,53 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 	}
 }
 
-// Env wins: an env-set row is read-only (409), shows the env value, and a
-// persisted value does not apply at boot.
-func TestSettingsEnvWinsReadOnly(t *testing.T) {
+// Console settings are not read from the environment: a former variable
+// is ignored (saved > default), the row stays settable and is never
+// pinned; an env-only row still reports the environment as its source.
+func TestSettingsEnvIgnoredSavedWins(t *testing.T) {
 	e := newSettingsEnv(t, map[string]string{"AUDIT_RETENTION_DAYS": "30", "SESSION_FAILOVER": "false", "MASTER_KEY_ADMIN": "false"},
-		map[string]string{"auditRetentionDays": "400", "sessionFailover": "true"})
-	if e.cfg.AuditRetentionDays != 30 || e.cfg.SessionFailover {
-		t.Fatalf("persisted value beat env: %d %v", e.cfg.AuditRetentionDays, e.cfg.SessionFailover)
+		map[string]string{"auditRetentionDays": "400"})
+	if e.cfg.AuditRetentionDays != 400 || !e.cfg.SessionFailover {
+		t.Fatalf("env applied: %d %v", e.cfg.AuditRetentionDays, e.cfg.SessionFailover)
+	}
+	if strings.Join(e.cfg.IgnoredEnv, ",") != "SESSION_FAILOVER,AUDIT_RETENTION_DAYS" {
+		t.Fatalf("ignored %v", e.cfg.IgnoredEnv)
 	}
 	v := e.view(t)
-	for _, n := range []string{"auditRetentionDays", "sessionFailover", "masterKeyAdmin"} {
-		if r := v[n]; !r.Pinned || r.Source != "env" || r.PendingRestart {
+	for n, src := range map[string]string{"auditRetentionDays": "persisted", "sessionFailover": "default", "masterKeyAdmin": "env"} {
+		if r := v[n]; r.Pinned || r.Source != src || r.PendingRestart {
 			t.Errorf("%s %+v", n, r)
 		}
 	}
-	if v["auditRetentionDays"].Value != float64(30) {
-		t.Errorf("auditRetentionDays shows %v", v["auditRetentionDays"].Value)
+	if v["auditRetentionDays"].Value != float64(400) || !v["auditRetentionDays"].Settable || v["masterKeyAdmin"].Settable {
+		t.Errorf("rows %+v / %+v", v["auditRetentionDays"], v["masterKeyAdmin"])
 	}
-	for _, b := range []string{`{"name":"auditRetentionDays","value":20}`, `{"name":"auditRetentionDays","reset":true}`, `{"name":"sessionFailover","value":true}`} {
-		if code, body := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 409 || !strings.Contains(body, "set by environment") {
+	for _, b := range []string{`{"name":"auditRetentionDays","value":20}`, `{"name":"sessionFailover","value":false}`} {
+		if code, body := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 200 {
 			t.Errorf("%s: %d %s", b, code, body)
 		}
 	}
-	if v, _ := e.st.GetSettings().Value("auditRetentionDays"); v != "400" {
-		t.Fatalf("pinned refusal changed the store: %q", v)
+	if v, _ := e.st.GetSettings().Value("auditRetentionDays"); v != "20" {
+		t.Fatalf("store %q", v)
+	}
+	if code, _ := e.do(t, nil, "POST", "/admin/settings", `{"name":"auditRetentionDays","reset":true}`, nil); code != 200 {
+		t.Fatal("reset")
+	}
+	if v := e.view(t)["auditRetentionDays"]; v.Value != float64(90) || v.Effective != float64(400) || !v.PendingRestart {
+		t.Fatalf("after reset %+v", v)
+	}
+}
+
+// A live setting set through the old variable is ignored; one saved in the
+// console applies; with neither the default applies.
+func TestSettingsLiveEnvIgnored(t *testing.T) {
+	e := newSettingsEnv(t, map[string]string{"UPLINK_FORWARD_IDLE_SECONDS": "90", "SESSION_DURATION_SECONDS": "900"}, map[string]string{"forwardIdle": "240"})
+	if e.srv.forwardIdle() != 240 || e.srv.durationDefault() != 600 {
+		t.Fatalf("forwardIdle %d duration %d", e.srv.forwardIdle(), e.srv.durationDefault())
+	}
+	v := e.view(t)
+	if v["forwardIdle"].Source != "persisted" || v["sessionDurationDefault"].Source != "default" || v["forwardIdle"].Pinned {
+		t.Fatalf("%+v / %+v", v["forwardIdle"], v["sessionDurationDefault"])
 	}
 }
 
@@ -419,12 +442,12 @@ func TestSettingsExportImport(t *testing.T) {
 	}
 }
 
-// An import may carry a value the environment pins: it is stored, the env
-// value still wins, and the answer lists it.
-func TestSettingsImportPinnedListed(t *testing.T) {
+// An import applies even when the former env variable is set (it is
+// ignored); the answer keeps its "pinned" field, now always null.
+func TestSettingsImportIgnoresEnv(t *testing.T) {
 	e := newSettingsEnv(t, map[string]string{"UPLINK_FORWARD_IDLE_SECONDS": "90"}, nil)
 	code, body := e.do(t, nil, "POST", "/admin/settings/import", `{"format":"uplink-settings","version":1,"settings":{"forwardIdle":240}}`, nil)
-	if code != 200 || !strings.Contains(body, `"pinned":["forwardIdle"]`) || e.srv.forwardIdle() != 90 {
+	if code != 200 || !strings.Contains(body, `"pinned":null`) || e.srv.forwardIdle() != 240 {
 		t.Fatalf("%d %s fwd %d", code, body, e.srv.forwardIdle())
 	}
 }

@@ -7,13 +7,14 @@ fields: SecretVM makes a field of every `environment:` key (literals too),
 so the compose has no other. Tunables change via compose/code, not
 Encrypted Secrets:
 
-- **Uplink** (`uplink_bake_env`): SESSION_DURATION_SECONDS, SESSION_FAILOVER,
-  UPLINK_PROVIDER_COOLDOWN_SECONDS,
-  ACTIVE_MODELS_URL, GATEWAY_BIDS_URL, HOUSEKEEPING (+ wiring defaults
+- **Uplink** (`uplink_bake_env`): ACTIVE_MODELS_URL, GATEWAY_BIDS_URL (+ wiring defaults
   UPLINK_LISTEN, ROUTER_URL, DATA_DIR, USAGE_PRUNE_DAYS,
   CLOSE_SESSIONS_ON_EXIT), and master key admin access fixed off
   (MASTER_KEY_ADMIN=false; bake values win over environment:). Diamond /
   ETH_NODE_CHAIN_ID are not Uplink operator knobs.
+- **Console settings** (session lengths and timers, failover, provider
+  cool-down and exclusions, session release, audit retention,
+  housekeeping, log level) are set on the console Settings page, not here.
 - **2FA** is off by default and turned on with the switch on the GUI
   Security tab (recommended); there is no variable for it. The switch is
   kept in the uplink data volume, so it survives redeploys.
@@ -102,6 +103,9 @@ streaming: check pending; generic overlay uses Caddy `flush_interval -1`.
 ## Edge allowlist / rate limit
 
 Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
-(`/`, `/gui*`, `/v1*`, `/admin*`, `/healthcheck`; else 404 via low-priority
-deny router), and an average/burst rate limit middleware on the allowlist
-router. Router `:8082` is not published. Traefik still gets zero secrets.
+(`/`, `/gui*`, `/v1*`, `/admin` and `/admin/*`, `/healthcheck`; else 404 via
+low-priority deny router), and an average/burst rate limit middleware on the
+allowlist router. Router `:8082` is not published. Traefik still gets zero
+secrets. The edge does not match on the host name; Uplink itself answers
+`/admin*`, `/gui*` and `/node/*` only on the host of `WEB_PUBLIC_URL` (see
+[Console host check](../../docs/02-bootstrap.md#console-host-check)).

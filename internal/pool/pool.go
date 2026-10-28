@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/big"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,13 @@ import (
 // expiryBuffer stops using a session this long before its on-chain end so
 // we never send a prompt into a session that expires mid-answer.
 const expiryBuffer = 90 * time.Second
+
+// pruneGrace: a rescan never prunes a pool slot opened less than this long
+// before the scan started, so an open the chain read does not show yet is
+// not dropped (and then opened again, locking a second stake). Two router
+// call bounds: the open's own call and the list call can each take up to
+// router.AdminTimeout, so a read lagging behind an open stays inside it.
+const pruneGrace = 2 * router.AdminTimeout
 
 type entry struct {
 	sessionID string
@@ -46,7 +54,7 @@ type Pool struct {
 	// cutNext: a provider that cut a stream; the model's next open walks
 	// the bids excluding it, whatever the cool-down (one-shot).
 	cutNext map[string]string // normModel -> provider
-	// exclude: UPLINK_PROVIDER_EXCLUDE, model id or lowercased name ->
+	// exclude: the providerExclude setting, model id or lowercased name ->
 	// providers never opened for it. namer maps an id to its name.
 	exclude map[string]map[string]bool
 	namer   func(modelID string) string
@@ -84,6 +92,15 @@ type Pool struct {
 	chainOpen    []ChainSession
 	chainFetched time.Time
 	rehydrateErr string
+	// lastScanLog: the counts the last "rehydrated" log line reported; the
+	// line repeats only when they change (status polls rescan often).
+	lastScanLog *scanCounts
+}
+
+// scanCounts is what the "rehydrated" log line reports.
+type scanCounts struct {
+	open, adopted int
+	wallet        string
 }
 
 // ChainSession is an open (ClosedAt==0) on-chain session for display.
@@ -278,6 +295,7 @@ func (p *Pool) rehydrate(force bool) error {
 		}
 	}
 
+	scanStart := p.now()
 	addr, err := p.client.WalletAddress()
 	if err != nil {
 		p.setRehydrateErr(err.Error())
@@ -359,6 +377,24 @@ func (p *Pool) rehydrate(force bool) error {
 		}
 		adopted++
 	}
+	// Prune pool slots whose session is not in the scanned open list
+	// (closed elsewhere): only with nothing in flight, and never a session
+	// opened after this scan started or within pruneGrace before it (the
+	// list may lag behind it). Only a successful scan gets here.
+	keepAfter := scanStart.Add(-pruneGrace)
+	onChain := make(map[string]bool, len(open))
+	for _, s := range open {
+		onChain[strings.ToLower(s.ID)] = true
+	}
+	for modelID, e := range p.entries {
+		if onChain[strings.ToLower(e.sessionID)] {
+			continue
+		}
+		if st := p.sess[e.sessionID]; st != nil && (st.inflight > 0 || st.openedAt.After(keepAfter)) {
+			continue
+		}
+		delete(p.entries, modelID)
+	}
 	// Mark which display rows are pooled.
 	pooledNow := map[string]bool{}
 	for _, e := range p.entries {
@@ -374,11 +410,16 @@ func (p *Pool) rehydrate(force bool) error {
 	p.chainOpen = display
 	p.chainFetched = now
 	p.rehydrateErr = ""
+	counts := scanCounts{open: len(open), adopted: adopted, wallet: addr}
+	changed := p.lastScanLog == nil || *p.lastScanLog != counts
+	p.lastScanLog = &counts
 	p.chainMu.Unlock()
 	p.stateKnown.Store(true)
 
-	log.Printf("pool: rehydrated %d open on-chain session(s), adopted %d into reuse pool (wallet %s)",
-		len(open), adopted, addr)
+	if changed {
+		log.Printf("pool: rehydrated %d open on-chain session(s), adopted %d into reuse pool (wallet %s)",
+			len(open), adopted, addr)
+	}
 	return nil
 }
 

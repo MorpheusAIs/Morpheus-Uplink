@@ -5,8 +5,8 @@ import "strconv"
 // Settings are operator settings changed in the admin console (#51). They
 // live beside AuthState in the same state file and are written with it
 // (tmp + rename, 0640). A nil field or an empty LogLevel means "not set":
-// the environment or the built-in default applies. Environment values
-// always win over these (precedence env > persisted > default).
+// the built-in default applies (precedence saved > default; these
+// settings are not read from the environment).
 type Settings struct {
 	SessionDurationDefault *int   `json:"sessionDurationDefault,omitempty"`
 	SessionDurationMax     *int   `json:"sessionDurationMax,omitempty"`

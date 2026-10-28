@@ -40,7 +40,7 @@ const (
 var ErrNoAlternate = errors.New("no alternate provider for this model")
 
 // ErrNoEligibleProvider means only providers excluded by
-// UPLINK_PROVIDER_EXCLUDE serve the model: nothing is opened (a configured
+// the providerExclude setting serve the model: nothing is opened (a configured
 // exclusion is never overridden, unlike a cool-down).
 var ErrNoEligibleProvider = errors.New("no eligible provider for this model")
 
@@ -124,7 +124,7 @@ func (p *Pool) IsCooling(modelID, provider string) bool {
 }
 
 // SetProviderExclude installs the configured exclusions
-// (UPLINK_PROVIDER_EXCLUDE): model id or name -> providers. namer resolves
+// (the providerExclude setting): model id or name -> providers. namer resolves
 // a model id to its catalog name so name-keyed entries apply.
 func (p *Pool) SetProviderExclude(m map[string][]string, namer func(string) string) {
 	ex := map[string]map[string]bool{}
@@ -417,7 +417,7 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 // provider of this model is avoided, else a by-bid open outside the
 // avoided set (cooling, configured exclusions, a pending stream cut). It
 // never drops an avoidance to get a session (fail fast):
-//   - only configured exclusions (UPLINK_PROVIDER_EXCLUDE) serve the model
+//   - only configured exclusions (the providerExclude setting) serve the model
 //     → ErrNoEligibleProvider;
 //   - every eligible provider is avoided, or each one the walk tried failed
 //     to open, or the rated bids cannot be read → ErrNoAvailableProvider

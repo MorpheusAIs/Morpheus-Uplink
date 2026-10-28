@@ -48,8 +48,9 @@ services:
       - uplink
 
   uplink:
-    # Release assets pin this to the built digest (scripts/deploy-assets.sh).
-    image: ghcr.io/morpheusais/uplink:latest
+    # Pinned to the current release (v1.0.24); release assets re-pin it to
+    # the built digest (scripts/deploy-assets.sh). Bumped after each release.
+    image: ghcr.io/morpheusais/uplink@sha256:0df5e82d88d554cec4710c52960fb71b090f2958fe7d2b9dcb52fda6a1326249
     restart: unless-stopped
     logging: *default-logging
     security_opt:
@@ -80,12 +81,8 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      - SESSION_DURATION_SECONDS=${SESSION_DURATION_SECONDS:-600}
-      - SESSION_FAILOVER=${SESSION_FAILOVER:-true}
-      - UPLINK_PROVIDER_COOLDOWN_SECONDS=${UPLINK_PROVIDER_COOLDOWN_SECONDS:-600}
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
-      - HOUSEKEEPING=${HOUSEKEEPING:-true}
       - DATA_DIR=/data
     volumes:
       - uplink_data:/data

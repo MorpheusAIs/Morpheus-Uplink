@@ -158,6 +158,14 @@ func (s *Server) Handler() http.Handler {
 	// every /node/ request is checked by the passthrough itself.
 	node := s.requireAdminHandler(s.nodeProxy())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Console host check, before any auth: /admin*, /gui* and /node/*
+		// answer only on WEB_PUBLIC_URL's host (consoleHostAllowed); anything
+		// else is a plain, uncached 404 that does not name the expected host.
+		if isConsolePath(r) && !consoleHostAllowed(s.cfg.WebPublicURL, r.Host) {
+			w.Header().Set("Cache-Control", "no-store")
+			http.NotFound(w, r)
+			return
+		}
 		if p := r.URL.Path; p == "/admin" || strings.HasPrefix(p, "/admin/") || strings.HasPrefix(p, "/node/") {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Pragma", "no-cache")
