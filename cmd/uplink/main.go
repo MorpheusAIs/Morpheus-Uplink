@@ -56,7 +56,9 @@ func main() {
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec)
 	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
-	// providerExclude: never opened (pool) and not listed or priced (catalog).
+	// providerExclude: never opened or adopted, and their open sessions are
+	// closed by the boot reconcile below, so set it first (pool); not listed
+	// or priced (catalog).
 	pl.SetProviderExclude(cfg.ProviderExclude)
 	cat.SetProviderExclude(cfg.ProviderExclude)
 	pl.SetDurationMax(cfg.SessionDurationMax)

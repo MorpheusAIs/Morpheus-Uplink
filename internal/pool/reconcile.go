@@ -27,6 +27,11 @@ import (
 //   - skip "unconfigured": the model is not in a non-empty catalog
 //     (compared case-insensitively). Never closed at boot; left to expire.
 //     An empty catalog, or one that cannot be read, is treated as unknown.
+//   - close "provider_excluded": a usable session whose provider is in
+//     providerExclude. Never adopted; closed so the unused stake returns
+//     (also by a late recovery: the pool never serves it). It does not
+//     count toward the model's adopt choice, so a usable session on
+//     another provider is adopted, never closed in its favour.
 //
 // Scope is the wallet: the router does not tell Uplink which router user
 // opened a session, so a dedicated wallet is required.
@@ -34,10 +39,12 @@ import (
 // Fail safe: a failed or partial list (an error on any page, or a row that
 // cannot be verified) means no closes and no opens, with bounded retry.
 // After the gate deadline the gate opens, but no new session is opened
-// until a list succeeds, and a late recovery closes only expired sessions.
+// until a list succeeds, and a late recovery closes only expired and
+// provider_excluded sessions.
 //
 // The open gate is released as soon as adopt/close is decided; the closes
-// (at most MaxBootCloses, expired first) then run in the background.
+// (at most MaxBootCloses, expired first, then provider_excluded) then run
+// in the background.
 
 // MaxBootCloses caps closes per reconcile pass. The excess is deferred: it
 // is left for later scans (expired) or for expiry (duplicate), and the cap
@@ -54,6 +61,7 @@ const (
 	ReasonExpired      = "expired"
 	ReasonDuplicate    = "duplicate"
 	ReasonUnconfigured = "unconfigured"
+	ReasonExcluded     = "provider_excluded"
 )
 
 // ConfiguredModels reports the model ids Uplink serves. ok=false means the
@@ -116,8 +124,9 @@ var errUnverifiable = errors.New("session list incomplete")
 func normModel(id string) string { return strings.ToLower(strings.TrimSpace(id)) }
 
 // PlanReconcile decides adopt/close/skip for each open session. Pure.
-// configured is honoured only when catalogKnown and non-empty.
-func PlanReconcile(open []router.Session, now time.Time, configured map[string]bool, catalogKnown bool) []ReconcileDecision {
+// configured is honoured only when catalogKnown and non-empty. excluded
+// holds the lowercase provider addresses of providerExclude (nil: none).
+func PlanReconcile(open []router.Session, now time.Time, configured map[string]bool, catalogKnown bool, excluded map[string]bool) []ReconcileDecision {
 	cfg := map[string]bool{}
 	for id, ok := range configured {
 		if ok {
@@ -136,6 +145,8 @@ func PlanReconcile(open []router.Session, now time.Time, configured map[string]b
 			out[i].Action, out[i].Reason = ActClose, ReasonExpired
 		case useCatalog && !cfg[m]:
 			out[i].Action, out[i].Reason = ActSkip, ReasonUnconfigured
+		case excluded[strings.ToLower(strings.TrimSpace(s.Provider))]:
+			out[i].Action, out[i].Reason = ActClose, ReasonExcluded
 		default:
 			out[i].Action, out[i].Reason = ActAdopt, ReasonUsable
 			if j, ok := best[m]; !ok || s.EndsAt > open[j].EndsAt {
@@ -231,7 +242,7 @@ func verifiable(open []router.Session) bool {
 }
 
 // plan lists open sessions and applies the adopt decisions. It returns the
-// closes to run (capped, expired first). Any list error or an unverifiable
+// closes to run (capped, expired first, then provider_excluded). Any list error or an unverifiable
 // row returns an error and changes nothing.
 func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileEvent)) (ReconcileResult, []ReconcileDecision, error) {
 	addr, err := p.client.WalletAddress()
@@ -254,8 +265,8 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 	if known {
 		res.Catalog = len(ids)
 	}
-	var expired, dups []ReconcileDecision
-	for _, d := range PlanReconcile(open, time.Now(), ids, known) {
+	var expired, excl, dups []ReconcileDecision
+	for _, d := range PlanReconcile(open, time.Now(), ids, known, p.excludedProviders()) {
 		s := d.Session
 		switch {
 		case d.Action == ActAdopt:
@@ -273,6 +284,8 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 			emit(ReconcileEvent{Kind: "session_reconcile_adopt", Reason: ReasonUsable, Session: short(s.ID), Result: "ok", Source: "boot"})
 		case d.Action == ActClose && d.Reason == ReasonExpired:
 			expired = append(expired, d)
+		case d.Action == ActClose && d.Reason == ReasonExcluded:
+			excl = append(excl, d)
 		case d.Action == ActClose && d.Reason == ReasonDuplicate && !late:
 			dups = append(dups, d)
 		default:
@@ -281,7 +294,7 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 			res.Skipped++
 		}
 	}
-	closes := append(expired, dups...)
+	closes := append(append(expired, excl...), dups...)
 	if len(closes) > MaxBootCloses {
 		res.Deferred = len(closes) - MaxBootCloses
 		closes = closes[:MaxBootCloses]

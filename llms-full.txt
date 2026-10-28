@@ -1769,7 +1769,11 @@ before any request may open a session:
 - *Adopted:* the latest-ending session per model that is not closed and
   has more than the pool's 90 s expiry buffer left. Never extended; no
   session is opened by the reconcile.
-- *Closed:* only `expired` (past its end or inside the buffer) and
+- *Closed:* only `expired` (past its end or inside the buffer),
+  `provider_excluded` (a usable session whose provider is in
+  `providerExclude`: never adopted, closed so the unused stake returns;
+  it does not count as the model's adopted session, so a usable session
+  on another provider is adopted rather than closed as a duplicate) and
   `duplicate` (another usable session for a model that already has an
   adopted one).
 - *Never closed:* a session whose model is not in the catalog is skipped
@@ -1778,10 +1782,12 @@ before any request may open a session:
   id, so a session adopted under a differently cased id is reused. An empty catalog (`{"models":[]}` or `{}`) or one
   that cannot be read is treated as unknown: nothing is skipped for it and
   usable sessions are adopted.
-- *Cap:* at most 20 closes per pass (`MaxBootCloses`), expired first. The
+- *Cap:* at most 20 closes per pass (`MaxBootCloses`), expired first,
+  then `provider_excluded`. The
   rest are counted as `deferred` and a `session_reconcile_cap` audit event
   is written. Deferred expired sessions are closed by later scans; deferred
-  duplicates are left to expire.
+  duplicates and `provider_excluded` sessions are left to expire (never
+  adopted).
 - *Gate:* session opens wait until the list succeeded and adopt/close is
   decided, so a request that arrives during boot uses the adopted session
   instead of opening a second one. The gate is then released and the
@@ -1795,17 +1801,20 @@ before any request may open a session:
   list succeeds (the request gets an error instead), so it never opens next
   to a session it could not see. The reconcile keeps retrying every 30 s
   (`UPLINK_RECONCILE_RETRY_SECONDS`); such a late pass closes expired
-  sessions only, because the pool may already be serving a "duplicate".
+  and `provider_excluded` sessions only, because the pool may already be
+  serving a "duplicate" (it never serves an excluded provider's session).
 - *Failed closes:* counted as `failed`. An expired session whose close
   failed, or that the cap deferred, is closed by a later scan
   (housekeeping and the pool close expired sessions they see), with the
   same `session_reconcile_close` audit event marked `"source":"rescan"`;
-  a duplicate whose close failed is left to expire.
+  a duplicate or `provider_excluded` session whose close failed is left
+  to expire (never adopted). A failed close is logged and never holds
+  the gate or the boot.
 - *Idempotent:* re-running it adopts the same sessions and closes nothing
   new.
 - *Audit:* one `session_reconcile_adopt` event per adopted session, one
-  `session_reconcile_close` event per close (reason `expired` or
-  `duplicate`, result, first 10 characters of the session id), a
+  `session_reconcile_close` event per close (reason `expired`,
+  `provider_excluded` or `duplicate`, result, first 10 characters of the session id), a
   `session_reconcile_cap` event when the cap is hit, and one
   `session_reconcile` summary line per pass (`open`, `adopted`, `closed`,
   `failed`, `skipped`, `deferred`, `attempts`, `late`, and `catalog`, the
@@ -1914,8 +1923,10 @@ the pool stays in charge of which session is open. Turning the
   addresses (`0x` + 40 hex), for example `0xProvider1,0xProvider2`. Saved
   lowercase, without duplicates; any other entry, or a value in the
   earlier per-model form (with `=` or `;`), is refused on save with a
-  message to re-enter it as a plain list. Opens and Rehydrate never use
-  them. With any exclusion the open goes by bid over the providers left.
+  message to re-enter it as a plain list. Opens, the boot reconcile and
+  Rehydrate never use them, and the boot reconcile closes the wallet's
+  open sessions on them (reason `provider_excluded`) so the unused stake
+  is returned. With any exclusion the open goes by bid over the providers left.
   When only excluded providers serve the model, the request gets `503`
   `no_eligible_provider` (no ids in the body, no `Retry-After`) and
   nothing is opened. When the rated bids cannot be read, nothing is opened
