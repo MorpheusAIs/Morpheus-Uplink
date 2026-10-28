@@ -46,7 +46,7 @@ type Pool struct {
 	// cutNext: a provider that cut a stream; the model's next open walks
 	// the bids excluding it, whatever the cool-down (one-shot).
 	cutNext map[string]string // normModel -> provider
-	// exclude: UPLINK_PROVIDER_EXCLUDE, model id or lowercased name ->
+	// exclude: the providerExclude setting, model id or lowercased name ->
 	// providers never opened for it. namer maps an id to its name.
 	exclude map[string]map[string]bool
 	namer   func(modelID string) string

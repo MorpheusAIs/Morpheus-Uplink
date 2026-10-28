@@ -1213,9 +1213,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         <h2>Settings</h2>
         <p class="note" style="margin-top:0">
           Saved in DATA_DIR with the admin state. Some apply at once; others say
-          they take effect after an Uplink restart. A value set in the
-          environment wins and is read-only here: remove it from .env to manage it
-          in the console. Settings that live in .env only, router settings and
+          they take effect after an Uplink restart. Settings that live in .env only, router settings and
           secrets are not shown here. Every change is logged.
         </p>
         <div class="row" style="margin-bottom:8px">
@@ -1383,7 +1381,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 const UI_COPY = {
   // Name-keyed provider exclusions not resolved yet: opens refused.
   exclusionsUnresolved: (n, capped) => 'Opens are being refused for ' + n + (capped ? ' or more' : '') + (n === 1 && !capped ? ' model' : ' models')
-    + ': UPLINK_PROVIDER_EXCLUDE has entries keyed by model name and the model catalog has no name for '
+    + ': the providerExclude setting has entries keyed by model name and the model catalog has no name for '
     + (n === 1 ? 'it' : 'them') + ' yet (is the model feed reachable?). Requests get 503 until the names resolve.',
   // Admin changes are accepted only from WEB_PUBLIC_URL.
   originMismatch: (here, want) => 'This page is open at ' + here + ', but WEB_PUBLIC_URL is ' + want
@@ -1688,7 +1686,7 @@ async function api(path, opts = {}) {
 }
 
 /** Operator settings (#51): one row per setting the console can change.
- * .env-only and router rows are not shown; env-pinned rows are read-only. */
+ * .env-only and router rows are not shown. */
 // settingsLast is the last loaded view: Cancel changes renders it again.
 let settingsLast = [];
 async function loadSettings() {
@@ -1716,7 +1714,6 @@ function settingShown(s) {
   return s.scope !== 'env' && s.scope !== 'router' && s.settable !== false;
 }
 function settingNote(s) {
-  if (s.pinned) return 'set by environment (' + s.env + ') \u2014 remove it from .env to manage it here';
   if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
   if (s.source === 'persisted') return 'saved';
   return 'default ' + settingText(s.default);
@@ -1731,7 +1728,6 @@ function renderSettings(list) {
     head.className = 'setting-label';
     const label = document.createElement('label');
     label.textContent = s.name;
-    label.title = s.env;
     label.htmlFor = 'setting-' + s.name;
     const tip = document.createElement('span');
     tip.className = 'tip';
@@ -1766,7 +1762,6 @@ function renderSettings(list) {
       input.value = s.value == null ? '' : String(s.value);
     }
     input.id = 'setting-' + s.name;
-    input.disabled = !!s.pinned;
     input.onchange = updateSettingsDirty;
     input.oninput = updateSettingsDirty;
     const cell = document.createElement('div');
@@ -1801,7 +1796,6 @@ function settingSavedValue(s) {
 function settingsChanges(list) {
   const out = [];
   for (const s of list.filter(settingShown)) {
-    if (s.pinned) continue;
     const v = settingInputValue(s);
     if (v === null || v === settingSavedValue(s)) continue;
     const def = s.default == null ? '' : String(s.default);
@@ -1845,7 +1839,6 @@ function cancelSettings() {
 // useDefaultSettings fills the form with the defaults; Save applies them.
 function useDefaultSettings() {
   for (const s of settingsLast.filter(settingShown)) {
-    if (s.pinned) continue;
     const el = document.getElementById('setting-' + s.name);
     if (!el) continue;
     if (s.kind === 'bool') el.checked = s.default === true || s.default === 'true';
@@ -1920,8 +1913,7 @@ async function importSettingsFile(input) {
   const v = await res.json();
   settingsLast = (v && v.settings) || [];
   renderSettings(settingsLast);
-  const pinned = (v && v.pinned) || [];
-  msg.textContent = 'Settings imported.' + (pinned.length ? ' Set by environment, so the env value still wins: ' + pinned.join(', ') + '.' : '');
+  msg.textContent = 'Settings imported.';
 }
 
 /** Accessible ⓘ: focusable, announced via aria-label, shown via CSS on hover/focus. */

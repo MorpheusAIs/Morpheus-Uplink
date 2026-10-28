@@ -2,13 +2,16 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 // Operator settings registry (#51). One row per setting the console shows.
-// Precedence for every Uplink-side setting: env > persisted > default.
+// Each setting is managed in one place. Live and restart rows are managed
+// in the console only (saved > default); the environment is not read for
+// them. Env-only and router rows are set in .env only.
 //
 // Scope says when a change takes effect:
 //   - ScopeLive: at once (the API server re-reads it).
@@ -44,7 +47,10 @@ const (
 
 // SettingDef is one setting.
 type SettingDef struct {
-	Name     string // console and settings-file key
+	Name string // console and settings-file key
+	// Env: for env-only and router rows, the variable that sets it. For
+	// live and restart rows, the former variable name: it is not read, only
+	// named in a startup warning when it is still set.
 	Env      string
 	Kind     SettingKind
 	Min, Max int      // KindInt
@@ -52,14 +58,11 @@ type SettingDef struct {
 	Default  string   // canonical form
 	Scope    SettingScope
 	Group    string
-	Help     string // tooltip: what it does and the allowed values
-	Consumer string // where the value is read (docs)
-	// envClamp: an int env value above Max is clamped by FromEnv, so it
-	// still pins the setting.
-	envClamp bool
+	Help     string                // tooltip: what it does and the allowed values
+	Consumer string                // where the value is read (docs)
 	check    func(string) error    // KindString: extra validation
 	get      func(*Config) string  // effective Uplink value
-	set      func(*Config, string) // ScopeRestart: applied at boot
+	set      func(*Config, string) // live and restart rows: default, then saved (restart) at boot
 }
 
 var logLevels = []string{"debug", "info", "warn", "error"}
@@ -74,24 +77,24 @@ func atob(s string) bool { b, _ := strconv.ParseBool(s); return b }
 var Settings = []SettingDef{
 	{Name: "sessionDurationDefault", Env: "SESSION_DURATION_SECONDS", Kind: KindInt, Min: 600, Max: 86400, Default: "600", Scope: ScopeLive,
 		Help: "Session length for an open without X-Uplink-Session-Duration, in seconds (600–86400, at most the session max).", Consumer: "pool.SetDuration (live)",
-		get: func(c *Config) string { return itoa(c.SessionDurationSec) }},
+		get: func(c *Config) string { return itoa(c.SessionDurationSec) }, set: func(c *Config, v string) { c.SessionDurationSec = atoi(v) }},
 	{Name: "sessionDurationMax", Env: "UPLINK_SESSION_DURATION_MAX", Kind: KindInt, Min: 600, Max: 86400, Default: "1800", Scope: ScopeLive,
 		Help: "Longest session any open may ask for, in seconds (600–86400).", Consumer: "pool.SetDurationMax (live)",
-		get: func(c *Config) string { return itoa(c.SessionDurationMax) }},
+		get: func(c *Config) string { return itoa(c.SessionDurationMax) }, set: func(c *Config, v string) { c.SessionDurationMax = atoi(v) }},
 	{Name: "sessionIdleGrace", Env: "UPLINK_SESSION_IDLE_GRACE_SECONDS", Kind: KindInt, Min: 60, Max: 3600, Default: "300", Scope: ScopeLive,
 		Help: "Close a pooled session with nothing in flight this long after its last use, in seconds (60–3600).", Consumer: "idle sweep, read every tick (live)",
-		get: func(c *Config) string { return itoa(c.SessionIdleGraceSec) }},
+		get: func(c *Config) string { return itoa(c.SessionIdleGraceSec) }, set: func(c *Config, v string) { c.SessionIdleGraceSec = atoi(v) }},
 	{Name: "forwardIdle", Env: "UPLINK_FORWARD_IDLE_SECONDS", Kind: KindInt, Min: 30, Max: 600, Default: "180", Scope: ScopeLive,
 		Help: "Default first-byte and idle timer of an inference call, in seconds (30–600).", Consumer: "inference timers, per request (live)",
-		get: func(c *Config) string { return itoa(c.ForwardIdleSec) }},
+		get: func(c *Config) string { return itoa(c.ForwardIdleSec) }, set: func(c *Config, v string) { c.ForwardIdleSec = atoi(v) }},
 	{Name: "logLevel", Env: "UPLINK_LOG_LEVEL", Kind: KindEnum, Options: logLevels, Default: "info", Scope: ScopeLive,
 		Help: "Uplink log level: debug, info, warn or error. Audit lines are always written.", Consumer: "slog.LevelVar (live)",
-		get: func(c *Config) string { return c.LogLevel }},
+		get: func(c *Config) string { return c.LogLevel }, set: func(c *Config, v string) { c.LogLevel = v }},
 
 	{Name: "sessionFailover", Env: "SESSION_FAILOVER", Kind: KindBool, Default: "true", Scope: ScopeRestart,
 		Help: "Move a model to another provider when the provider fails a prompt (true or false); false relays the provider's error. Takes effect after an Uplink restart.", Consumer: "api/openai.go (Config.SessionFailover)",
 		get: func(c *Config) string { return btoa(c.SessionFailover) }, set: func(c *Config, v string) { c.SessionFailover = atob(v) }},
-	{Name: "providerCooldown", Env: "UPLINK_PROVIDER_COOLDOWN_SECONDS", Kind: KindInt, Min: 0, Max: MaxProviderCooldownSec, Default: "600", Scope: ScopeRestart, envClamp: true,
+	{Name: "providerCooldown", Env: "UPLINK_PROVIDER_COOLDOWN_SECONDS", Kind: KindInt, Min: 0, Max: MaxProviderCooldownSec, Default: "600", Scope: ScopeRestart,
 		Help: "How long a failed provider is avoided for that model, in seconds (0–86400; 0 keeps no memory across requests). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderCooldown",
 		get: func(c *Config) string { return itoa(c.ProviderCooldownSec) }, set: func(c *Config, v string) { c.ProviderCooldownSec = atoi(v) }},
 	{Name: "providerExclude", Env: "UPLINK_PROVIDER_EXCLUDE", Kind: KindString, Default: "", Scope: ScopeRestart, check: ValidateProviderExclude,
@@ -192,7 +195,7 @@ func (d SettingDef) Validate(v string) (string, error) {
 		return btoa(b), nil
 	case KindEnum:
 		l := strings.ToLower(strings.TrimSpace(v))
-		if d.Env == "UPLINK_LOG_LEVEL" {
+		if d.Name == "logLevel" {
 			l = ParseLogLevel(l)
 		}
 		for _, o := range d.Options {
@@ -216,28 +219,30 @@ func (d SettingDef) Validate(v string) (string, error) {
 	return "", fmt.Errorf("%s cannot be set", d.Name)
 }
 
-// envPins reports whether the env value v pins the setting (env wins). A
-// string pins whenever it is set; others when FromEnv accepts the value.
-func (d SettingDef) envPins(v string) bool {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return false
-	}
-	switch d.Kind {
-	case KindString:
-		return true
-	case KindInt:
-		if d.envClamp {
-			n, err := strconv.Atoi(v)
-			return err == nil && n >= d.Min
+// applySettingDefaults sets every live and restart setting to its
+// default. FromEnv calls it; the saved values are applied on top.
+func applySettingDefaults(c *Config) {
+	for _, d := range Settings {
+		if d.Settable() && d.set != nil {
+			d.set(c, d.Default)
 		}
 	}
-	_, err := d.Validate(v)
-	return err == nil
 }
 
-// ApplyPersisted applies persisted ScopeRestart values (by console name)
-// that the environment does not pin. A value that no longer validates is
+// ignoredSettingEnv names the former environment variables of live and
+// restart settings that are still set (names only, never values).
+func ignoredSettingEnv() []string {
+	var out []string
+	for _, d := range Settings {
+		if d.Settable() && d.Env != "" && strings.TrimSpace(os.Getenv(d.Env)) != "" {
+			out = append(out, d.Env)
+		}
+	}
+	return out
+}
+
+// ApplyPersisted applies persisted ScopeRestart values (by console name).
+// A value that no longer validates is
 // skipped, and so is a persisted value for an env-only or router row
 // (never applied from the file); the returned notes (names only) go to the
 // ops audit stream.
@@ -253,7 +258,7 @@ func ApplyPersisted(c *Config, vals map[string]string) []string {
 			notes = append(notes, d.Name+" is set in .env only; persisted value ignored")
 			continue
 		}
-		if d.Scope != ScopeRestart || c.EnvPinned[d.Env] {
+		if d.Scope != ScopeRestart {
 			continue
 		}
 		v, err := d.Validate(raw)

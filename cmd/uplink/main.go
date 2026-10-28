@@ -29,7 +29,7 @@ import (
 var version = "dev"
 
 func main() {
-	// Live level (UPLINK_LOG_LEVEL or the persisted setting, S6); info
+	// Live level (the saved logLevel setting or its default, S6); info
 	// until the settings are resolved in api.NewServer.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: api.LogLevel})))
 	api.Version = version
@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
-	// Console settings that apply on start (env > persisted > default).
+	// Console settings that apply on start (saved > default).
 	config.ApplyPersisted(cfg, st.GetSettings().All())
 
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)

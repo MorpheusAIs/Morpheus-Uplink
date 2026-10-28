@@ -49,7 +49,7 @@ func (p *Pool) now() time.Time {
 	return time.Now()
 }
 
-// SetDurationMax sets UPLINK_SESSION_DURATION_MAX (seconds).
+// SetDurationMax sets the sessionDurationMax setting (seconds).
 func (p *Pool) SetDurationMax(sec int) {
 	p.mu.Lock()
 	p.durMax = sec

@@ -250,7 +250,7 @@ func (s *Server) handleSessionRelease(w http.ResponseWriter, r *http.Request) {
 func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID string, cl callLimits) (*pool.Lease, pool.AcquireResult, bool) {
 	lease, res, err := s.pool.Acquire(modelID, pool.AcquireOpts{KeyID: keyID, DurationSec: cl.durationSec})
 	if errors.Is(err, pool.ErrNoEligibleProvider) {
-		// Only providers excluded by UPLINK_PROVIDER_EXCLUDE serve the model.
+		// Only providers excluded by the providerExclude setting serve the model.
 		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")
 		return nil, res, false
 	}

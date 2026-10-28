@@ -24,8 +24,10 @@ type settingView struct {
 	Min     int      `json:"min,omitempty"`
 	Max     int      `json:"max,omitempty"`
 	Options []string `json:"options,omitempty"`
-	Source  string   `json:"source"` // env | persisted | default | router
-	Pinned  bool     `json:"pinned"` // set by environment: read-only here
+	Source  string   `json:"source"` // persisted | default (console rows); env | default (env-only rows); router
+	// Pinned is kept for the payload shape and is always false: console
+	// settings are not read from the environment.
+	Pinned bool `json:"pinned"`
 	// Scope: live | restart | router | env (see config.SettingScope).
 	Scope string `json:"scope"`
 	// Restart: "" (live), "uplink" or "router": what must restart.
@@ -52,11 +54,8 @@ func typedSetting(d config.SettingDef, v string) any {
 }
 
 // restartValue is the value a restart-scope setting will have on the next
-// start (env > persisted > default) and its source.
+// start (persisted > default) and its source.
 func (s *Server) restartValue(d config.SettingDef, st store.Settings) (string, string) {
-	if s.cfg.EnvPinned[d.Env] {
-		return d.Effective(s.cfg), "env"
-	}
 	if raw, ok := st.Value(d.Name); ok {
 		if v, err := d.Validate(raw); err == nil {
 			return v, "persisted"
@@ -91,13 +90,12 @@ func (s *Server) settingsView() map[string]any {
 			v.Effective, v.PendingRestart = typedSetting(d, eff), val != eff
 		case config.ScopeEnvOnly:
 			v.Value, v.Restart, v.Source = typedSetting(d, d.Effective(s.cfg)), "uplink", "default"
-			if s.cfg.EnvPinned[d.Env] {
+			if s.cfg.EnvOnlySet[d.Env] {
 				v.Source = "env"
 			}
 		case config.ScopeRouter:
 			v.Value, v.Source, v.Restart = nil, "router", "router"
 		}
-		v.Pinned = v.Source == "env"
 		out = append(out, v)
 	}
 	return map[string]any{"settings": out}
@@ -170,10 +168,6 @@ func (s *Server) handleRegistrySet(w http.ResponseWriter, r *http.Request, name 
 	}
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
-	if s.cfg.EnvPinned[d.Env] {
-		http.Error(w, "set by environment ("+d.Env+")", http.StatusConflict)
-		return
-	}
 	oldStr, _ := s.restartValue(d, s.store.GetSettings())
 	if err := s.store.UpdateSettings(func(st *store.Settings) error { return st.SetValue(d.Name, val) }); err != nil {
 		http.Error(w, "save failed", http.StatusInternalServerError)
@@ -249,8 +243,7 @@ var reSafeName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 // handleSettingsImport replaces the persisted settings with the file's.
 // Every value is checked first (unknown, secret, read-only, wrong type or
 // out of range refuses the whole file); nothing is written on error. Live
-// settings apply at once; restart-scope ones on the next start. A value
-// the environment pins is stored but the env value still wins.
+// settings apply at once; restart-scope ones on the next start.
 func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 	if !s.requireStepUp(w, r) {
 		return
@@ -276,7 +269,6 @@ func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(names)
 	vals := map[string]string{}
-	var pinned []string
 	for _, k := range names {
 		d, code, msg := registryLookup(k)
 		if code != 0 {
@@ -297,9 +289,6 @@ func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		vals[d.Name] = v
-		if s.cfg.EnvPinned[d.Env] {
-			pinned = append(pinned, d.Name)
-		}
 	}
 	var cand store.Settings
 	for k, v := range vals {
@@ -310,7 +299,7 @@ func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rs, _ := resolveSettings(s.cfg, cand)
-	if def, ok := vals["sessionDurationDefault"]; ok && !s.cfg.EnvPinned["SESSION_DURATION_SECONDS"] {
+	if def, ok := vals["sessionDurationDefault"]; ok {
 		if n, _ := strconv.Atoi(def); n > rs.ints["sessionDurationMax"] {
 			http.Error(w, "sessionDurationDefault must not exceed sessionDurationMax", http.StatusBadRequest)
 			return
@@ -329,6 +318,7 @@ func (s *Server) handleSettingsImport(w http.ResponseWriter, r *http.Request) {
 	s.applySettings()
 	s.auditAdmin(r, "settings_import", strconv.Itoa(len(vals))+" settings: "+strings.Join(names, ","))
 	view := s.settingsView()
-	view["pinned"] = pinned
+	// Kept for the response shape; nothing is set by the environment.
+	view["pinned"] = []string(nil)
 	writeJSON(w, http.StatusOK, view)
 }

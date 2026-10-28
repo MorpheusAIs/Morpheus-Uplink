@@ -23,7 +23,10 @@ func intp(n int) *int { return &n }
 // s6Env sets the required envs, then the given ones, and builds a config.
 func s6Config(t *testing.T, env map[string]string) *config.Config {
 	t.Helper()
-	for _, k := range []string{"SESSION_DURATION_SECONDS", "UPLINK_SESSION_DURATION_MAX", "UPLINK_SESSION_IDLE_GRACE_SECONDS", "UPLINK_FORWARD_IDLE_SECONDS", "UPLINK_LOG_LEVEL", "UPLINK_DEV_HTTP", "COOKIE_CONTENT"} {
+	for _, d := range config.Settings {
+		t.Setenv(d.Env, "")
+	}
+	for _, k := range []string{"UPLINK_DEV_HTTP", "COOKIE_CONTENT"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("ADMIN_PASSWORD", "test-admin-pass-ok")
@@ -54,22 +57,22 @@ func viewOf(t *testing.T, s *Server, name string) settingView {
 	return settingView{}
 }
 
-// S6: precedence matrix (env set / persisted set / both / neither) for
-// every setting: env > persisted > default.
+// Precedence matrix (former env variable set / saved / both / neither) for
+// every live setting: saved > default; the environment is ignored.
 func TestS6PrecedenceMatrix(t *testing.T) {
 	defer LogLevel.Set(slog.LevelInfo)
 	type row struct {
 		name, env, envVal string
 		persist           func(*store.Settings)
-		envWant, perWant  any
+		perWant           any
 		def               any
 	}
 	rows := []row{
-		{"sessionDurationDefault", "SESSION_DURATION_SECONDS", "900", func(s *store.Settings) { s.SessionDurationDefault = intp(1200) }, 900, 1200, 600},
-		{"sessionDurationMax", "UPLINK_SESSION_DURATION_MAX", "3600", func(s *store.Settings) { s.SessionDurationMax = intp(2400) }, 3600, 2400, 1800},
-		{"sessionIdleGrace", "UPLINK_SESSION_IDLE_GRACE_SECONDS", "120", func(s *store.Settings) { s.SessionIdleGrace = intp(900) }, 120, 900, 300},
-		{"forwardIdle", "UPLINK_FORWARD_IDLE_SECONDS", "60", func(s *store.Settings) { s.ForwardIdle = intp(300) }, 60, 300, 180},
-		{"logLevel", "UPLINK_LOG_LEVEL", "warn", func(s *store.Settings) { s.LogLevel = "debug" }, "warn", "debug", "info"},
+		{"sessionDurationDefault", "SESSION_DURATION_SECONDS", "900", func(s *store.Settings) { s.SessionDurationDefault = intp(1200) }, 1200, 600},
+		{"sessionDurationMax", "UPLINK_SESSION_DURATION_MAX", "3600", func(s *store.Settings) { s.SessionDurationMax = intp(2400) }, 2400, 1800},
+		{"sessionIdleGrace", "UPLINK_SESSION_IDLE_GRACE_SECONDS", "120", func(s *store.Settings) { s.SessionIdleGrace = intp(900) }, 900, 300},
+		{"forwardIdle", "UPLINK_FORWARD_IDLE_SECONDS", "60", func(s *store.Settings) { s.ForwardIdle = intp(300) }, 300, 180},
+		{"logLevel", "UPLINK_LOG_LEVEL", "warn", func(s *store.Settings) { s.LogLevel = "debug" }, "debug", "info"},
 	}
 	for _, r := range rows {
 		for _, mode := range []string{"neither", "env", "persisted", "both", "persisted-out-of-range"} {
@@ -97,12 +100,10 @@ func TestS6PrecedenceMatrix(t *testing.T) {
 			v := viewOf(t, srv, r.name)
 			want, src := r.def, "default"
 			switch mode {
-			case "env", "both":
-				want, src = r.envWant, "env"
-			case "persisted":
+			case "persisted", "both":
 				want, src = r.perWant, "persisted"
 			}
-			if v.Value != want || v.Source != src || v.Pinned != (src == "env") {
+			if v.Value != want || v.Source != src || v.Pinned {
 				t.Errorf("%s/%s: value %v source %s pinned %v; want %v %s", r.name, mode, v.Value, v.Source, v.Pinned, want, src)
 			}
 		}
@@ -133,14 +134,12 @@ func (e *failoverEnv) admin(t *testing.T, method, path, body string) (int, strin
 }
 
 // S6: changes apply live, persist (0640, atomic), are audited old→new,
-// are validated with the env bounds, and env-pinned fields are refused.
+// are validated with the registry bounds.
 func TestS6SettingsAPI(t *testing.T) {
 	defer LogLevel.Set(slog.LevelInfo)
 	m := newFakeMarket(t, provA)
 	e := newFailoverEnv(t, m, func(c *config.Config) {
 		c.MasterKeyAdmin = true
-		c.EnvPinned = map[string]bool{"UPLINK_SESSION_IDLE_GRACE_SECONDS": true}
-		c.SessionIdleGraceSec = 120
 	})
 	if code, body := e.admin(t, "GET", "/admin/settings", ""); code != 200 || !strings.Contains(body, `"name":"forwardIdle"`) {
 		t.Fatalf("GET %d %s", code, body)
@@ -163,7 +162,7 @@ func TestS6SettingsAPI(t *testing.T) {
 	if e.srv.pool.DurationSec() != 900 || e.srv.pool.DurationMax() != 3600 {
 		t.Fatalf("pool %d/%d", e.srv.pool.DurationSec(), e.srv.pool.DurationMax())
 	}
-	// Bounds, cross-field, unknown, pinned.
+	// Bounds, cross-field, unknown.
 	for _, c := range []struct {
 		body string
 		code int
@@ -177,14 +176,13 @@ func TestS6SettingsAPI(t *testing.T) {
 		{`{"name":"adminSessionIdle","value":60}`, 400},
 		{`{"name":"MASTER_KEY_ADMIN","value":1}`, 400},
 		{`{"name":"forwardIdle","value":240,"extra":1}`, 400},
-		{`{"name":"sessionIdleGrace","value":600}`, 409},
 	} {
 		if code, body := e.admin(t, "POST", "/admin/settings", c.body); code != c.code {
 			t.Errorf("%s: %d %s", c.body, code, body)
 		}
 	}
-	if e.SessionIdleGrace() != 120 {
-		t.Fatal("pinned grace changed")
+	if e.SessionIdleGrace() != 300 {
+		t.Fatal("refused changes moved the grace")
 	}
 	// Persisted beside AuthState in the state file, mode 0640.
 	path := filepath.Join(e.srv.cfg.DataDir, "uplink-state.json")
@@ -286,19 +284,20 @@ func TestS6AdminTimeoutsAbsent(t *testing.T) {
 	}
 }
 
-// MUST-1: the duration cap is never raised. An env default above the env
-// max, or a persisted default above an env-pinned max, is clamped down to
-// the max (with a warning and an ops note); the pool opens at most the max.
+// MUST-1: the duration cap is never raised. A saved default above the
+// (saved or default) max is clamped down to the max (with a warning and an
+// ops note); a former env variable is ignored.
 func TestS6DurationCapNeverRaised(t *testing.T) {
 	defer LogLevel.Set(slog.LevelInfo)
 	cases := []struct {
 		name    string
 		env     map[string]string
 		persist func(*store.Settings)
+		max     int
 	}{
-		{"env-over-env", map[string]string{"SESSION_DURATION_SECONDS": "7200", "UPLINK_SESSION_DURATION_MAX": "1800"}, nil},
-		{"persisted-over-env-pin", map[string]string{"UPLINK_SESSION_DURATION_MAX": "1800"}, func(s *store.Settings) { s.SessionDurationDefault = intp(3600) }},
-		{"env-default-over-persisted-max", map[string]string{"SESSION_DURATION_SECONDS": "1800"}, func(s *store.Settings) { s.SessionDurationMax = intp(900) }},
+		{"env-ignored", map[string]string{"SESSION_DURATION_SECONDS": "7200", "UPLINK_SESSION_DURATION_MAX": "86400"}, nil, 1800},
+		{"saved-default-over-default-max", nil, func(s *store.Settings) { s.SessionDurationDefault = intp(3600) }, 1800},
+		{"saved-default-over-saved-max", nil, func(s *store.Settings) { s.SessionDurationDefault = intp(1800); s.SessionDurationMax = intp(900) }, 900},
 	}
 	for _, c := range cases {
 		cfg := s6Config(t, c.env)
@@ -311,7 +310,7 @@ func TestS6DurationCapNeverRaised(t *testing.T) {
 		}
 		srv := NewServer(cfg, st, nil, nil, nil, nil)
 		mx := srv.durationMax()
-		if c.name != "env-default-over-persisted-max" && mx != 1800 {
+		if mx != c.max {
 			t.Errorf("%s: max raised to %d", c.name, mx)
 		}
 		if srv.durationDefault() > mx {
