@@ -85,6 +85,15 @@ type Pool struct {
 	chainOpen    []ChainSession
 	chainFetched time.Time
 	rehydrateErr string
+	// lastScanLog: the counts the last "rehydrated" log line reported; the
+	// line repeats only when they change (status polls rescan often).
+	lastScanLog *scanCounts
+}
+
+// scanCounts is what the "rehydrated" log line reports.
+type scanCounts struct {
+	open, adopted int
+	wallet        string
 }
 
 // ChainSession is an open (ClosedAt==0) on-chain session for display.
@@ -393,11 +402,16 @@ func (p *Pool) rehydrate(force bool) error {
 	p.chainOpen = display
 	p.chainFetched = now
 	p.rehydrateErr = ""
+	counts := scanCounts{open: len(open), adopted: adopted, wallet: addr}
+	changed := p.lastScanLog == nil || *p.lastScanLog != counts
+	p.lastScanLog = &counts
 	p.chainMu.Unlock()
 	p.stateKnown.Store(true)
 
-	log.Printf("pool: rehydrated %d open on-chain session(s), adopted %d into reuse pool (wallet %s)",
-		len(open), adopted, addr)
+	if changed {
+		log.Printf("pool: rehydrated %d open on-chain session(s), adopted %d into reuse pool (wallet %s)",
+			len(open), adopted, addr)
+	}
 	return nil
 }
 
