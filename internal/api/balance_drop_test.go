@@ -58,3 +58,30 @@ func TestBalanceDropSingleNeutralEvent(t *testing.T) {
 		t.Fatalf("ETH drop events: %+v", eth)
 	}
 }
+
+// The stdout audit line of an event with no reason code carries the actor
+// and the message, so a balance_drop line shows the amount; a line with a
+// reason keeps the reason and leaves the message out.
+func TestAuditLogLineActorAndMessage(t *testing.T) {
+	logs := captureSlog(t)
+	a := &auditSink{ring: NewAuditLog(10)}
+	a.WriteAudit(AuditStreamHighValue, AuditEvent{Kind: balanceDropKind, Actor: "router-wallet",
+		Message: "MOR balance decreased by 1.5 MOR " + morDropNote})
+	a.WriteAudit(AuditStreamOps, AuditEvent{Kind: "admin_login", Actor: "10.0.0.1", IP: "10.0.0.1",
+		Result: "fail", Message: "admin_login fail bad_password", reason: "bad_password"})
+	var drop, login string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		switch {
+		case strings.Contains(l, "event="+balanceDropKind):
+			drop = l
+		case strings.Contains(l, "event=admin_login"):
+			login = l
+		}
+	}
+	if !strings.Contains(drop, "actor=router-wallet") || !strings.Contains(drop, `message="MOR balance decreased by 1.5 MOR`) {
+		t.Fatalf("balance_drop line lacks actor or amount: %q", drop)
+	}
+	if !strings.Contains(login, "reason=bad_password") || strings.Contains(login, "message=") || strings.Contains(login, "actor=") {
+		t.Fatalf("reason line: %q", login)
+	}
+}
