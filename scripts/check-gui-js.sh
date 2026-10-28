@@ -682,13 +682,6 @@ if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('af
 if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
 if (ctl(str).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3') fail('providerExclude placeholder: ' + ctl(str).placeholder);
 if (note(str) !== 'saved') fail('providerExclude note: ' + note(str));
-{
-  const empty = [Object.assign({}, fixture[3], { value: '', source: 'default' })];
-  renderSettings(empty);
-  const r = box.children[0];
-  if (ctl(r).value !== '' || ctl(r).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3' || note(r) !== 'default (none)') fail('empty providerExclude: ' + ctl(r).placeholder + ' / ' + note(r));
-  renderSettings(fixture);
-}
 if (!/href="https:\/\/github\.com\/MorpheusAIs\/Morpheus-Uplink\/blob\/main\/docs\/06-developers\.md#environment-variables"/.test(html.slice(html.indexOf('id="tab-settings"'), html.indexOf('id="tab-playground"')))) fail('Settings needs one link to the .env reference');
 // One set of values: no edits → nothing to save; edits are collected per
 // row (a row put back to its default is a reset).
@@ -718,6 +711,13 @@ const sec = html.slice(html.indexOf('id="tab-security"'), html.indexOf('id="tab-
 if (sec.includes('settingsList')) fail('settings must leave the Security tab');
 if (!/stepUpFetch\('\/admin\/settings\/export'/.test(src) || !/stepUpFetch\('\/admin\/settings\/import'/.test(src)) fail('export/import must use the step-up retry');
 if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)/.test(extract('stepUpFetch'))) fail('stepUpFetch must ask for a step-up');
+// Empty provider exclusions: format placeholder, default note kept.
+{
+  const empty = [Object.assign({}, fixture[3], { value: '', source: 'default' })];
+  renderSettings(empty);
+  const r = box.children[0];
+  if (ctl(r).value !== '' || ctl(r).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3' || note(r) !== 'default (none)') fail('empty providerExclude: ' + ctl(r).placeholder + ' / ' + note(r));
+}
 console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, only settable rows shown (none read-only), .env reference link, one Save / Cancel changes / Use defaults bar, Restart Uplink confirms and steps up, export and import behind step-up');
 NODE
 
