@@ -16,7 +16,7 @@ func TestA2RetryAfterShortestEligible(t *testing.T) {
 	a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
 	m := newFakeMarket(t, a40, b40, c40)
 	e := newFailoverEnv(t, m, nil)
-	e.srv.pool.SetProviderExclude(map[string][]string{testModelID: {a40}}, nil)
+	e.srv.pool.SetProviderExclude([]string{a40})
 	e.srv.pool.SetProviderCooldown(30 * time.Second)
 	e.srv.pool.MarkCooling(testModelID, a40) // excluded: ignored
 	e.srv.pool.SetProviderCooldown(300 * time.Second)

@@ -4,20 +4,17 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/config"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
@@ -290,26 +287,110 @@ func TestS4OwnCancelAndTimeoutsDoNotCool(t *testing.T) {
 	}
 }
 
-// S4: the providerExclude setting keeps opens off a provider, by id or name;
-// bad entries are ignored.
+// S4: the providerExclude setting keeps opens off a provider for every
+// model, whether the client sends the name or the id; the list is trimmed,
+// lowercased and deduped, and bad entries are ignored at boot.
 func TestS4ProviderExcludeConfig(t *testing.T) {
 	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
-	got := config.ParseProviderExclude("test-model=" + a40 + ",nope ; " + testModelID + "=" + b40 + ";bad;0x12=" + a40 + ";=" + a40)
-	if len(got) != 2 || len(got["test-model"]) != 1 || got["test-model"][0] != a40 || got[testModelID][0] != b40 {
+	got := config.ParseProviderExclude(" 0x" + strings.Repeat("A", 40) + " ,nope,," + a40 + ",0x12")
+	if len(got) != 1 || got[0] != a40 {
 		t.Fatalf("parsed %v", got)
 	}
-	for _, key := range []string{"test-model", testModelID} {
+	for _, model := range []string{"test-model", testModelID} {
 		m := newFakeMarket(t, a40, b40)
 		e := newFailoverEnv(t, m, nil)
-		e.srv.pool.SetProviderExclude(map[string][]string{key: {a40}}, e.srv.catalog.NameByID)
-		_, _ = e.srv.catalog.Resolve("test-model") // load the catalog for the name lookup
-		if code, _ := e.chat(t, false); code != 200 {
-			t.Fatalf("%s: chat %d", key, code)
+		e.srv.pool.SetProviderExclude(got)
+		if code, body := chatModel(t, e, model); code != 200 {
+			t.Fatalf("%s: chat %d %s", model, code, body)
 		}
 		opens, _ := m.snapshot()
 		if len(opens) != 1 || opens[0].provider != b40 {
-			t.Fatalf("%s: opens %+v", key, opens)
+			t.Fatalf("%s: opens %+v", model, opens)
 		}
+	}
+}
+
+// S4: the model list leaves out excluded providers: prices come from the
+// bids outside the list, and a model only excluded providers offer is
+// hidden from /v1/models and the console picker; a request for it gets 503
+// no_eligible_provider and nothing opens.
+func TestS4ProviderExcludeModelList(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	goneID := "0x" + strings.Repeat("e", 64)
+	bid := func(prov, pps string, mor float64) string {
+		return `{"providerId":"` + prov + `","status":"healthy","pricePerSecond":"` + pps + `","priceMorPerHour":` + strconv.FormatFloat(mor, 'f', -1, 64) + `}`
+	}
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[` +
+			`{"Name":"test-model","Id":"` + testModelID + `","Tags":["chat"],"bidDetail":[` + bid(a40, "50", 0.5) + `,` + bid(b40, "100", 1) + `]},` +
+			`{"Name":"gone-model","Id":"` + goneID + `","Tags":["chat"],"bidDetail":[` + bid(a40, "10", 0.1) + `]}]}`))
+	}))
+	t.Cleanup(feed.Close)
+	m := newFakeMarket(t, a40, b40)
+	e := newFailoverEnv(t, m, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
+	e.srv.pool.SetProviderExclude([]string{a40})
+	e.srv.catalog.SetProviderExclude([]string{a40})
+
+	type entry struct {
+		ID       string `json:"id"`
+		Morpheus struct {
+			BlockchainID      string  `json:"blockchainId"`
+			PriceMorPerHour   float64 `json:"priceMorPerHour"`
+			PricePerSecondWei string  `json:"pricePerSecondWei"`
+		} `json:"morpheus"`
+	}
+	check := func(where, body string) {
+		t.Helper()
+		var list struct{ Data []entry }
+		if err := json.Unmarshal([]byte(body), &list); err != nil {
+			t.Fatalf("%s: %v %s", where, err, body)
+		}
+		if len(list.Data) != 1 || list.Data[0].Morpheus.BlockchainID != testModelID {
+			t.Fatalf("%s: listed %+v, want only test-model", where, list.Data)
+		}
+		if p := list.Data[0].Morpheus; p.PriceMorPerHour != 1 || p.PricePerSecondWei != "100" {
+			t.Fatalf("%s: price %+v, want the bid outside the list", where, p)
+		}
+		if strings.Contains(body, goneID) || strings.Contains(body, a40) {
+			t.Fatalf("%s: excluded model or provider shown: %s", where, body)
+		}
+	}
+	req, _ := http.NewRequest(http.MethodGet, e.ts.URL+"/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+e.key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("/v1/models %d %s", resp.StatusCode, raw)
+	}
+	check("/v1/models", string(raw))
+	code, body := e.admin(t, "GET", "/admin/models", "")
+	if code != 200 {
+		t.Fatalf("/admin/models %d %s", code, body)
+	}
+	check("/admin/models", body)
+
+	if code, body := chatModel(t, e, "test-model"); code != 200 {
+		t.Fatalf("listed model: %d %s", code, body)
+	}
+	if opens, _ := m.snapshot(); len(opens) != 1 || opens[0].provider != b40 {
+		t.Fatalf("opens %+v", opens)
+	}
+
+	// The hidden model's name still resolves; with only the excluded
+	// provider on the market the request is refused and nothing opens.
+	m2 := newFakeMarket(t, a40)
+	e2 := newFailoverEnv(t, m2, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
+	e2.srv.pool.SetProviderExclude([]string{a40})
+	e2.srv.catalog.SetProviderExclude([]string{a40})
+	if code, body := chatModel(t, e2, "gone-model"); code != 503 || !strings.Contains(body, "no_eligible_provider") || strings.Contains(body, a40) {
+		t.Fatalf("hidden model: %d %s", code, body)
+	}
+	if opens, _ := m2.snapshot(); len(opens) != 0 {
+		t.Fatalf("opened %+v", opens)
 	}
 }
 
@@ -347,7 +428,7 @@ func TestS4FallbackRules(t *testing.T) {
 		// A by-model open on the stub lands on the first provider.
 		e := newFailoverEnv(t, m, nil)
 		if len(c.exclude) > 0 {
-			e.srv.pool.SetProviderExclude(map[string][]string{testModelID: c.exclude}, nil)
+			e.srv.pool.SetProviderExclude(c.exclude)
 		}
 		for _, p := range c.cooling {
 			e.srv.pool.MarkCooling(testModelID, p)
@@ -425,7 +506,7 @@ func TestS4BidsUnreadableFallback(t *testing.T) {
 		m.bidsFail = true
 		e := newFailoverEnv(t, m, nil)
 		if len(c.exclude) > 0 {
-			e.srv.pool.SetProviderExclude(map[string][]string{testModelID: c.exclude}, nil)
+			e.srv.pool.SetProviderExclude(c.exclude)
 		}
 		for _, p := range c.cooling {
 			e.srv.pool.MarkCooling(testModelID, p)
@@ -468,53 +549,6 @@ func TestS4BidsUnreadableFallback(t *testing.T) {
 	}
 }
 
-// Security gate SHOULD-1 and the console-warning NIT: a name-keyed
-// exclusion must not fail open when the catalog has no name for the id
-// (cold boot, model feed down, client sends the raw 0x id). The open is
-// refused with 503 and no ids until the name resolves, the status reports
-// the refusal while it lasts, and then the exclusion applies.
-func TestS4NameKeyedExclusionFailsClosed(t *testing.T) {
-	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
-	var feedUp atomic.Bool
-	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !feedUp.Load() {
-			http.Error(w, "down", http.StatusBadGateway)
-			return
-		}
-		_, _ = w.Write([]byte(`{"models":[{"Name":"test-model","Id":"` + testModelID + `","Tags":["chat"]}]}`))
-	}))
-	t.Cleanup(feed.Close)
-	m := newFakeMarket(t, a40, b40)
-	e := newFailoverEnv(t, m, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
-	e.srv.catalog.SetRetryAfter(0) // the feed comes back within the test
-	e.srv.pool.SetProviderExclude(map[string][]string{"test-model": {a40}}, e.srv.catalog.NameByID)
-	chatID := func() (int, string) { t.Helper(); return chatModel(t, e, testModelID) }
-	code, body := chatID()
-	if code != 503 || !strings.Contains(body, "no_eligible_provider") || strings.Contains(body, a40) || strings.Contains(body, b40) {
-		t.Fatalf("feed down: %d %s", code, body)
-	}
-	if opens, _ := m.snapshot(); len(opens) != 0 {
-		t.Fatalf("feed down: opened %+v", opens)
-	}
-	// The console status reports the refusal (a count, no ids) while it lasts.
-	unresolved := func() string { t.Helper(); n, _ := statusRefusals(t, e); return n }
-	if n := unresolved(); n != "1" {
-		t.Fatalf("status exclusionsUnresolved=%s while refusing, want 1", n)
-	}
-	feedUp.Store(true)
-	if code, body := chatID(); code != 200 {
-		t.Fatalf("feed up: %d %s", code, body)
-	}
-	if n := unresolved(); n != "0" {
-		t.Fatalf("status exclusionsUnresolved=%s after the name resolved, want 0", n)
-	}
-	for _, o := range func() []openRec { o, _ := m.snapshot(); return o }() {
-		if o.provider == a40 {
-			t.Fatal("opened on the name-keyed excluded provider")
-		}
-	}
-}
-
 // chatModel sends a chat completion for the model string as given.
 func chatModel(t *testing.T, e *failoverEnv, model string) (int, string) {
 	t.Helper()
@@ -529,62 +563,4 @@ func chatModel(t *testing.T, e *failoverEnv, model string) (int, string) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(raw)
-}
-
-// statusRefusals reads exclusionsUnresolved and its capped flag from the
-// console status.
-func statusRefusals(t *testing.T, e *failoverEnv) (string, string) {
-	t.Helper()
-	code, body := e.admin(t, "GET", "/admin/status", "")
-	if code != 200 {
-		t.Fatalf("status %d", code)
-	}
-	var st map[string]any
-	if err := json.Unmarshal([]byte(body), &st); err != nil {
-		t.Fatal(err)
-	}
-	return fmt.Sprint(st["exclusionsUnresolved"]), fmt.Sprint(st["exclusionsUnresolvedCapped"])
-}
-
-// Security gate SHOULD-2: one client key sending many distinct model ids
-// while the feed is down at boot. Every request is still refused with 503
-// and no ids; the status count stops at the cap with the capped flag set;
-// ill-formed ids are not counted; and neither the requests nor the status
-// polls turn into a feed fetch each (the stub feed counts fetches).
-func TestS4RefusalRecordCappedNoFetchStorm(t *testing.T) {
-	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
-	var fetches atomic.Int32
-	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetches.Add(1)
-		http.Error(w, "down", http.StatusBadGateway)
-	}))
-	t.Cleanup(feed.Close)
-	m := newFakeMarket(t, a40, b40)
-	e := newFailoverEnv(t, m, func(c *config.Config) { c.ActiveModelsURL = feed.URL })
-	e.srv.pool.SetProviderExclude(map[string][]string{"test-model": {a40}}, e.srv.catalog.NameByID)
-	start := fetches.Load()
-
-	for i := 0; i < pool.MaxUnresolvedRefusals+20; i++ {
-		id := fmt.Sprintf("0x%064x", i+1)
-		if code, body := chatModel(t, e, id); code != 503 || !strings.Contains(body, "no_eligible_provider") || strings.Contains(body, "0x") {
-			t.Fatalf("id %d: %d %s", i, code, body)
-		}
-	}
-	for _, bad := range []string{"0x12", "0x" + strings.Repeat("z", 64), "0x" + strings.Repeat("a", 70)} {
-		if code, _ := chatModel(t, e, bad); code == 200 {
-			t.Fatalf("ill-formed id %q served", bad)
-		}
-	}
-	for i := 0; i < 5; i++ { // the Status tab polls
-		n, capped := statusRefusals(t, e)
-		if n != fmt.Sprint(pool.MaxUnresolvedRefusals) || capped != "true" {
-			t.Fatalf("status poll %d: exclusionsUnresolved=%s capped=%s", i, n, capped)
-		}
-	}
-	if got := fetches.Load() - start; got > 1 {
-		t.Fatalf("feed fetched %d times for %d requests and 5 status polls, want at most 1", got, pool.MaxUnresolvedRefusals+23)
-	}
-	if opens, _ := m.snapshot(); len(opens) != 0 {
-		t.Fatalf("opened %d sessions", len(opens))
-	}
 }

@@ -180,6 +180,8 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 		`{"name":"auditRetentionDays","value":"many"}`,
 		`{"name":"sessionFailover","value":"maybe"}`,
 		`{"name":"providerExclude","value":"m1=0x12"}`,
+		`{"name":"providerExclude","value":"0x12"}`,
+		`{"name":"providerExclude","value":"0x` + strings.Repeat("a", 40) + `,nope"}`,
 		`{"name":"activeModelsUrl","value":"http://feed.example/m.json"}`,
 		`{"name":"webPublicUrl","value":"http://console.example"}`,
 		`{"name":"auditRetentionDays","value":{"n":1}}`,
@@ -196,7 +198,7 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 	if all := e.st.GetSettings().All(); len(all) != 0 {
 		t.Fatalf("refused values stored: %v", all)
 	}
-	for _, b := range []string{`{"name":"auditRetentionDays","value":400}`, `{"name":"sessionFailover","value":false}`, `{"name":"providerExclude","value":"m1=0x` + strings.Repeat("a", 40) + `"}`, `{"name":"housekeeping","value":"false"}`, `{"name":"housekeeping","reset":true}`} {
+	for _, b := range []string{`{"name":"auditRetentionDays","value":400}`, `{"name":"sessionFailover","value":false}`, `{"name":"providerExclude","value":"0x` + strings.Repeat("a", 40) + `"}`, `{"name":"housekeeping","value":"false"}`, `{"name":"housekeeping","reset":true}`} {
 		if code, body := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 200 {
 			t.Fatalf("%s: %d %s", b, code, body)
 		}
@@ -223,7 +225,7 @@ func TestSettingsRestartScopePersists(t *testing.T) {
 	cfg2 := s6Config(t, nil)
 	cfg2.DataDir = e.cfg.DataDir
 	config.ApplyPersisted(cfg2, st2.GetSettings().All())
-	if cfg2.AuditRetentionDays != 400 || cfg2.SessionFailover || !cfg2.Housekeeping || len(cfg2.ProviderExclude["m1"]) != 1 {
+	if cfg2.AuditRetentionDays != 400 || cfg2.SessionFailover || !cfg2.Housekeeping || len(cfg2.ProviderExclude) != 1 {
 		t.Fatalf("restart did not apply: %+v", cfg2)
 	}
 	srv2 := NewServer(cfg2, st2, nil, nil, nil, nil)
@@ -371,7 +373,7 @@ func TestSettingsFileAuth(t *testing.T) {
 // above max) is refused whole and changes nothing.
 func TestSettingsExportImport(t *testing.T) {
 	e := newSettingsEnv(t, nil, nil)
-	for _, b := range []string{`{"name":"forwardIdle","value":240}`, `{"name":"auditRetentionDays","value":400}`, `{"name":"logLevel","value":"warn"}`, `{"name":"providerExclude","value":"m1=0x` + strings.Repeat("a", 40) + `"}`} {
+	for _, b := range []string{`{"name":"forwardIdle","value":240}`, `{"name":"auditRetentionDays","value":400}`, `{"name":"logLevel","value":"warn"}`, `{"name":"providerExclude","value":"0x` + strings.Repeat("a", 40) + `"}`} {
 		if code, _ := e.do(t, nil, "POST", "/admin/settings", b, nil); code != 200 {
 			t.Fatalf("%s: %d", b, code)
 		}
@@ -514,5 +516,33 @@ func TestSettingsSetRestartNeedsStepUp(t *testing.T) {
 	}
 	if v, _ := e.st.GetSettings().Value("auditRetentionDays"); v != "120" {
 		t.Fatalf("saved %q", v)
+	}
+}
+
+// providerExclude is a flat address list: a save stores it lowercase,
+// deduped and sorted, and a value in the former per-model form is refused
+// with the message to re-enter it (nothing is converted or saved).
+func TestSettingsProviderExcludeFlatList(t *testing.T) {
+	e := newSettingsEnv(t, nil, nil)
+	a, b := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	for _, old := range []string{"m1=" + a, "m1=" + a + "; m2=" + b, a + ";" + b} {
+		code, body := e.do(t, nil, "POST", "/admin/settings", `{"name":"providerExclude","value":"`+old+`"}`, nil)
+		if code != 400 || !strings.Contains(body, "format changed") || !strings.Contains(body, "re-enter it on the Settings tab") || strings.Contains(body, a) {
+			t.Fatalf("%q: %d %s", old, code, body)
+		}
+	}
+	if v := e.view(t)["providerExclude"]; v.Source != "default" || v.Value != "" {
+		t.Fatalf("old form saved: %+v", v)
+	}
+	in := " 0x" + strings.Repeat("B", 40) + " , " + a + ",," + strings.ToUpper(a[2:3]) + "," + b
+	if code, body := e.do(t, nil, "POST", "/admin/settings", `{"name":"providerExclude","value":"`+in+`"}`, nil); code != 400 {
+		t.Fatalf("bad entry accepted: %d %s", code, body)
+	}
+	in = " 0x" + strings.Repeat("B", 40) + " , " + a + ",," + b
+	if code, body := e.do(t, nil, "POST", "/admin/settings", `{"name":"providerExclude","value":"`+in+`"}`, nil); code != 200 {
+		t.Fatalf("save: %d %s", code, body)
+	}
+	if v := e.view(t)["providerExclude"]; v.Source != "persisted" || v.Value != a+","+b {
+		t.Fatalf("saved %+v, want %q", v, a+","+b)
 	}
 }

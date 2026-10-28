@@ -918,7 +918,6 @@
         <div class="sys-line" id="stats" role="status"></div>
         <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
         <div class="callout warn hidden" id="originWarn" role="alert"></div>
-        <div class="callout warn hidden" id="exclusionsWarn" role="alert"></div>
         <div class="tiles-head">
           <span data-copy="tilesHead"></span>
           <span class="tip" tabindex="0" data-tip-key="tilesShared">&#9432;</span>
@@ -1379,10 +1378,6 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
 // Status page and 2FA text. Text only: a copy pass edits these strings and
 // nothing else. Functions take the values they print.
 const UI_COPY = {
-  // Name-keyed provider exclusions not resolved yet: opens refused.
-  exclusionsUnresolved: (n, capped) => 'Opens are being refused for ' + n + (capped ? ' or more' : '') + (n === 1 && !capped ? ' model' : ' models')
-    + ': the providerExclude setting has entries keyed by model name and the model catalog has no name for '
-    + (n === 1 ? 'it' : 'them') + ' yet (is the model feed reachable?). Requests get 503 until the names resolve.',
   // Admin changes are accepted only from WEB_PUBLIC_URL.
   originMismatch: (here, want) => 'This page is open at ' + here + ', but WEB_PUBLIC_URL is ' + want
     + '. Admin changes (keys, 2FA, sessions) are refused until they match: set WEB_PUBLIC_URL to the address you open (scheme and host) and redeploy.',
@@ -1754,7 +1749,7 @@ function renderSettings(list) {
       input = document.createElement('input');
       input.type = 'text';
       input.value = s.value == null ? '' : String(s.value);
-      if (s.name === 'providerExclude') input.placeholder = '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3';
+      if (s.name === 'providerExclude') input.placeholder = '0xProvider1,0xProvider2';
     } else {
       input = document.createElement('input');
       input.type = 'number';
@@ -2767,21 +2762,6 @@ function renderOriginWarn(st) {
   el.classList.toggle('hidden', !msg);
 }
 
-// exclusionsWarning: '' unless opens are being refused because name-keyed
-// provider exclusions cannot be resolved, else the warning text.
-function exclusionsWarning(st) {
-  const n = Number((st && st.exclusionsUnresolved) || 0);
-  return n > 0 ? UI_COPY.exclusionsUnresolved(n, st.exclusionsUnresolvedCapped === true) : '';
-}
-
-function renderExclusionsWarn(st) {
-  const el = document.getElementById('exclusionsWarn');
-  if (!el) return;
-  const msg = exclusionsWarning(st);
-  el.textContent = msg;
-  el.classList.toggle('hidden', !msg);
-}
-
 function renderRouterBanner(st) {
   const el = document.getElementById('routerAuthBanner');
   if (!el) return;
@@ -2872,7 +2852,6 @@ async function doRefresh() {
     }
     renderRouterBanner(st);
     renderOriginWarn(st);
-    renderExclusionsWarn(st);
     renderSessionLengths(st);
     renderSessionReconcile(st.sessionReconcile || {});
 

@@ -80,27 +80,3 @@ func TestA2RetiredBranchNoAvailable(t *testing.T) {
 		t.Fatalf("retired branch opened %d sessions", len(after)-len(before))
 	}
 }
-
-// SHOULD-2: with the catalog loaded, an id it does not list is refused (no
-// name for the name-keyed exclusion) but never recorded, so random ids
-// cannot fill the record or set its cap flag.
-func TestUnresolvedRefusalLoadedCatalogNotRecorded(t *testing.T) {
-	c := newFakeClock()
-	_, p := newLeaseRouter(t, c)
-	p.SetProviderExclude(map[string][]string{"some-model": {leaseProv1}}, func(string) string { return "" })
-	p.SetCatalogLoaded(func() bool { return true })
-	for i := 0; i < 4*MaxUnresolvedRefusals; i++ {
-		if _, _, err := p.Acquire(fmt.Sprintf("0x%064x", i+1), AcquireOpts{KeyID: "k1"}); !errors.Is(err, ErrNoEligibleProvider) {
-			t.Fatalf("open %d: %v", i, err)
-		}
-	}
-	if n, capped := p.UnresolvedExclusionRefusals(); n != 0 || capped {
-		t.Fatalf("record = %d capped %v with the catalog loaded, want 0", n, capped)
-	}
-	p.fmu.Lock()
-	size := len(p.unresolvedRefused)
-	p.fmu.Unlock()
-	if size != 0 {
-		t.Fatalf("record size %d", size)
-	}
-}

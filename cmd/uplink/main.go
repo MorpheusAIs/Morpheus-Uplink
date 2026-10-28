@@ -56,7 +56,11 @@ func main() {
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
 	pl := pool.New(rc, cfg.SessionDurationSec)
 	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
-	pl.SetProviderExclude(cfg.ProviderExclude, cat.NameByID)
+	// providerExclude: never opened or adopted, and their open sessions are
+	// closed by the boot reconcile below, so set it first (pool); not listed
+	// or priced (catalog).
+	pl.SetProviderExclude(cfg.ProviderExclude)
+	cat.SetProviderExclude(cfg.ProviderExclude)
 	pl.SetDurationMax(cfg.SessionDurationMax)
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.

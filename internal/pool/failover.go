@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
@@ -123,141 +122,42 @@ func (p *Pool) IsCooling(modelID, provider string) bool {
 	return ok && time.Now().Before(until)
 }
 
-// SetProviderExclude installs the configured exclusions
-// (the providerExclude setting): model id or name -> providers. namer resolves
-// a model id to its catalog name so name-keyed entries apply.
-func (p *Pool) SetProviderExclude(m map[string][]string, namer func(string) string) {
-	ex := map[string]map[string]bool{}
-	for model, provs := range m {
-		k := strings.ToLower(strings.TrimSpace(model))
-		if ex[k] == nil {
-			ex[k] = map[string]bool{}
-		}
-		for _, pr := range provs {
-			ex[k][strings.ToLower(strings.TrimSpace(pr))] = true
-		}
-	}
-	nameKeyed := false
-	for k := range ex {
-		if !strings.HasPrefix(k, "0x") {
-			nameKeyed = true // keyed by catalog name, not by model id
+// SetProviderExclude installs the configured exclusions (the
+// providerExclude setting): provider addresses never opened for any model.
+func (p *Pool) SetProviderExclude(provs []string) {
+	ex := map[string]bool{}
+	for _, pr := range provs {
+		if pr = strings.ToLower(strings.TrimSpace(pr)); pr != "" {
+			ex[pr] = true
 		}
 	}
 	p.fmu.Lock()
-	p.exclude, p.namer, p.excludeByName = ex, namer, nameKeyed
-	p.unresolvedRefused, p.unresolvedCapped = nil, false
+	p.exclude = ex
 	p.fmu.Unlock()
 }
 
-// MaxUnresolvedRefusals caps the refused-model record behind the console
-// warning; ids past the cap only set the capped flag.
-const MaxUnresolvedRefusals = 64
-
-// reRefusedModelID is the model id format the record accepts (lowercase
-// 0x + 64 hex); anything else a client sends is never recorded.
-var reRefusedModelID = regexp.MustCompile(`^0x[0-9a-f]{64}$`)
-
-// SetCatalogLoaded wires a check (no network) for whether the model
-// catalog has any data. While it has none, refusals for unresolved
-// name-keyed exclusions are recorded for the console; once it has data,
-// an id without a name is one the catalog does not list (still refused)
-// and is not a feed problem, so the record is dropped.
-func (p *Pool) SetCatalogLoaded(loaded func() bool) {
-	p.fmu.Lock()
-	p.catalogLoaded = loaded
-	p.fmu.Unlock()
-}
-
-// noteUnresolvedRefusal records that an open for the model was refused
-// because its name-keyed exclusions could not be resolved. Only valid ids
-// are recorded, only while the catalog has no data, and at most
-// MaxUnresolvedRefusals of them.
-func (p *Pool) noteUnresolvedRefusal(modelID string) {
-	id := normModel(modelID)
-	if !reRefusedModelID.MatchString(id) {
-		return
-	}
-	p.fmu.Lock()
-	loaded := p.catalogLoaded
-	p.fmu.Unlock()
-	if loaded != nil && loaded() {
-		return
-	}
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	if p.unresolvedRefused[id] {
-		return
-	}
-	if len(p.unresolvedRefused) >= MaxUnresolvedRefusals {
-		p.unresolvedCapped = true
-		return
-	}
-	if p.unresolvedRefused == nil {
-		p.unresolvedRefused = map[string]bool{}
-	}
-	p.unresolvedRefused[id] = true
-}
-
-// UnresolvedExclusionRefusals is the number of models whose opens were
-// refused because name-keyed exclusions could not be resolved while the
-// catalog had no data, and whether the record hit its cap. It makes no
-// catalog lookups: once the catalog has data the record is cleared.
-func (p *Pool) UnresolvedExclusionRefusals() (int, bool) {
-	p.fmu.Lock()
-	loaded := p.catalogLoaded
-	p.fmu.Unlock()
-	isLoaded := loaded != nil && loaded()
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	if isLoaded || !p.excludeByName {
-		p.unresolvedRefused, p.unresolvedCapped = nil, false
-		return 0, false
-	}
-	return len(p.unresolvedRefused), p.unresolvedCapped
-}
-
-// exclusionsUnresolved is true when some exclusions are keyed by catalog
-// name and the model's name is unknown (catalog not loaded, or an id it
-// does not list): which of them apply cannot be told, so opens for the
-// model are refused (fail closed) until the name resolves.
-func (p *Pool) exclusionsUnresolved(modelID string) bool {
-	p.fmu.Lock()
-	byName, namer := p.excludeByName, p.namer
-	p.fmu.Unlock()
-	if !byName {
+// IsProviderExcluded reports whether the provider is in the configured
+// exclusions (for every model).
+func (p *Pool) IsProviderExcluded(provider string) bool {
+	pr := strings.ToLower(strings.TrimSpace(provider))
+	if pr == "" {
 		return false
 	}
-	return namer == nil || strings.TrimSpace(namer(modelID)) == ""
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	return p.exclude[pr]
 }
 
-// excludedProviders is the configured exclusion set for a model.
-func (p *Pool) excludedProviders(modelID string) map[string]bool {
+// excludedProviders is the configured exclusion set (a copy); the same
+// for every model.
+func (p *Pool) excludedProviders() map[string]bool {
 	p.fmu.Lock()
-	ex, namer := p.exclude, p.namer
-	p.fmu.Unlock()
-	out := map[string]bool{}
-	if len(ex) == 0 {
-		return out
-	}
-	keys := []string{normModel(modelID)}
-	if namer != nil {
-		if n := strings.ToLower(strings.TrimSpace(namer(modelID))); n != "" {
-			keys = append(keys, n)
-		}
-	}
-	for _, k := range keys {
-		for pr := range ex[k] {
-			out[pr] = true
-		}
+	defer p.fmu.Unlock()
+	out := make(map[string]bool, len(p.exclude))
+	for pr := range p.exclude {
+		out[pr] = true
 	}
 	return out
-}
-
-func (p *Pool) isExcluded(modelID, provider string) bool {
-	if p.exclusionsUnresolved(modelID) {
-		return true // cannot tell: do not adopt
-	}
-	return provider != "" && p.excludedProviders(modelID)[strings.ToLower(strings.TrimSpace(provider))]
 }
 
 // MarkStreamCut records that provider cut a stream for the model: the
@@ -288,7 +188,7 @@ func (p *Pool) clearCut(modelID string) {
 // configured exclusions, and a pending stream cut.
 func (p *Pool) avoidSet(modelID string) map[string]bool {
 	out := p.coolingProviders(modelID)
-	for pr := range p.excludedProviders(modelID) {
+	for pr := range p.excludedProviders() {
 		out[pr] = true
 	}
 	if c := p.pendingCut(modelID); c != "" {
@@ -425,11 +325,6 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 //
 // A refusal consumes a pending stream cut.
 func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
-	if p.exclusionsUnresolved(modelID) {
-		p.noteUnresolvedRefusal(modelID)
-		warnf("pool: model %s has no catalog name and name-keyed provider exclusions are set; not opening", modelID)
-		return "", "", ErrNoEligibleProvider
-	}
 	exclude := p.avoidSet(modelID)
 	if len(exclude) == 0 {
 		id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec})
@@ -439,7 +334,7 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		prov, _ := p.sessionProvider(modelID, id)
 		return id, prov, nil
 	}
-	configured := p.excludedProviders(modelID)
+	configured := p.excludedProviders()
 	cut := p.pendingCut(modelID)
 	refuse := func(bids []router.RatedBid, bidsOK bool) (string, string, error) {
 		if cut != "" {
@@ -611,12 +506,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	p.MarkCooling(modelID, failedProv)
 
 	// 3. Guardrail: count distinct providers outside the exclusions before
-	// closing anything (and keep the session when the exclusions cannot
-	// be resolved for this model).
-	if p.exclusionsUnresolved(modelID) {
-		p.noteUnresolvedRefusal(modelID)
-		return res, fmt.Errorf("%w (provider exclusions unresolved: no catalog name)", ErrNoAlternate)
-	}
+	// closing anything.
 	exclude := p.avoidSet(modelID)
 	exclude[failedProv] = true
 	bids, err := p.client.RatedBids(modelID)

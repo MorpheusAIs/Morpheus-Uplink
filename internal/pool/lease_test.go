@@ -557,96 +557,36 @@ func TestS5FailoverReplacementCapped(t *testing.T) {
 	}
 }
 
-// Security gate SHOULD-1 (pool side): with name-keyed exclusions and no
-// catalog name for the model, a new open is refused and a failover keeps
-// the session (closes nothing).
-func TestNameKeyedExclusionUnresolved(t *testing.T) {
+// The providerExclude setting is one address list for every model: opens
+// for any model go by bid around the listed providers (case and spaces
+// do not matter), and a model served only by listed providers gets
+// ErrNoEligibleProvider with nothing opened.
+func TestProviderExcludeAppliesToEveryModel(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)
-	l, r := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k1"})
-	l.Done()
-	p.SetProviderExclude(map[string][]string{"some-model": {leaseProv1}}, func(string) string { return "" })
-	if _, _, err := p.Acquire(modelB, AcquireOpts{KeyID: "k1"}); !errors.Is(err, ErrNoEligibleProvider) {
-		t.Fatalf("open with unresolved name: %v", err)
+	p.SetProviderExclude([]string{" 0X" + strings.ToUpper(leaseProv1[2:]) + " "})
+	if !p.IsProviderExcluded(leaseProv1) || p.IsProviderExcluded(leaseProv2) || p.IsProviderExcluded("") {
+		t.Fatalf("lookup: %v %v", p.IsProviderExcluded(leaseProv1), p.IsProviderExcluded(leaseProv2))
 	}
-	if _, err := p.Failover(modelA, r.SessionID, FailoverOpts{KeyID: "k1", Reopen: true}); !errors.Is(err, ErrNoAlternate) {
-		t.Fatalf("failover with unresolved name: %v", err)
-	}
-	if lr.closedCount(r.SessionID) != 0 {
-		t.Fatal("failover closed the session")
-	}
-	if n, capped := p.UnresolvedExclusionRefusals(); n != 2 || capped {
-		t.Fatalf("refusals while unresolved = %d (capped %v), want 2", n, capped)
-	}
-	p.SetProviderExclude(map[string][]string{"some-model": {leaseProv1}}, func(string) string { return "some-model" })
-	if n, _ := p.UnresolvedExclusionRefusals(); n != 0 {
-		t.Fatalf("refusals after resolving = %d, want 0", n)
-	}
-	// Id-keyed exclusions alone never need the name.
-	p.SetProviderExclude(map[string][]string{modelC: {leaseProv2}}, func(string) string { return "" })
-	if l, _, err := p.Acquire(modelC, AcquireOpts{KeyID: "k1"}); err != nil {
-		t.Fatalf("id-keyed: %v", err)
-	} else {
+	for _, m := range []string{modelA, modelB, modelC} {
+		l, r := mustAcquire(t, p, m, AcquireOpts{KeyID: "k1"})
 		l.Done()
-	}
-}
-
-// Security gate SHOULD-2: the refused-model record behind the console
-// warning only takes well-formed ids, is capped (overflow sets a flag and
-// adds nothing), is not filled while the catalog has data, is cleared once
-// the catalog loads, and reading it never calls the namer.
-func TestUnresolvedRefusalRecordBounded(t *testing.T) {
-	c := newFakeClock()
-	_, p := newLeaseRouter(t, c)
-	var namerCalls atomic.Int32
-	p.SetProviderExclude(map[string][]string{"some-model": {leaseProv1}}, func(string) string { namerCalls.Add(1); return "" })
-	var loaded atomic.Bool
-	p.SetCatalogLoaded(loaded.Load)
-
-	// Ill-formed ids are refused (no name) but never recorded.
-	for _, bad := range []string{"0x12", "0x" + strings.Repeat("g", 64), "0x" + strings.Repeat("a", 65), strings.Repeat("a", 66), "0x" + strings.Repeat("a", 63) + "\n"} {
-		p.noteUnresolvedRefusal(bad)
-	}
-	if n, capped := p.UnresolvedExclusionRefusals(); n != 0 || capped {
-		t.Fatalf("ill-formed ids recorded: %d %v", n, capped)
-	}
-	// Well-formed: up to the cap, then only the flag.
-	for i := 0; i < MaxUnresolvedRefusals+50; i++ {
-		id := fmt.Sprintf("0x%064x", i+1)
-		if _, _, err := p.Acquire(id, AcquireOpts{KeyID: "k1"}); !errors.Is(err, ErrNoEligibleProvider) {
-			t.Fatalf("open %d: %v", i, err)
+		lr.mu.Lock()
+		prov := lr.sessions[r.SessionID].prov
+		lr.mu.Unlock()
+		if prov != leaseProv2 {
+			t.Fatalf("model %s opened on %s, want %s", short(m), prov, leaseProv2)
 		}
 	}
-	p.noteUnresolvedRefusal(strings.ToUpper(fmt.Sprintf("0x%064x", 1))) // same id, other case: no new entry
-	before := namerCalls.Load()
-	for i := 0; i < 10; i++ {
-		n, capped := p.UnresolvedExclusionRefusals()
-		if n != MaxUnresolvedRefusals || !capped {
-			t.Fatalf("record = %d capped %v, want %d capped", n, capped, MaxUnresolvedRefusals)
-		}
+	p.SetProviderExclude([]string{leaseProv1, leaseProv2})
+	before, _ := lr.snapshot()
+	if _, _, err := p.Acquire(modelD, AcquireOpts{KeyID: "k1"}); !errors.Is(err, ErrNoEligibleProvider) {
+		t.Fatalf("only listed providers: %v", err)
 	}
-	if namerCalls.Load() != before {
-		t.Fatalf("reading the record called the namer %d times", namerCalls.Load()-before)
+	if after, _ := lr.snapshot(); len(after) != len(before) {
+		t.Fatal("opened a session on a listed provider")
 	}
-	p.fmu.Lock()
-	size := len(p.unresolvedRefused)
-	p.fmu.Unlock()
-	if size != MaxUnresolvedRefusals {
-		t.Fatalf("record size %d, want %d", size, MaxUnresolvedRefusals)
-	}
-	// Once the catalog has data the record clears, and an unlisted id is
-	// still refused but no longer recorded.
-	loaded.Store(true)
-	if n, capped := p.UnresolvedExclusionRefusals(); n != 0 || capped {
-		t.Fatalf("after load: %d %v", n, capped)
-	}
-	if _, _, err := p.Acquire(fmt.Sprintf("0x%064x", 999), AcquireOpts{KeyID: "k1"}); !errors.Is(err, ErrNoEligibleProvider) {
-		t.Fatalf("unlisted id with catalog loaded: %v", err)
-	}
-	p.fmu.Lock()
-	size = len(p.unresolvedRefused)
-	p.fmu.Unlock()
-	if size != 0 {
-		t.Fatalf("unlisted id recorded while the catalog has data: %d", size)
+	if got := p.excludedProviders(); len(got) != 2 || !got[leaseProv1] || !got[leaseProv2] {
+		t.Fatalf("excluded set %v", got)
 	}
 }

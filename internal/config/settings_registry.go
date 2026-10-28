@@ -1,9 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -61,6 +61,7 @@ type SettingDef struct {
 	Help     string                // tooltip: what it does and the allowed values
 	Consumer string                // where the value is read (docs)
 	check    func(string) error    // KindString: extra validation
+	canon    func(string) string   // KindString: canonical form of a valid value
 	get      func(*Config) string  // effective Uplink value
 	set      func(*Config, string) // live and restart rows: default, then saved (restart) at boot
 }
@@ -97,8 +98,8 @@ var Settings = []SettingDef{
 	{Name: "providerCooldown", Env: "UPLINK_PROVIDER_COOLDOWN_SECONDS", Kind: KindInt, Min: 0, Max: MaxProviderCooldownSec, Default: "600", Scope: ScopeRestart,
 		Help: "How long a failed provider is avoided for that model, in seconds (0–86400; 0 keeps no memory across requests). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderCooldown",
 		get: func(c *Config) string { return itoa(c.ProviderCooldownSec) }, set: func(c *Config, v string) { c.ProviderCooldownSec = atoi(v) }},
-	{Name: "providerExclude", Env: "UPLINK_PROVIDER_EXCLUDE", Kind: KindString, Default: "", Scope: ScopeRestart, check: ValidateProviderExclude,
-		Help: "Providers never opened for a model: <model>=<0x provider>[,<0x provider>]…, entries separated by ';' (empty for none). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderExclude",
+	{Name: "providerExclude", Env: "UPLINK_PROVIDER_EXCLUDE", Kind: KindString, Default: "", Scope: ScopeRestart, check: ValidateProviderExclude, canon: CanonProviderExclude,
+		Help: "Providers never opened for any model: a comma-separated list of 0x provider addresses (0x + 40 hex), for example 0xProvider1,0xProvider2; empty for none. Saved lowercase, without duplicates. At boot, open sessions of this wallet on these providers are closed, including another client's on a shared wallet. Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetProviderExclude, catalog.SetProviderExclude",
 		get: func(c *Config) string { return FormatProviderExclude(c.ProviderExclude) }, set: func(c *Config, v string) { c.ProviderExclude = ParseProviderExclude(v) }},
 	{Name: "sessionRelease", Env: "UPLINK_SESSION_RELEASE", Kind: KindBool, Default: "true", Scope: ScopeRestart, Group: "release",
 		Help: "Lets a generated key drop its hold on a model's session with POST /v1/sessions/release (true or false; false answers 403 release_disabled). The session closes when no holder and no request is left; otherwise the idle sweep closes it. Takes effect after an Uplink restart.", Consumer: "api handleSessionRelease (Config.SessionRelease)",
@@ -116,7 +117,7 @@ var Settings = []SettingDef{
 		Help: "Rated bids feed (an https URL). Informational: Uplink stores it but does not fetch it today, so it has no effect. Set in .env only.", Consumer: "cmd/uplink catalog.WithBidsURL (stored, not fetched)",
 		get: func(c *Config) string { return c.GatewayBidsURL }},
 	{Name: "webPublicUrl", Env: "WEB_PUBLIC_URL", Kind: KindString, Default: "", Scope: ScopeEnvOnly,
-		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only, and /admin, /gui and /node answer only on its host. Set in .env only; takes effect after an Uplink restart.", Consumer: "api CSRF, settings origin and console host checks (Config.WebPublicURL)",
+		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only, and /admin, /gui and /node/* answer only on its host. Set in .env only; takes effect after an Uplink restart.", Consumer: "api CSRF, settings origin and console host checks (Config.WebPublicURL)",
 		get: func(c *Config) string { return c.WebPublicURL }},
 
 	{Name: "masterKeyAdmin", Env: "MASTER_KEY_ADMIN", Kind: KindBool, Default: "false", Scope: ScopeEnvOnly,
@@ -214,6 +215,9 @@ func (d SettingDef) Validate(v string) (string, error) {
 				return "", fmt.Errorf("%s: %v", d.Name, err)
 			}
 		}
+		if d.canon != nil {
+			v = d.canon(v)
+		}
 		return v, nil
 	}
 	return "", fmt.Errorf("%s cannot be set", d.Name)
@@ -273,38 +277,36 @@ func ApplyPersisted(c *Config, vals map[string]string) []string {
 	return notes
 }
 
+// ErrProviderExcludeOldFormat is the answer for a value in the former
+// per-model form (<model>=<provider>…; …). It is not converted.
+var ErrProviderExcludeOldFormat = errors.New("the format changed to a plain comma-separated list of 0x provider addresses, excluded for every model (no <model>= entries, no ';'); re-enter it on the Settings tab")
+
 // ValidateProviderExclude is ParseProviderExclude without the forgiveness:
-// any bad entry or provider is an error.
+// a value in the former per-model form or any entry that is not a 0x
+// address (0x + 40 hex) is an error. Empty means no exclusions.
 func ValidateProviderExclude(v string) error {
-	for i, ent := range strings.Split(v, ";") {
-		ent = strings.TrimSpace(ent)
-		if ent == "" {
+	if strings.ContainsAny(v, "=;") {
+		return ErrProviderExcludeOldFormat
+	}
+	for i, pr := range strings.Split(v, ",") {
+		pr = strings.TrimSpace(pr)
+		if pr == "" {
 			continue
 		}
-		model, provs, ok := strings.Cut(ent, "=")
-		model = strings.ToLower(strings.TrimSpace(model))
-		if !ok || (!reModelID.MatchString(model) && (strings.HasPrefix(model, "0x") || !reModelName.MatchString(model))) {
-			return fmt.Errorf("entry %d is not <model>=<provider>[,<provider>]", i+1)
-		}
-		for j, pr := range strings.Split(provs, ",") {
-			if !reProviderAddr.MatchString(strings.TrimSpace(pr)) {
-				return fmt.Errorf("entry %d provider %d is not a 0x address", i+1, j+1)
-			}
+		if !reProviderAddr.MatchString(pr) {
+			return fmt.Errorf("entry %d is not a 0x provider address (0x + 40 hex)", i+1)
 		}
 	}
 	return nil
 }
 
-// FormatProviderExclude is the canonical string form of a parsed exclusion map.
-func FormatProviderExclude(m map[string][]string) string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+strings.Join(m[k], ","))
-	}
-	return strings.Join(parts, ";")
+// CanonProviderExclude is the saved form of a valid value: lowercase,
+// deduped, sorted, comma-separated.
+func CanonProviderExclude(v string) string {
+	return FormatProviderExclude(ParseProviderExclude(v))
+}
+
+// FormatProviderExclude is the canonical string form of a parsed list.
+func FormatProviderExclude(provs []string) string {
+	return strings.Join(provs, ",")
 }

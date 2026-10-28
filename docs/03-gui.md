@@ -126,7 +126,9 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 - On boot Uplink lists the open sessions before opening any: still-valid
   ones are reused (one per model), expired and duplicate ones are closed so
   their stake is returned, and sessions for models not in the catalog are
-  left to expire. The Status tab shows the last boot check and its counts.
+  left to expire. Sessions on a provider in `providerExclude` are never
+  reused and are closed, whether or not their model is in the catalog.
+  The Status tab shows the last boot check and its counts.
   A graceful `docker stop` closes every open session on the wallet before
   Uplink exits, including sessions for models not in the catalog and, on a
   shared wallet, the other client's sessions; the stake is returned (a

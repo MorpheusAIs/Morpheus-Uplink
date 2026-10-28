@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -73,11 +74,11 @@ type Config struct {
 	// (audit-security.jsonl), 1…3650, default 90. The failure/ops stream
 	// keeps a fixed 30 days.
 	AuditRetentionDays int
-	// ProviderExclude (providerExclude): providers never opened for a model,
-	// "<model>=<provider>[,<provider>]…", entries separated by ";". Model
-	// is a registration id or a catalog name; providers are 0x addresses.
-	// Validated when saved; a bad entry is warned and ignored at boot.
-	ProviderExclude map[string][]string
+	// ProviderExclude (providerExclude): providers never opened for any
+	// model, a comma-separated list of 0x addresses (lowercase, deduped,
+	// sorted). Validated when saved; a saved value that no longer
+	// validates is skipped at boot (warned, default used).
+	ProviderExclude []string
 
 	// Long-job core (S5).
 	// SessionDurationMax caps X-Uplink-Session-Duration and every open
@@ -228,39 +229,31 @@ const MaxProviderCooldownSec = 86400
 
 var (
 	reProviderAddr = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
-	reModelID      = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
-	reModelName    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$`)
 )
 
-// ParseProviderExclude parses the providerExclude setting. Entries are
-// "<model>=<provider>[,<provider>]…" separated by ";". An entry with a bad
-// model or provider is logged (by position, not value) and ignored;
-// a bad provider drops only that provider.
-func ParseProviderExclude(v string) map[string][]string {
-	out := map[string][]string{}
-	if strings.TrimSpace(v) == "" {
-		return out
-	}
-	for i, ent := range strings.Split(v, ";") {
-		ent = strings.TrimSpace(ent)
-		if ent == "" {
+// ParseProviderExclude parses the providerExclude setting: a
+// comma-separated list of 0x provider addresses, excluded for every model.
+// Entries are trimmed, lowercased and deduped (sorted); empty entries are
+// dropped. An entry that is not an address is logged (by position, not
+// value) and ignored.
+func ParseProviderExclude(v string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for i, pr := range strings.Split(v, ",") {
+		pr = strings.ToLower(strings.TrimSpace(pr))
+		if pr == "" {
 			continue
 		}
-		model, provs, ok := strings.Cut(ent, "=")
-		model = strings.ToLower(strings.TrimSpace(model))
-		if !ok || (!reModelID.MatchString(model) && (strings.HasPrefix(model, "0x") || !reModelName.MatchString(model))) {
-			warnf("config: providerExclude entry %d is not <model>=<provider>[,<provider>]; ignored", i+1)
+		if !reProviderAddr.MatchString(pr) {
+			warnf("config: providerExclude entry %d is not a 0x address; ignored", i+1)
 			continue
 		}
-		for j, pr := range strings.Split(provs, ",") {
-			pr = strings.ToLower(strings.TrimSpace(pr))
-			if !reProviderAddr.MatchString(pr) {
-				warnf("config: providerExclude entry %d provider %d is not a 0x address; ignored", i+1, j+1)
-				continue
-			}
-			out[model] = append(out[model], pr)
+		if !seen[pr] {
+			seen[pr] = true
+			out = append(out, pr)
 		}
 	}
+	sort.Strings(out)
 	return out
 }
 
