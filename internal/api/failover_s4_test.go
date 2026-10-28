@@ -290,7 +290,7 @@ func TestS4OwnCancelAndTimeoutsDoNotCool(t *testing.T) {
 	}
 }
 
-// S4: UPLINK_PROVIDER_EXCLUDE keeps opens off a provider, by id or name;
+// S4: the providerExclude setting keeps opens off a provider, by id or name;
 // bad entries are ignored.
 func TestS4ProviderExcludeConfig(t *testing.T) {
 	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
