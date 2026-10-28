@@ -108,6 +108,10 @@ type Catalog struct {
 	retryAfter time.Duration
 	lastErr    error
 	lastErrAt  time.Time
+	// excluded: the providerExclude setting (lowercase 0x addresses). Their
+	// bids are dropped from List and from the shared-name choice; a model
+	// left with no bid is hidden (see withoutExcluded).
+	excluded map[string]bool
 }
 
 // DefaultRetryAfter is the pause after a failed catalog fetch.
@@ -137,6 +141,65 @@ func (c *Catalog) Loaded() bool {
 	return c.models != nil
 }
 
+// SetProviderExclude installs the configured provider exclusions (for
+// every model) and re-indexes any loaded data.
+func (c *Catalog) SetProviderExclude(provs []string) {
+	ex := map[string]bool{}
+	for _, pr := range provs {
+		if pr = strings.ToLower(strings.TrimSpace(pr)); pr != "" {
+			ex[pr] = true
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.excluded = ex
+	if c.models != nil {
+		c.byName, c.byID = c.indexLocked(c.models)
+	}
+}
+
+// withoutExcluded drops the bids of excluded providers. A model whose
+// every bid is excluded is left out; a model the feed lists with no bids
+// at all is kept as it is. The input is not modified.
+func withoutExcluded(models []Model, excluded map[string]bool) []Model {
+	out := make([]Model, 0, len(models))
+	for _, m := range models {
+		if len(excluded) == 0 || len(m.BidDetail) == 0 {
+			out = append(out, m)
+			continue
+		}
+		bids := make([]BidDetail, 0, len(m.BidDetail))
+		for _, b := range m.BidDetail {
+			if !excluded[strings.ToLower(strings.TrimSpace(b.ProviderID))] {
+				bids = append(bids, b)
+			}
+		}
+		if len(bids) == 0 {
+			continue
+		}
+		m.BidDetail = bids
+		out = append(out, m)
+	}
+	return out
+}
+
+// indexLocked builds the name and id indexes (mu held). The shared-name
+// choice only sees bids outside the exclusions; a name whose every row is
+// hidden still resolves (to its feed choice) so a request for it gets the
+// pool's no-eligible-provider answer rather than "not found". byID keeps
+// every feed row so names stay known for labels.
+func (c *Catalog) indexLocked(models []Model) (byName, byID map[string]string) {
+	byName, byID = indexModels(models)
+	if len(c.excluded) == 0 {
+		return byName, byID
+	}
+	visible, _ := indexModels(withoutExcluded(models, c.excluded))
+	for k, id := range visible {
+		byName[k] = id
+	}
+	return byName, byID
+}
+
 // WithBidsURL records the companion gateway_bids feed URL (GATEWAY_BIDS_URL).
 // Catalog refresh still uses model bidDetail only; see package comment.
 func (c *Catalog) WithBidsURL(bidsURL string) *Catalog {
@@ -147,23 +210,22 @@ func (c *Catalog) WithBidsURL(bidsURL string) *Catalog {
 // GatewayBidsURL returns the companion bids feed URL, if set.
 func (c *Catalog) GatewayBidsURL() string { return c.bidsURL }
 
-// fetch reads and indexes the feed. It touches no Catalog state, so it
-// runs without mu.
-func (c *Catalog) fetch() ([]Model, map[string]string, map[string]string, error) {
+// fetch reads the feed. It touches no Catalog state, so it runs without
+// mu.
+func (c *Catalog) fetch() ([]Model, error) {
 	resp, err := c.client.Get(c.url)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("fetch model catalog: %w", err)
+		return nil, fmt.Errorf("fetch model catalog: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, nil, fmt.Errorf("fetch model catalog: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetch model catalog: status %d", resp.StatusCode)
 	}
 	var file activeModelsFile
 	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
-		return nil, nil, nil, fmt.Errorf("parse model catalog: %w", err)
+		return nil, fmt.Errorf("parse model catalog: %w", err)
 	}
-	byName, byID := indexModels(file.Models)
-	return file.Models, byName, byID, nil
+	return file.Models, nil
 }
 
 // state reports, under mu, whether the data is fresh and, when a fetch
@@ -202,7 +264,7 @@ func (c *Catalog) ensureFresh() error {
 	if fresh, wait, err := c.state(); fresh || wait {
 		return err
 	}
-	models, byName, byID, err := c.fetch()
+	models, err := c.fetch()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil {
@@ -213,7 +275,8 @@ func (c *Catalog) ensureFresh() error {
 		}
 		return err
 	}
-	c.models, c.byName, c.byID = models, byName, byID
+	c.models = models
+	c.byName, c.byID = c.indexLocked(models)
 	c.fetchedAt = time.Now()
 	c.lastErr = nil
 	return nil
@@ -223,6 +286,7 @@ func (c *Catalog) ensureFresh() error {
 // model ID. When several catalog rows share a name, the winner is the
 // cheapest row that has a healthy bid. Rows with no healthy bid lose to
 // rows that have one. Equal prices break ties by lowercase model ID.
+// Bids of excluded providers are not considered (see indexLocked).
 func (c *Catalog) Resolve(nameOrID string) (string, error) {
 	if strings.HasPrefix(nameOrID, "0x") {
 		return nameOrID, nil
@@ -238,15 +302,16 @@ func (c *Catalog) Resolve(nameOrID string) (string, error) {
 	return "", fmt.Errorf("model %q not found in catalog", nameOrID)
 }
 
+// List is the catalog as clients see it: bids of excluded providers are
+// dropped, so prices and stake estimates ignore them, and a model left
+// with no bid is not listed.
 func (c *Catalog) List() ([]Model, error) {
 	if err := c.ensureFresh(); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]Model, len(c.models))
-	copy(out, c.models)
-	return out, nil
+	return withoutExcluded(c.models, c.excluded), nil
 }
 
 // NameByID returns the catalog display name for a blockchain model id.

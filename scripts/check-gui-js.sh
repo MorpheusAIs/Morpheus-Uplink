@@ -566,36 +566,15 @@ if (html.indexOf('id="originWarn"') < 0 || html.indexOf('id="originWarn"') > htm
 console.log('OK: Status warns when the page origin is not WEB_PUBLIC_URL');
 NODE
 
-# Status warns while name-keyed provider exclusions refuse opens (text only).
+# Provider exclusions are one address list for every model: no Status
+# warning about model names left (text only).
 node - "$OUT" "$HTML" <<'NODE'
 const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const html = fs.readFileSync(process.argv[3], 'utf8');
-function fn(name) {
-  const m = new RegExp('^function\\s+' + name + '\\s*\\(', 'm').exec(src);
-  if (!m) throw new Error('missing function ' + name);
-  return src.slice(m.index, src.indexOf('\n}', m.index) + 2);
-}
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
-const ui = /const UI_COPY = \{[\s\S]*?\n\};/.exec(src);
-if (!ui) fail('UI_COPY not found');
-const el = { textContent: '', classList: { _h: true, toggle(c, on) { this._h = on; } } };
-global.document = { getElementById: (id) => (id === 'exclusionsWarn' ? el : null) };
-eval(ui[0].replace('const UI_COPY', 'global.UI_COPY') + '\n' + ['exclusionsWarning', 'renderExclusionsWarn'].map(fn).join('\n')
-  + '\nObject.assign(global, { exclusionsWarning, renderExclusionsWarn });');
-if (exclusionsWarning({}) !== '' || exclusionsWarning({ exclusionsUnresolved: 0 }) !== '') fail('no warning without refusals');
-const w = exclusionsWarning({ exclusionsUnresolved: 2 });
-if (!w.includes('2 models') || !w.includes('providerExclude') || /0x/.test(w)) fail('warning text: ' + w);
-const wc = exclusionsWarning({ exclusionsUnresolved: 64, exclusionsUnresolvedCapped: true });
-if (!wc.includes('64 or more models')) fail('capped warning text: ' + wc);
-if (exclusionsWarning({ exclusionsUnresolved: 3, exclusionsUnresolvedCapped: 'true' }).includes('or more')) fail('capped flag must be a real boolean');
-renderExclusionsWarn({ exclusionsUnresolved: 1 });
-if (el.classList._h || !el.textContent.includes('1 model')) fail('exclusions warning not shown');
-renderExclusionsWarn({ exclusionsUnresolved: 0 });
-if (!el.classList._h || el.textContent) fail('exclusions warning not cleared');
-if (html.indexOf('id="exclusionsWarn"') < 0 || html.indexOf('id="exclusionsWarn"') > html.indexOf('id="connectClient"')) fail('exclusionsWarn must be on the Status overview');
-if (!/renderExclusionsWarn\(st\);/.test(src)) fail('status refresh must render the exclusions warning');
-console.log('OK: Status warns while name-keyed provider exclusions refuse opens (capped count shown as N or more)');
+if (/exclusionsWarn|exclusionsUnresolved/.test(html) || /exclusionsWarn|exclusionsUnresolved/.test(src)) fail('no name-keyed exclusions warning left');
+console.log('OK: no name-keyed provider exclusions warning on Status');
 NODE
 
 # API Keys has no reveal button; copy and Export all fetch the full keys.
@@ -642,7 +621,7 @@ const fixture = [
   { name: 'forwardIdle', kind: 'int', value: 180, default: 180, min: 30, max: 600, source: 'default', env: 'UPLINK_FORWARD_IDLE_SECONDS', pinned: true, settable: true, scope: 'live', help: 'Idle timer (30–600).' },
   { name: 'logLevel', kind: 'enum', value: 'debug', default: 'info', options: ['debug', 'info', 'warn', 'error'], source: 'persisted', env: 'UPLINK_LOG_LEVEL', pinned: false, settable: true, scope: 'live', help: 'Log level.' },
   { name: 'sessionFailover', kind: 'bool', value: false, default: true, source: 'persisted', env: 'SESSION_FAILOVER', pinned: false, settable: true, scope: 'restart', restart: 'uplink', pendingRestart: true, effective: true, help: 'Fail over (true or false). Takes effect after an Uplink restart.' },
-  { name: 'providerExclude', kind: 'string', value: 'm1=0xabc', default: '', source: 'persisted', env: 'UPLINK_PROVIDER_EXCLUDE', pinned: false, settable: true, scope: 'restart', help: 'Excluded providers.' },
+  { name: 'providerExclude', kind: 'string', value: '0xabababababababababababababababababababab', default: '', source: 'persisted', env: 'UPLINK_PROVIDER_EXCLUDE', pinned: false, settable: true, scope: 'restart', help: 'Excluded providers.' },
   { name: 'routerLogLevelApp', kind: 'enum', value: null, default: 'warn', options: ['debug', 'warn'], source: 'router', env: 'LOG_LEVEL_APP', pinned: false, settable: false, scope: 'router', help: 'Router log level. Router setting: change it in the router\u2019s .env and restart the router.' },
   { name: 'masterKeyAdmin', kind: 'bool', value: false, default: false, source: 'default', env: 'MASTER_KEY_ADMIN', pinned: false, settable: false, scope: 'env', help: 'Security switch.' },
   { name: 'webPublicUrl', kind: 'string', value: 'https://console.example', default: '', source: 'env', env: 'WEB_PUBLIC_URL', pinned: true, settable: false, scope: 'env', help: 'Console origin. Set in .env only.' },
@@ -679,8 +658,8 @@ if (/environment wins|read-only here|remove it from \.env/.test(intro) || /set b
 if (ctl(free).tag !== 'select' || ctl(free).disabled || ctl(free).value !== 'debug' || false) fail('enum select');
 if (ctl(bool).type !== 'checkbox' || ctl(bool).attrs.role !== 'switch' || ctl(bool).checked !== false) fail('bool must be a switch');
 if (!note(bool).includes('after an Uplink restart') || !tipOf(bool).includes('after an Uplink restart')) fail('restart note: ' + note(bool));
-if (ctl(str).type !== 'text' || ctl(str).value !== 'm1=0xabc') fail('string must be a text field');
-if (ctl(str).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3') fail('providerExclude placeholder: ' + ctl(str).placeholder);
+if (ctl(str).type !== 'text' || ctl(str).value !== '0xabababababababababababababababababababab') fail('string must be a text field');
+if (ctl(str).placeholder !== '0xProvider1,0xProvider2') fail('providerExclude placeholder: ' + ctl(str).placeholder);
 if (note(str) !== 'saved') fail('providerExclude note: ' + note(str));
 if (!/href="https:\/\/github\.com\/MorpheusAIs\/Morpheus-Uplink\/blob\/main\/docs\/06-developers\.md#environment-variables"/.test(html.slice(html.indexOf('id="tab-settings"'), html.indexOf('id="tab-playground"')))) fail('Settings needs one link to the .env reference');
 // One set of values: no edits → nothing to save; edits are collected per
@@ -716,7 +695,7 @@ if (!/t !== 'step_up_required'/.test(extract('stepUpFetch')) || !/openStepUp\(\)
   const empty = [Object.assign({}, fixture[3], { value: '', source: 'default' })];
   renderSettings(empty);
   const r = box.children[0];
-  if (ctl(r).value !== '' || ctl(r).placeholder !== '<model>=0xProvider1,0xProvider2; <model2>=0xProvider3' || note(r) !== 'default (none)') fail('empty providerExclude: ' + ctl(r).placeholder + ' / ' + note(r));
+  if (ctl(r).value !== '' || ctl(r).placeholder !== '0xProvider1,0xProvider2' || note(r) !== 'default (none)') fail('empty providerExclude: ' + ctl(r).placeholder + ' / ' + note(r));
 }
 console.log('OK: Settings tab: typed controls, defaults and restart notes in tooltips, only settable rows shown (none read-only), .env reference link, one Save / Cancel changes / Use defaults bar, Restart Uplink confirms and steps up, export and import behind step-up');
 NODE

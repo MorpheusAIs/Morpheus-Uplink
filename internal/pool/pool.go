@@ -54,17 +54,9 @@ type Pool struct {
 	// cutNext: a provider that cut a stream; the model's next open walks
 	// the bids excluding it, whatever the cool-down (one-shot).
 	cutNext map[string]string // normModel -> provider
-	// exclude: the providerExclude setting, model id or lowercased name ->
-	// providers never opened for it. namer maps an id to its name.
-	exclude map[string]map[string]bool
-	namer   func(modelID string) string
-	// excludeByName: some exclusions are keyed by catalog name.
-	excludeByName bool
-	// unresolvedRefused: models whose opens were refused because their
-	// name-keyed exclusions could not be resolved (for the console).
-	unresolvedRefused map[string]bool
-	unresolvedCapped  bool        // an id was dropped at MaxUnresolvedRefusals
-	catalogLoaded     func() bool // no network; see SetCatalogLoaded
+	// exclude: the providerExclude setting, lowercase provider addresses
+	// never opened for any model.
+	exclude map[string]bool
 
 	// Leases (lease.go), under mu.
 	sess          map[string]*sessState // session id -> lease state
@@ -321,7 +313,7 @@ func (p *Pool) rehydrate(force bool) error {
 		if p.isClosing(s.ID) {
 			continue // the boot reconcile is closing it
 		}
-		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider) || p.isExcluded(s.ModelAgentID, s.Provider)
+		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider) || p.IsProviderExcluded(s.Provider)
 		if !usable {
 			// Past end (or inside buffer): ask router to close so unused
 			// returns and used moves to the daylock queue.

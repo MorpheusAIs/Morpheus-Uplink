@@ -25,7 +25,7 @@ func fromEnvLogs(t *testing.T) (*Config, string) {
 var ignoredEnvValues = map[string]string{
 	"sessionDurationDefault": "4321", "sessionDurationMax": "54321", "sessionIdleGrace": "1234",
 	"forwardIdle": "432", "logLevel": "debug", "sessionFailover": "false", "providerCooldown": "4444",
-	"providerExclude": "m1=0x" + strings.Repeat("c", 40), "sessionRelease": "false",
+	"providerExclude": "0x" + strings.Repeat("c", 40), "sessionRelease": "false",
 	"auditRetentionDays": "3210", "housekeeping": "false",
 }
 

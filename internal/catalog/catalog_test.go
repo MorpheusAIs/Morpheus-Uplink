@@ -212,3 +212,89 @@ func TestFetchRunsOutsideLock(t *testing.T) {
 	}
 	close(rel2)
 }
+
+const (
+	provA = "0x1111111111111111111111111111111111111111"
+	provB = "0x2222222222222222222222222222222222222222"
+	onlyA = "0x0a0a000000000000000000000000000000000000000000000000000000000000"
+	noBid = "0x0b0b000000000000000000000000000000000000000000000000000000000000"
+)
+
+func provBid(prov, pps string) BidDetail {
+	return BidDetail{ProviderID: prov, Status: "healthy", PricePerSecond: pps, PriceMorPerHour: 1}
+}
+
+// The providerExclude list applies in List: excluded bids are dropped (so
+// prices ignore them), a model left with no bid is hidden, a model the feed
+// lists without bids is kept, and the stored feed is not modified.
+func TestListDropsExcludedProviders(t *testing.T) {
+	c := loaded(
+		twin(cheapID, "mixed", provBid(provA, "50"), provBid(provB, "100")),
+		twin(onlyA, "only-a", provBid(provA, "10")),
+		twin(noBid, "no-bids"),
+	)
+	c.SetProviderExclude([]string{" " + strings.ToUpper(provA[:2]) + strings.ToUpper(provA[2:]) + " "})
+	got, err := c.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]Model{}
+	for _, m := range got {
+		ids[m.ID] = m
+	}
+	if _, ok := ids[onlyA]; ok || len(got) != 2 {
+		t.Fatalf("listed %d models, a fully excluded one shown: %v", len(got), ids)
+	}
+	if _, ok := ids[noBid]; !ok {
+		t.Fatal("a model without bids in the feed must stay listed")
+	}
+	m := ids[cheapID]
+	if len(m.BidDetail) != 1 || m.BidDetail[0].ProviderID != provB {
+		t.Fatalf("bids %+v", m.BidDetail)
+	}
+	if p := m.LowestPricePerSecondWei(); p == nil || p.String() != "100" {
+		t.Fatalf("price %v ignores excluded bids? want 100", p)
+	}
+	if b, ok := m.LowestBid(); !ok || b.ProviderID != provB {
+		t.Fatalf("lowest bid %+v", b)
+	}
+	// The feed itself is untouched: clearing the list shows everything.
+	c.SetProviderExclude(nil)
+	if all, _ := c.List(); len(all) != 3 || len(all[0].BidDetail) != 2 {
+		t.Fatalf("after clearing: %d models", len(all))
+	}
+}
+
+// The shared-name choice skips excluded bids; a name whose every row is
+// excluded still resolves (the pool refuses the open), and names stay
+// known for labels.
+func TestResolveSharedNameSkipsExcludedBids(t *testing.T) {
+	// cheap is cheaper only through provA; outside it, pricey wins.
+	cheap := twin(cheapID, "shared", provBid(provA, "50"), provBid(provB, "1000"))
+	pricey := twin(priceyID, "shared", provBid(provB, "900"))
+	for _, order := range [][]Model{{cheap, pricey}, {pricey, cheap}} {
+		c := loaded(order...)
+		if id, _ := c.Resolve("shared"); id != cheapID {
+			t.Fatalf("no exclusions: %s", id)
+		}
+		c.SetProviderExclude([]string{provA})
+		if id, err := c.Resolve("shared"); err != nil || id != priceyID {
+			t.Fatalf("with provA excluded: %s %v, want the twin outside the list", id, err)
+		}
+		left := withoutExcluded([]Model{cheap}, c.excluded)
+		if len(left) != 1 || !preferModel(pricey, left[0]) || preferModel(left[0], pricey) {
+			t.Fatal("preferModel must compare the bids outside the list")
+		}
+	}
+	c := loaded(twin(onlyA, "gone", provBid(provA, "10")))
+	c.SetProviderExclude([]string{provA})
+	if id, err := c.Resolve("gone"); err != nil || id != onlyA {
+		t.Fatalf("fully excluded name: %s %v", id, err)
+	}
+	if n := c.NameByID(onlyA); n != "gone" {
+		t.Fatalf("NameByID of a hidden model: %q", n)
+	}
+	if l, _ := c.List(); len(l) != 0 {
+		t.Fatalf("hidden model listed: %+v", l)
+	}
+}

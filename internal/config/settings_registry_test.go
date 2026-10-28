@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"os"
 	"strings"
@@ -176,11 +177,11 @@ func TestApplyPersisted(t *testing.T) {
 		"sessionRelease": "false", "auditRetentionDays": "400", "sessionFailover": "false", "housekeeping": "false",
 		"providerCooldown": "999999", "activeModelsUrl": "https://feed.example/m.json", "gatewayBidsUrl": "https://feed.example/b.json",
 		"masterKeyAdmin": "true", "routerLogLevelTcp": "debug",
-		"providerExclude": "m1=0x" + strings.Repeat("a", 40),
+		"providerExclude": "0x" + strings.Repeat("a", 40),
 		"forwardIdle":     "60", // live: applied by the API server, not here
 		"webPublicUrl":    "https://console.example",
 	})
-	if c.SessionRelease || c.AuditRetentionDays != 400 || c.SessionFailover || c.Housekeeping || len(c.ProviderExclude["m1"]) != 1 {
+	if c.SessionRelease || c.AuditRetentionDays != 400 || c.SessionFailover || c.Housekeeping || len(c.ProviderExclude) != 1 {
 		t.Fatalf("persisted values not applied: %+v", c)
 	}
 	if c.ProviderCooldownSec != 600 || c.ForwardIdleSec != 180 || c.WebPublicURL != "" || c.MasterKeyAdmin ||
@@ -200,18 +201,73 @@ func TestApplyPersisted(t *testing.T) {
 
 func TestValidateProviderExclude(t *testing.T) {
 	a, b := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("B", 40)
-	for _, ok := range []string{"", "m1=" + a, "m1=" + a + "," + b + "; m2=" + b, "0x" + strings.Repeat("c", 64) + "=" + a} {
+	for _, ok := range []string{"", "  ", a, a + "," + b, " " + a + " ,  " + b + " ", a + ",," + b + ",", a + ",0x" + strings.ToUpper(a[2:]) + "," + a} {
 		if err := ValidateProviderExclude(ok); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"m1", "m1=", "m1=0x12", "m1=" + a + ",x", "0x12=" + a, "=" + a} {
-		if err := ValidateProviderExclude(bad); err == nil {
-			t.Errorf("%q accepted", bad)
+	for _, bad := range []string{"x", "0x12", a + ",x", a + "1", "0x" + strings.Repeat("g", 40), "0x" + strings.Repeat("c", 64), a[2:]} {
+		err := ValidateProviderExclude(bad)
+		if err == nil || errors.Is(err, ErrProviderExcludeOldFormat) || !strings.Contains(err.Error(), "not a 0x provider address") {
+			t.Errorf("%q: %v", bad, err)
 		}
 	}
-	got := FormatProviderExclude(ParseProviderExclude("m2=" + a + ";m1=" + b))
-	if got != "m1="+strings.ToLower(b)+";m2="+a {
-		t.Errorf("format %q", got)
+	// The former per-model form fails with the re-enter message; it is
+	// not converted.
+	for _, old := range []string{"m1=" + a, "m1=" + a + "," + b + "; m2=" + b, "0x" + strings.Repeat("c", 64) + "=" + a, a + ";" + b, "=" + a} {
+		err := ValidateProviderExclude(old)
+		if !errors.Is(err, ErrProviderExcludeOldFormat) {
+			t.Errorf("%q: %v, want the old-format error", old, err)
+		}
+	}
+	msg := ErrProviderExcludeOldFormat.Error()
+	for _, want := range []string{"format changed", "comma-separated list of 0x provider addresses", "every model", "re-enter it on the Settings tab"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("old-format message %q lacks %q", msg, want)
+		}
+	}
+}
+
+func TestProviderExcludeCanonicalForm(t *testing.T) {
+	a, b := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	mixedB := "0x" + strings.Repeat("B", 20) + strings.Repeat("b", 20)
+	if got := FormatProviderExclude(ParseProviderExclude(" " + mixedB + " ,, " + a + ", " + strings.ToUpper(a[2:]) + "x," + b + "," + a + " ")); got != a+","+b {
+		t.Errorf("parse+format %q, want %q", got, a+","+b)
+	}
+	if got := ParseProviderExclude(""); len(got) != 0 {
+		t.Errorf("empty: %v", got)
+	}
+	// Saving stores the canonical form: lowercase, deduped, sorted.
+	d, ok := SettingByName("providerExclude")
+	if !ok {
+		t.Fatal("no providerExclude row")
+	}
+	v, err := d.Validate(" " + mixedB + ", " + a + "," + b + " ")
+	if err != nil || v != a+","+b {
+		t.Fatalf("Validate = %q, %v; want %q", v, err, a+","+b)
+	}
+	if v, err := d.Validate("m1=" + a); err == nil || !strings.Contains(err.Error(), "providerExclude: the format changed") {
+		t.Fatalf("old form saved: %q %v", v, err)
+	}
+}
+
+// A saved value in the former per-model form is skipped at boot like any
+// invalid saved value: a note (name only), and no exclusions apply.
+func TestApplyPersistedOldProviderExcludeSkipped(t *testing.T) {
+	clearSettingEnv(t)
+	c := quietFromEnv(t)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	a := "0x" + strings.Repeat("a", 40)
+	notes := ApplyPersisted(c, map[string]string{"providerExclude": "m1=" + a + "; m2=" + a})
+	if len(c.ProviderExclude) != 0 {
+		t.Fatalf("old-format value applied: %v", c.ProviderExclude)
+	}
+	if len(notes) != 1 || notes[0] != "providerExclude persisted value invalid; ignored" {
+		t.Fatalf("notes %v", notes)
+	}
+	if strings.Contains(buf.String(), a) {
+		t.Fatalf("value logged: %s", buf.String())
 	}
 }
