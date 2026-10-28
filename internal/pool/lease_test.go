@@ -53,10 +53,26 @@ type leaseRouter struct {
 	closes    []string
 	closeFail atomic.Bool
 	n         int
+	// bidders overrides the providers bidding on a model (default: both
+	// lease providers); an open by model lands on the first of them.
+	bidders map[string][]string
+	byModel int      // opens by model
+	byBid   []string // bid ids opened by bid
+}
+
+// zeroHash is the outer ID of every rated-bid row: the router leaves it
+// unset; the bid id is Bid.Id.
+const zeroHash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+func (lr *leaseRouter) providersOf(model string) []string {
+	if ps, ok := lr.bidders[model]; ok {
+		return ps
+	}
+	return []string{leaseProv1, leaseProv2}
 }
 
 func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
-	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}}
+	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"address": "0x1111111111111111111111111111111111111111"})
@@ -109,9 +125,12 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
 		m := r.PathValue("id")
 		bids := []map[string]any{}
-		for i, pv := range []string{leaseProv1, leaseProv2} {
+		lr.mu.Lock()
+		provs := lr.providersOf(m)
+		lr.mu.Unlock()
+		for i, pv := range provs {
 			bid := m + "|" + pv
-			bids = append(bids, map[string]any{"ID": bid, "Bid": map[string]any{"Id": bid, "Provider": pv}, "Score": float64(10 - i)})
+			bids = append(bids, map[string]any{"ID": zeroHash, "Bid": map[string]any{"Id": bid, "Provider": pv}, "Score": float64(10 - i)})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
 	})
@@ -131,10 +150,25 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": id})
 	}
 	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) {
-		open(w, r, r.PathValue("id"), leaseProv1)
+		m := r.PathValue("id")
+		lr.mu.Lock()
+		lr.byModel++
+		prov := leaseProv1
+		if ps := lr.providersOf(m); len(ps) > 0 {
+			prov = ps[0]
+		}
+		lr.mu.Unlock()
+		open(w, r, m, prov)
 	})
 	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
-		m, pv, _ := strings.Cut(r.PathValue("id"), "|")
+		lr.mu.Lock()
+		lr.byBid = append(lr.byBid, r.PathValue("id"))
+		lr.mu.Unlock()
+		m, pv, ok := strings.Cut(r.PathValue("id"), "|")
+		if !ok {
+			http.Error(w, `{"error":"provider unreachable"}`, 500)
+			return
+		}
 		open(w, r, m, pv)
 	})
 	ts := httptest.NewServer(mux)

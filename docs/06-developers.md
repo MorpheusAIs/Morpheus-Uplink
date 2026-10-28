@@ -579,8 +579,9 @@ the pool stays in charge of which session is open. Turning the
   audited on the ops stream as `provider_unavailable`, one line per model
   per minute with a count. In a failover, the retired-session reopen that
   finds nothing available relays the original error (audit
-  `no_available`). With nothing avoided, the normal open by model is
-  unchanged.
+  `no_available`). With nothing avoided, or when no avoided provider has
+  a bid for the model, the normal open by model is unchanged (the router
+  rates and walks the providers); a failover reopen follows the same rule.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
   the answer cannot be restarted. Two upstream events count as a
@@ -608,7 +609,10 @@ the pool stays in charge of which session is open. Turning the
   open sessions on them (reason `provider_excluded`) so the unused stake
   is returned, including sessions for a model this node does not serve.
   If the wallet is shared with another client, that client's sessions on
-  excluded providers are closed too. With any exclusion the open goes by bid over the providers left.
+  excluded providers are closed too. When an excluded provider bids on the
+  model, the open goes by bid over the providers left (router's rated
+  order, the bid id from `Bid.Id`); when none does, it is the normal open
+  by model.
   When only excluded providers serve the model, the request gets `503`
   `no_eligible_provider` (no ids in the body, no `Retry-After`) and
   nothing is opened. When the rated bids cannot be read, nothing is opened

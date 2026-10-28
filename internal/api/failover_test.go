@@ -265,7 +265,8 @@ func (m *fakeMarket) server() *httptest.Server {
 		}
 		bids := []map[string]any{}
 		for i, p := range m.providers {
-			bids = append(bids, map[string]any{"ID": bidOf(p), "Bid": map[string]any{"Id": bidOf(p), "Provider": p}, "Score": float64(10 - i)})
+			// Router shape: the outer ID is left unset (zero hash); the bid id is Bid.Id.
+			bids = append(bids, map[string]any{"ID": "0x" + strings.Repeat("0", 64), "Bid": map[string]any{"Id": bidOf(p), "Provider": p}, "Score": float64(10 - i)})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
 	})

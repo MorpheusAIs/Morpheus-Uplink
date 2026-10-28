@@ -185,7 +185,8 @@ func (p *Pool) clearCut(modelID string) {
 }
 
 // avoidSet is every provider a new open for the model avoids: cooling,
-// configured exclusions, and a pending stream cut.
+// configured exclusions, and a pending stream cut. Only the ones that bid
+// on the model change how it opens (avoidedBidder).
 func (p *Pool) avoidSet(modelID string) map[string]bool {
 	out := p.coolingProviders(modelID)
 	for pr := range p.excludedProviders() {
@@ -279,6 +280,28 @@ func alternates(bids []router.RatedBid, exclude map[string]bool) ([]router.Rated
 	return out, len(seen)
 }
 
+// avoidedBidder reports whether an avoided provider has a bid in bids.
+// When none has, a plain open by model cannot land on one, so the router
+// rates and walks the providers itself.
+func avoidedBidder(bids []router.RatedBid, avoid map[string]bool) bool {
+	for _, b := range bids {
+		if avoid[b.Provider] {
+			return true
+		}
+	}
+	return false
+}
+
+// openByModel is the plain open by model: the router picks the provider.
+func (p *Pool) openByModel(modelID string, durationSec int) (string, string, error) {
+	id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec})
+	if err != nil {
+		return "", "", err
+	}
+	prov, _ := p.sessionProvider(modelID, id)
+	return id, prov, nil
+}
+
 // openExcluding opens a session on a provider outside the avoided set by
 // walking alts (the rated bids already filtered of it) by bid: at most
 // MaxBidAttempts opens, one per provider. Avoidance is never left to the
@@ -314,9 +337,10 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 }
 
 // openAvoidingCooling is the normal open: a plain open by model when no
-// provider of this model is avoided, else a by-bid open outside the
-// avoided set (cooling, configured exclusions, a pending stream cut). It
-// never drops an avoidance to get a session (fail fast):
+// provider is avoided, or when no avoided provider bids on the model (read
+// from the rated bids); else a by-bid open outside the avoided set
+// (cooling, configured exclusions, a pending stream cut), in the router's
+// rated order. It never drops an avoidance to get a session (fail fast):
 //   - only configured exclusions (the providerExclude setting) serve the model
 //     → ErrNoEligibleProvider;
 //   - every eligible provider is avoided, or each one the walk tried failed
@@ -327,12 +351,7 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
 	exclude := p.avoidSet(modelID)
 	if len(exclude) == 0 {
-		id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec})
-		if err != nil {
-			return "", "", err
-		}
-		prov, _ := p.sessionProvider(modelID, id)
-		return id, prov, nil
+		return p.openByModel(modelID, durationSec)
 	}
 	configured := p.excludedProviders()
 	cut := p.pendingCut(modelID)
@@ -347,6 +366,13 @@ func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, str
 		// An open by model could land on an avoided provider: refuse.
 		slog.Warn("pool: rated bids unavailable and providers are avoided; not opening", "model", modelID, "err", err)
 		return refuse(nil, false)
+	}
+	if !avoidedBidder(bids, exclude) {
+		id, prov, err := p.openByModel(modelID, durationSec)
+		if err == nil && cut != "" {
+			p.clearCut(modelID)
+		}
+		return id, prov, err
 	}
 	if _, m := alternates(bids, configured); m == 0 && len(configured) > 0 {
 		slog.Warn("pool: only configured-excluded providers serve this model", "model", modelID)
@@ -540,8 +566,14 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		return res, nil
 	}
 
-	// 5. Open on another provider. 6. Pool it with its provider, leased.
-	id, prov, err := p.openExcluding(modelID, durationSec, alts)
+	// 5. Open on another provider: by bid when an avoided provider bids
+	// on the model, else by model. 6. Pool it with its provider, leased.
+	var id, prov string
+	if avoidedBidder(bids, exclude) {
+		id, prov, err = p.openExcluding(modelID, durationSec, alts)
+	} else {
+		id, prov, err = p.openByModel(modelID, durationSec)
+	}
 	p.finishFailoverOpen(key, ao, id, prov, durationSec, err, &res)
 	if err != nil {
 		return res, err

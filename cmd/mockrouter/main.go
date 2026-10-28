@@ -6,6 +6,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -86,6 +87,18 @@ func main() {
 		mu.Unlock()
 		log.Printf("mock: opened session %s for model %s", session, model)
 		writeJSON(w, map[string]string{"sessionID": session})
+	}))
+
+	// Rated bids in the router's shape: the outer ID is left unset (zero
+	// hash) and the bid id is Bid.Id. One fake provider per model.
+	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		model := r.PathValue("id")
+		sum := sha256.Sum256([]byte(strings.ToLower(model)))
+		writeJSON(w, map[string]any{"bids": []map[string]any{{
+			"ID":    "0x" + strings.Repeat("0", 64),
+			"Bid":   map[string]any{"Id": "0x" + hex.EncodeToString(sum[:]), "Provider": "0x" + strings.Repeat("ab", 20), "ModelAgentId": model},
+			"Score": 1.0,
+		}}})
 	}))
 
 	mux.HandleFunc("POST /blockchain/sessions/{id}/close", requireAuth(func(w http.ResponseWriter, r *http.Request) {

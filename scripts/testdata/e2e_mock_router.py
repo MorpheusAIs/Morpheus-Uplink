@@ -163,7 +163,7 @@ class H(BaseHTTPRequestHandler):
             if path.startswith("/blockchain/models/") and path.endswith("/bids/rated") and method == "GET":
                 model = path[len("/blockchain/models/"):-len("/bids/rated")]
                 return self._json(200, {"bids": [
-                    {"ID": bid_id(model, p), "Bid": {"Id": bid_id(model, p), "Provider": p, "ModelAgentId": model},
+                    {"ID": "0x" + "0" * 64, "Bid": {"Id": bid_id(model, p), "Provider": p, "ModelAgentId": model},
                      "Score": 10 - i} for i, p in enumerate(PROVIDERS)]})
             if method == "POST" and path.endswith("/session") and (
                     path.startswith("/blockchain/models/") or path.startswith("/blockchain/bids/")):

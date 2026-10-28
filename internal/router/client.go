@@ -351,18 +351,27 @@ func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
 	}
 	out := make([]RatedBid, 0, len(res.Bids))
 	for _, b := range res.Bids {
-		id := b.ID
-		if id == "" {
-			id = b.Bid.Id
+		// The bid id is Bid.Id: the router leaves the outer ID unset (a
+		// zero hash), so it is only a fallback when it is non-zero.
+		id := strings.TrimSpace(b.Bid.Id)
+		if zeroHex(id) {
+			id = strings.TrimSpace(b.ID)
 		}
 		prov := strings.ToLower(strings.TrimSpace(b.Bid.Provider))
-		if id == "" || prov == "" {
+		if zeroHex(id) || zeroHex(prov) {
 			continue
 		}
 		out = append(out, RatedBid{ID: id, Provider: prov, Score: b.Score})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out, nil
+}
+
+// zeroHex reports a missing hex value: empty, "0x" alone, or all zeros
+// (the zero hash or zero address).
+func zeroHex(s string) bool {
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
+	return strings.Trim(s, "0") == ""
 }
 
 func (c *Client) CloseSession(sessionID string) error {
