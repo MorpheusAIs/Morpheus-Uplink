@@ -112,3 +112,39 @@ func TestRescanPrunesClosedSlots(t *testing.T) {
 		}
 	}
 }
+
+// A slot opened shortly before the scan started is kept even when the
+// chain list does not show it yet (a lagging read must not cause a second
+// open); one older than pruneGrace is pruned; one opened after the scan
+// started is kept.
+func TestRescanPruneGrace(t *testing.T) {
+	rr := &rescanRouter{open: []map[string]any{}}
+	p := New(router.New(rr.server(t).URL, "u", "p"), 600)
+	now := time.Now()
+	future := now.Add(time.Hour)
+	p.mu.Lock()
+	p.entries["recent"] = entry{sessionID: "0xrecent", expiresAt: future}
+	p.newStateLocked("recent", "0xrecent", now.Add(-pruneGrace/2), future, "")
+	p.entries["old"] = entry{sessionID: "0xold", expiresAt: future}
+	p.newStateLocked("old", "0xold", now.Add(-pruneGrace-30*time.Second), future, "")
+	p.entries["newer"] = entry{sessionID: "0xnewer", expiresAt: future}
+	p.newStateLocked("newer", "0xnewer", now.Add(time.Hour), future, "")
+	p.entries["oldbusy"] = entry{sessionID: "0xoldbusy", expiresAt: future}
+	p.newStateLocked("oldbusy", "0xoldbusy", now.Add(-time.Hour), future, "").inflight = 1
+	p.mu.Unlock()
+	if err := p.RehydrateForce(); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, s := range p.Snapshot() {
+		got[s.SessionID] = true
+	}
+	for _, id := range []string{"0xrecent", "0xnewer", "0xoldbusy"} {
+		if !got[id] {
+			t.Errorf("%s pruned: %v", id, got)
+		}
+	}
+	if got["0xold"] {
+		t.Errorf("0xold (older than pruneGrace) not pruned: %v", got)
+	}
+}

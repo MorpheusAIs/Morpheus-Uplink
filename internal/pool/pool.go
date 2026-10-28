@@ -19,6 +19,13 @@ import (
 // we never send a prompt into a session that expires mid-answer.
 const expiryBuffer = 90 * time.Second
 
+// pruneGrace: a rescan never prunes a pool slot opened less than this long
+// before the scan started, so an open the chain read does not show yet is
+// not dropped (and then opened again, locking a second stake). Two router
+// call bounds: the open's own call and the list call can each take up to
+// router.AdminTimeout, so a read lagging behind an open stays inside it.
+const pruneGrace = 2 * router.AdminTimeout
+
 type entry struct {
 	sessionID string
 	expiresAt time.Time
@@ -372,8 +379,9 @@ func (p *Pool) rehydrate(force bool) error {
 	}
 	// Prune pool slots whose session is not in the scanned open list
 	// (closed elsewhere): only with nothing in flight, and never a session
-	// opened after this scan started (the list may predate it). Only a
-	// successful scan gets here.
+	// opened after this scan started or within pruneGrace before it (the
+	// list may lag behind it). Only a successful scan gets here.
+	keepAfter := scanStart.Add(-pruneGrace)
 	onChain := make(map[string]bool, len(open))
 	for _, s := range open {
 		onChain[strings.ToLower(s.ID)] = true
@@ -382,7 +390,7 @@ func (p *Pool) rehydrate(force bool) error {
 		if onChain[strings.ToLower(e.sessionID)] {
 			continue
 		}
-		if st := p.sess[e.sessionID]; st != nil && (st.inflight > 0 || !st.openedAt.Before(scanStart)) {
+		if st := p.sess[e.sessionID]; st != nil && (st.inflight > 0 || st.openedAt.After(keepAfter)) {
 			continue
 		}
 		delete(p.entries, modelID)
