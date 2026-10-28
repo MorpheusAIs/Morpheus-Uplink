@@ -30,6 +30,11 @@ its value) and uses the default until the value is saved on the tab.
   uses 90 days. If you kept a longer retention, back up the audit files in
   the data directory before upgrading. Audit retention takes effect at the
   next restart after it is saved.
+- **Provider exclusions** are now a plain comma-separated list of `0x`
+  provider addresses, excluded for every model. A value saved in the
+  earlier per-model form (with `=` or `;`) is not converted: it is ignored
+  at startup (one warning, no exclusions apply) and refused on save, so
+  re-enter it on the **Settings** tab, for example `0xProvider1,0xProvider2`.
 - Secrets, router settings and the remaining wiring (`WEB_PUBLIC_URL`,
   `ACTIVE_MODELS_URL`, `GATEWAY_BIDS_URL`, `MASTER_KEY_ADMIN`) stay in
   `.env`.

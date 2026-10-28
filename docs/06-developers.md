@@ -587,28 +587,27 @@ the pool stays in charge of which session is open. Turning the
   are logged; nothing is cooled, retired or failed over, and the pooled
   session is kept. A client hang-up also cancels the upstream request.
 - *Configured exclusions* (the `providerExclude` setting): providers never
-  opened for a model, as `<model>=<provider>[,<provider>]…` with entries
-  separated by `;`. The model is a registration id or a catalog name; a
-  provider is its `0x` address. Opens and Rehydrate never use them. With
-  any exclusion the open goes by bid over the providers left. When only
-  excluded providers serve the model, the request gets `503`
+  opened for any model, as a comma-separated list of `0x` provider
+  addresses (`0x` + 40 hex), for example `0xProvider1,0xProvider2`. Saved
+  lowercase, without duplicates; any other entry, or a value in the
+  earlier per-model form (with `=` or `;`), is refused on save with a
+  message to re-enter it as a plain list. Opens and Rehydrate never use
+  them. With any exclusion the open goes by bid over the providers left.
+  When only excluded providers serve the model, the request gets `503`
   `no_eligible_provider` (no ids in the body, no `Retry-After`) and
   nothing is opened. When the rated bids cannot be read, nothing is opened
-  (`503` `no_available_provider`, above). An entry keyed by catalog name needs the model's name: while the
-  catalog has no name for the requested id (for example the model feed is
-  down at boot and the client sends the `0x` id), opens for that model are
-  refused with `503` `no_eligible_provider`, failover keeps the session,
-  and on-chain sessions are not adopted, until the name resolves; the
-  console Status page shows a warning while that refusal lasts. The
-  warning counts well-formed model ids (`0x` + 64 hex) refused while the
-  catalog has never loaded, up to 64 ("64 or more" past that); reading it
-  fetches nothing, and it clears once the catalog loads. An id the loaded
-  catalog does not list is still refused but not counted. After a failed
-  catalog fetch no new fetch starts for 10 seconds (stale data is served,
-  or the lookup fails while nothing has loaded), and fetches never hold the
-  catalog lock. Entries
-  keyed by model id never need the catalog.
-  Bad entries are logged by position and ignored.
+  (`503` `no_available_provider`, above). The model catalog leaves the
+  excluded providers' bids out (one filter, in `catalog.List` and the
+  name lookup), so listed prices, stake estimates and the choice between
+  models sharing a name use only the other bids; a model offered only by
+  excluded providers is hidden from `/v1/models` and the console model
+  picker (its name still resolves, so a request for it gets the `503`
+  above rather than "not found"). After a failed catalog fetch no new
+  fetch starts for 10 seconds (stale data is served, or the lookup fails
+  while nothing has loaded), and fetches never hold the catalog lock. A
+  saved value that no longer validates is ignored at startup with one
+  warning (its value is not logged) and no exclusions apply until it is
+  saved again.
 - *Audit:* a `provider_failover` event (Security alerts) with the model,
   the first 10 characters of the session id, the failed provider's short
   address, the status class (`402`, `429`, `5xx`, `stream_cut` for a bare
@@ -701,7 +700,7 @@ enrolment gate applies as on other admin routes.
 | `logLevel` | — | enum | `debug` `info` `warn` `error` | `info` | at once | slog.LevelVar (live) |
 | `sessionFailover` | — | bool | `true` `false` | `true` | Uplink restart | api/openai.go (Config.SessionFailover) |
 | `providerCooldown` | — | int | 0…86400 | `600` | Uplink restart | cmd/uplink pool.SetProviderCooldown |
-| `providerExclude` | — | string | text | (empty) | Uplink restart | cmd/uplink pool.SetProviderExclude |
+| `providerExclude` | — | string | comma-separated `0x` addresses | (empty) | Uplink restart | cmd/uplink pool.SetProviderExclude, catalog.SetProviderExclude |
 | `sessionRelease` | — | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
 | `auditRetentionDays` | — | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
 | `housekeeping` | — | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
@@ -725,7 +724,7 @@ enrolment gate applies as on other admin routes.
   answer).
 - *Controls.* Booleans are toggles, numbers number fields, enums a list,
   text a text field (the empty provider exclusions box shows the format
-  `<model>=0xProvider1,0xProvider2; <model2>=0xProvider3`). Each row shows
+  `0xProvider1,0xProvider2`). Each row shows
   its default; the tooltip gives the
   range or values and says when a restart is needed.
 - *Applies.* "at once": new sessions, the next call's timers, the next
