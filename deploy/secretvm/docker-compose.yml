@@ -19,8 +19,9 @@ x-logging: &default-logging
 
 services:
   uplink:
-    # Release assets pin this to the built digest (scripts/deploy-assets.sh).
-    image: ghcr.io/morpheusais/uplink:latest
+    # Pinned to the current release (v1.0.24); release assets re-pin it to
+    # the built digest (scripts/deploy-assets.sh). Bumped after each release.
+    image: ghcr.io/morpheusais/uplink@sha256:0df5e82d88d554cec4710c52960fb71b090f2958fe7d2b9dcb52fda6a1326249
     restart: unless-stopped
     logging: *default-logging
     security_opt:

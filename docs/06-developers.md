@@ -835,6 +835,23 @@ multi-arch image is pushed.
 
 `docker-compose.local.yml` with `.env.example` is checked too (no asset).
 
+The templates pin the Uplink image by digest too (the current release, not
+`:latest`), so a template used as is pulls a known image. `generate`
+re-pins that line to the digest just built, so the published assets always
+match their release. The template digest is bumped after each release:
+
+1. Read the new digest from the release notes (`Image: ... (digest
+   sha256:...)`) or, read-only, with
+   `docker buildx imagetools inspect ghcr.io/morpheusais/uplink:vX.Y.Z`.
+   Never run a build or a workflow to get it.
+2. Put `ghcr.io/morpheusais/uplink@sha256:<digest>` on the Uplink image line
+   of `deploy/secretvm`, `deploy/generic` and `deploy/railway`
+   `docker-compose.yml`, with the version in the comment above it.
+3. Ship it in the next pull request. A change under `deploy/` makes a
+   release of its own, so the bump rides along with other work rather than
+   going in a PR by itself; the templates may lag one release, the assets
+   never do.
+
 - `generate IMAGE DIGEST DIR` replaces the one Uplink image line with
   `IMAGE@DIGEST` and copies the env examples.
 - `check IMAGE DIGEST DIR` enforces:
