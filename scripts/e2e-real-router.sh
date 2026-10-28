@@ -36,7 +36,7 @@ COOKIE_SECRET="e2e-cookie-$(openssl rand -hex 12)"
 export COOKIE_CONTENT="admin:$COOKIE_SECRET"
 export WALLET_PRIVATE_KEY="0x$(openssl rand -hex 32)"   # throwaway, never funded
 export ETH_NODE_ADDRESS="${E2E_ETH_RPC:-https://mainnet.base.org}"
-# Console requests send its host as Host: /admin and /gui answer only on it.
+# Console requests send its host as Host: /admin, /gui and /node answer only on it.
 export WEB_PUBLIC_URL="https://uplink.example"
 
 PROJECT="uplink-e2e-real-$$"
@@ -113,7 +113,7 @@ node_req() {
 }
 rlog() { dc logs --no-color proxy-router 2>&1; }
 c=$(node_req GET /node/healthcheck); [ "$c" = 200 ] || fail "/node/healthcheck did not pass through ($c)"
-spec=$(dc exec -T uplink curl -sS -f -H "Cookie: $SESSION" http://127.0.0.1:8080/node/swagger/doc.json)
+spec=$(dc exec -T uplink curl -sS -f -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Cookie: $SESSION" http://127.0.0.1:8080/node/swagger/doc.json)
 printf '%s' "$spec" | jq -e '.basePath == "/node"' >/dev/null || fail "swagger basePath not rewritten"
 seen_spec() { rlog | grep -q 'HTTP-REQ\] GET /swagger/doc.json'; }
 wait_for "router request log shows the passthrough" 20 seen_spec
@@ -160,7 +160,7 @@ fi
 blocks=$(dc logs --no-color uplink | grep -c '"event":"node_passthrough_block"' || true)
 [ "$blocks" -ge "$n" ] || fail "audit: $blocks node_passthrough_block events, want >= $n"
 echo "OK /node deny list: $n blocked requests -> 403, audited, none in the router request log"
-w=$(dc exec -T uplink curl -sS -f -H "Cookie: $SESSION" http://127.0.0.1:8080/node/wallet)
+w=$(dc exec -T uplink curl -sS -f -H "Host: ${WEB_PUBLIC_URL#https://}" -H "Cookie: $SESSION" http://127.0.0.1:8080/node/wallet)
 st_addr=$(status_json | jq -r .walletAddress)
 [ "$(printf '%s' "$w" | jq -r .address | tr 'A-F' 'a-f')" = "$(printf '%s' "$st_addr" | tr 'A-F' 'a-f')" ] || fail "GET /node/wallet: unexpected body"
 printf '%s' "$w" | jq -e 'keys - ["address","kind","derivationPath"] == []' >/dev/null || fail "GET /node/wallet returned extra fields"

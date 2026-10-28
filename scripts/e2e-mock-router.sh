@@ -47,7 +47,7 @@ COOKIE_SECRET="e2e-cookie-$(openssl rand -hex 12)"
 export COOKIE_CONTENT="admin:$COOKIE_SECRET"
 export WALLET_PRIVATE_KEY="0x$(openssl rand -hex 32)"
 export ETH_NODE_ADDRESS="https://rpc.invalid"
-# Console requests send its host as Host: /admin and /gui answer only on it.
+# Console requests send its host as Host: /admin, /gui and /node answer only on it.
 export WEB_PUBLIC_URL="https://uplink.example"
 export E2E_MOCK_MOR=1000000
 E2E_BOOT_DIR=$(mktemp -d); export E2E_BOOT_DIR

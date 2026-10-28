@@ -8,7 +8,7 @@ import (
 )
 
 // consoleHostAllowed reports whether a request for the console (/admin*,
-// /gui*) may be served on the Host it was sent to. WEB_PUBLIC_URL is the
+// /gui*, /node/*) may be served on the Host it was sent to. WEB_PUBLIC_URL is the
 // only source of the expected host; when it is unset every host is
 // allowed, as before. Only r.Host is read: X-Forwarded-Host and Forwarded
 // are client-controllable and are ignored.
@@ -81,11 +81,13 @@ func defaultPort(scheme string) string {
 	return ""
 }
 
-// isConsolePath is true for /admin, /admin/*, /gui and /gui/*, on either
-// the cleaned or the raw request path.
+// isConsolePath is true for /admin, /admin/*, /gui, /gui/* and the raw
+// router passthrough /node/* (there is no /node route), on either the
+// cleaned or the raw request path.
 func isConsolePath(r *http.Request) bool {
 	for _, p := range []string{r.URL.Path, rawRequestPath(r)} {
-		if p == "/admin" || strings.HasPrefix(p, "/admin/") || p == "/gui" || strings.HasPrefix(p, "/gui/") {
+		if p == "/admin" || strings.HasPrefix(p, "/admin/") || p == "/gui" || strings.HasPrefix(p, "/gui/") ||
+			strings.HasPrefix(p, "/node/") {
 			return true
 		}
 	}

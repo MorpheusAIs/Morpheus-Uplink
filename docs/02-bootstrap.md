@@ -248,9 +248,10 @@ Security tab (recommended; off by default, as on every deploy).
 ### Console host check
 
 When `WEB_PUBLIC_URL` is set, Uplink answers the console paths (`/admin`,
-`/admin/*`, `/gui`, `/gui/*`) only for requests whose `Host` header is the
+`/admin/*`, `/gui`, `/gui/*`, and the admin-only router passthrough
+`/node/*`) only for requests whose `Host` header is the
 host of `WEB_PUBLIC_URL`. Any other host name, or a bare IP address, gets a
-plain 404 before any login check. `/v1/*`, `/healthcheck` and `/` are not
+plain 404 (not cached) before any login check. `/v1/*`, `/healthcheck` and `/` are not
 host-checked.
 
 - Host names compare case-insensitively; a trailing dot is ignored.

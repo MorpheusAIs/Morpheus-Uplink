@@ -60,6 +60,13 @@ func TestConsoleHostAllowed(t *testing.T) {
 // hostReq sends path to ts with the given Host header and extra headers.
 func hostReq(t *testing.T, base, path, host string, hdr map[string]string) (int, string) {
 	t.Helper()
+	code, body, _ := hostReqH(t, base, path, host, hdr)
+	return code, body
+}
+
+// hostReqH is hostReq that also returns the response headers.
+func hostReqH(t *testing.T, base, path, host string, hdr map[string]string) (int, string, http.Header) {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, base+path, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +82,7 @@ func hostReq(t *testing.T, base, path, host string, hdr map[string]string) (int,
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, string(b)
+	return resp.StatusCode, string(b), resp.Header
 }
 
 func TestConsoleHostGateRoutes(t *testing.T) {
@@ -91,16 +98,22 @@ func TestConsoleHostGateRoutes(t *testing.T) {
 		if code, _ := hostReq(t, ts.URL, "/admin/status", h, nil); code != http.StatusUnauthorized {
 			t.Errorf("/admin/status on %q: %d, want 401", h, code)
 		}
+		if code, _ := hostReq(t, ts.URL, "/node/healthcheck", h, nil); code != http.StatusUnauthorized {
+			t.Errorf("/node/healthcheck on %q: %d, want 401", h, code)
+		}
 	}
 
 	// wrong host, bare IPs, port mismatch: plain 404 before auth, no hint
 	bad := []string{"other.example.org", "203.0.113.7", "203.0.113.7:443", "[2001:db8::1]", "[2001:db8::1]:443", good + ":8443", good + ":80"}
-	paths := []string{"/admin", "/admin/", "/admin/status", "/admin/login", "/admin/2fa/status", "/gui", "/gui/", "/gui/index.html"}
+	paths := []string{"/admin", "/admin/", "/admin/status", "/admin/login", "/admin/2fa/status", "/gui", "/gui/", "/gui/index.html", "/node/healthcheck"}
 	for _, h := range bad {
 		for _, p := range paths {
-			code, body := hostReq(t, ts.URL, p, h, nil)
+			code, body, hdr := hostReqH(t, ts.URL, p, h, nil)
 			if code != http.StatusNotFound {
 				t.Errorf("%s on %q: %d, want 404", p, h, code)
+			}
+			if cc := hdr.Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("%s on %q: Cache-Control %q, want no-store", p, h, cc)
 			}
 			if strings.Contains(strings.ToLower(body), "console.example") {
 				t.Errorf("%s on %q: 404 body names the expected host: %q", p, h, body)

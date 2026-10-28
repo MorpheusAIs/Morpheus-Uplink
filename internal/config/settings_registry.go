@@ -116,7 +116,7 @@ var Settings = []SettingDef{
 		Help: "Rated bids feed (an https URL). Informational: Uplink stores it but does not fetch it today, so it has no effect. Set in .env only.", Consumer: "cmd/uplink catalog.WithBidsURL (stored, not fetched)",
 		get: func(c *Config) string { return c.GatewayBidsURL }},
 	{Name: "webPublicUrl", Env: "WEB_PUBLIC_URL", Kind: KindString, Default: "", Scope: ScopeEnvOnly,
-		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only, and /admin and /gui answer only on its host. Set in .env only; takes effect after an Uplink restart.", Consumer: "api CSRF, settings origin and console host checks (Config.WebPublicURL)",
+		Help: "Public origin of this console, https://host[:port] (http://localhost only with UPLINK_DEV_HTTP). Admin changes are accepted from it only, and /admin, /gui and /node answer only on its host. Set in .env only; takes effect after an Uplink restart.", Consumer: "api CSRF, settings origin and console host checks (Config.WebPublicURL)",
 		get: func(c *Config) string { return c.WebPublicURL }},
 
 	{Name: "masterKeyAdmin", Env: "MASTER_KEY_ADMIN", Kind: KindBool, Default: "false", Scope: ScopeEnvOnly,

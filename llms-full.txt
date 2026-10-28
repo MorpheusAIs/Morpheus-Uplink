@@ -772,9 +772,10 @@ Security tab (recommended; off by default, as on every deploy).
 ### Console host check
 
 When `WEB_PUBLIC_URL` is set, Uplink answers the console paths (`/admin`,
-`/admin/*`, `/gui`, `/gui/*`) only for requests whose `Host` header is the
+`/admin/*`, `/gui`, `/gui/*`, and the admin-only router passthrough
+`/node/*`) only for requests whose `Host` header is the
 host of `WEB_PUBLIC_URL`. Any other host name, or a bare IP address, gets a
-plain 404 before any login check. `/v1/*`, `/healthcheck` and `/` are not
+plain 404 (not cached) before any login check. `/v1/*`, `/healthcheck` and `/` are not
 host-checked.
 
 - Host names compare case-insensitively; a trailing dot is ignored.
@@ -2364,7 +2365,7 @@ Traefik is pinned (digest) with JSON access logs, an explicit path allowlist
 low-priority deny router), and an average/burst rate limit middleware on the
 allowlist router. Router `:8082` is not published. Traefik still gets zero
 secrets. The edge does not match on the host name; Uplink itself answers
-`/admin*` and `/gui*` only on the host of `WEB_PUBLIC_URL` (see
+`/admin*`, `/gui*` and `/node/*` only on the host of `WEB_PUBLIC_URL` (see
 [Console host check](../../docs/02-bootstrap.md#console-host-check)).
 
 
