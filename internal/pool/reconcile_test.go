@@ -687,6 +687,38 @@ func TestPlanReconcileExcludedProvider(t *testing.T) {
 	}
 }
 
+// A model hidden by the catalog because all its providers are excluded is
+// not in the configured list; its sessions still close as provider_excluded
+// (an expired one once, as expired), while an unconfigured model on a
+// non-excluded provider is still skipped.
+func TestPlanReconcileExcludedUnconfiguredModel(t *testing.T) {
+	now := time.Now()
+	withProv := func(s router.Session, prov string) router.Session { s.Provider = prov; return s }
+	open := []router.Session{
+		withProv(sess("b-ex", modelB, now.Add(2*time.Hour)), recProvEx),
+		withProv(sess("b-ex-past", modelB, now.Add(-time.Minute)), recProvEx),
+		withProv(sess("b-ok", modelB, now.Add(time.Hour)), recProvOK),
+		withProv(sess("a-ok", modelA, now.Add(time.Hour)), recProvOK),
+	}
+	cfg := map[string]bool{modelA: true} // modelB not configured
+	plan := PlanReconcile(open, now, cfg, true, map[string]bool{recProvEx: true})
+	got := decisions(plan)
+	want := map[string]string{
+		"b-ex":      "close:provider_excluded",
+		"b-ex-past": "close:expired",
+		"b-ok":      "skip:unconfigured",
+		"a-ok":      "adopt:usable",
+	}
+	if len(got) != len(want) || len(plan) != len(open) {
+		t.Fatalf("plan: %v", got)
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("%s: got %q want %q", id, got[id], w)
+		}
+	}
+}
+
 // Boot reconcile with providerExclude loaded: the excluded provider's open
 // sessions are closed on-chain (reason provider_excluded, audited), the
 // non-excluded duplicate is adopted and served, and the model served only
@@ -744,6 +776,55 @@ func TestReconcileExcludedProviderClosed(t *testing.T) {
 	}
 	if f.opened.Load() != 0 {
 		t.Fatalf("opened %d sessions", f.opened.Load())
+	}
+}
+
+// Boot reconcile for a model this node does not serve (not in the
+// configured list) whose session is on an excluded provider: closed
+// on-chain with provider_excluded, not skipped.
+func TestReconcileExcludedUnconfiguredModelClosed(t *testing.T) {
+	now := time.Now()
+	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{
+		provRow("0xb-ex", modelB, recProvEx, now.Add(2*time.Hour)),
+		provRow("0xa-ok", modelA, recProvOK, now.Add(time.Hour)),
+	}}
+	ts := f.server(t)
+	p := New(router.New(ts.URL, "u", "p"), 600)
+	p.SetProviderExclude([]string{recProvEx})
+	p.Gate()
+	configuredA := func() (map[string]bool, bool) { return map[string]bool{modelA: true}, true }
+	var got ReconcileResult
+	var mu sync.Mutex
+	closeReasons := map[string]string{}
+	p.StartupReconcile(context.Background(), configuredA, ReconcileConfig{
+		OnReconcile: func(r ReconcileResult) { got = r },
+		OnEvent: func(ev ReconcileEvent) {
+			if ev.Kind == "session_reconcile_close" {
+				mu.Lock()
+				closeReasons[ev.Session] = ev.Reason + "/" + ev.Result
+				mu.Unlock()
+			}
+		},
+	})
+	if got.Open != 2 || got.Adopted != 1 || got.Closed != 1 || got.Skipped != 0 || got.Failed != 0 {
+		t.Fatalf("result %+v", got)
+	}
+	f.mu.Lock()
+	nb, na := f.closed["0xb-ex"], f.closed["0xa-ok"]
+	f.mu.Unlock()
+	if nb != 1 || na != 0 {
+		t.Fatalf("closes b-ex=%d a-ok=%d", nb, na)
+	}
+	mu.Lock()
+	if r := closeReasons[short("0xb-ex")]; r != "provider_excluded/ok" {
+		t.Errorf("close event %q", r)
+	}
+	mu.Unlock()
+	p.mu.Lock()
+	_, bOK := p.entries[normModel(modelB)]
+	p.mu.Unlock()
+	if bOK {
+		t.Fatal("modelB pooled")
 	}
 }
 

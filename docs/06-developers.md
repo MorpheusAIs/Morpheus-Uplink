@@ -454,7 +454,9 @@ before any request may open a session:
   `duplicate` (another usable session for a model that already has an
   adopted one).
 - *Never closed:* a session whose model is not in the catalog is skipped
-  (counted as `skipped`) and left to expire. Model ids are compared
+  (counted as `skipped`) and left to expire, unless its provider is in
+  `providerExclude` (closed as `provider_excluded`; the catalog hides a
+  model whose providers are all excluded). Model ids are compared
   case-insensitively, and the pool keys sessions by the lowercase model
   id, so a session adopted under a differently cased id is reused. An empty catalog (`{"models":[]}` or `{}`) or one
   that cannot be read is treated as unknown: nothing is skipped for it and
@@ -603,7 +605,9 @@ the pool stays in charge of which session is open. Turning the
   message to re-enter it as a plain list. Opens, the boot reconcile and
   Rehydrate never use them, and the boot reconcile closes the wallet's
   open sessions on them (reason `provider_excluded`) so the unused stake
-  is returned. With any exclusion the open goes by bid over the providers left.
+  is returned, including sessions for a model this node does not serve.
+  If the wallet is shared with another client, that client's sessions on
+  excluded providers are closed too. With any exclusion the open goes by bid over the providers left.
   When only excluded providers serve the model, the request gets `503`
   `no_eligible_provider` (no ids in the body, no `Retry-After`) and
   nothing is opened. When the rated bids cannot be read, nothing is opened

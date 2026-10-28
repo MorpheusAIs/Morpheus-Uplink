@@ -25,10 +25,12 @@ import (
 //   - close "duplicate": another usable session for a model that already
 //     has an adopted one.
 //   - skip "unconfigured": the model is not in a non-empty catalog
-//     (compared case-insensitively). Never closed at boot; left to expire.
+//     (compared case-insensitively) and its provider is not excluded.
+//     Never closed at boot; left to expire.
 //     An empty catalog, or one that cannot be read, is treated as unknown.
 //   - close "provider_excluded": a usable session whose provider is in
-//     providerExclude. Never adopted; closed so the unused stake returns
+//     providerExclude, whether or not its model is in the catalog (the
+//     catalog hides a model whose providers are all excluded). Never adopted; closed so the unused stake returns
 //     (also by a late recovery: the pool never serves it). It does not
 //     count toward the model's adopt choice, so a usable session on
 //     another provider is adopted, never closed in its favour.
@@ -143,10 +145,12 @@ func PlanReconcile(open []router.Session, now time.Time, configured map[string]b
 		switch {
 		case s.EndsAt <= now.Unix()+buf:
 			out[i].Action, out[i].Reason = ActClose, ReasonExpired
+		case excluded[strings.ToLower(strings.TrimSpace(s.Provider))]:
+			// Before the catalog check: the catalog hides a model whose
+			// providers are all excluded, and its sessions still close.
+			out[i].Action, out[i].Reason = ActClose, ReasonExcluded
 		case useCatalog && !cfg[m]:
 			out[i].Action, out[i].Reason = ActSkip, ReasonUnconfigured
-		case excluded[strings.ToLower(strings.TrimSpace(s.Provider))]:
-			out[i].Action, out[i].Reason = ActClose, ReasonExcluded
 		default:
 			out[i].Action, out[i].Reason = ActAdopt, ReasonUsable
 			if j, ok := best[m]; !ok || s.EndsAt > open[j].EndsAt {
