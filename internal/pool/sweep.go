@@ -371,10 +371,12 @@ func (p *Pool) applyScan(open []router.Session, scanStart time.Time, mode int) s
 		held[strings.ToLower(e.sessionID)] = true
 	}
 	for id, st := range p.sess {
-		if st.retired && !st.closing && st.inflight == 0 && st.closeFails >= maxCloseRetries {
-			continue // the lease path gave up on it: the sweep closes it ("retired")
+		if st.retired && !st.closing && st.inflight == 0 {
+			// Retired with nothing in flight counts as unheld: it is
+			// close-due as "retired" (after the young-age rule).
+			continue
 		}
-		held[strings.ToLower(id)] = true // tracked by leases (in flight, retired, closing)
+		held[strings.ToLower(id)] = true // tracked by leases (in flight, or closing)
 	}
 	usableEntry := func(key string) bool {
 		e, ok := p.entries[key]
@@ -419,6 +421,9 @@ func (p *Pool) applyScan(open []router.Session, scanStart time.Time, mode int) s
 				due = append(due, cand{s, ReasonExpired})
 			}
 			continue
+		}
+		if st := p.sess[s.ID]; st != nil && st.retired {
+			retired[lid] = true // released or failed over, nothing in flight
 		}
 		young := time.Unix(s.OpenedAt, 0).After(now.Add(-pruneGrace))
 		switch {
@@ -713,8 +718,9 @@ func (p *Pool) closeWithToken(ctx context.Context, tok *slotToken, id, reason, s
 // ScanOrphans is one sweep tick: when the slot is free it scans (adopting
 // and resolving attempts) and closes at most one close-due session per
 // hold, releasing between closes so a queued open goes first. When opens
-// keep the slot busy for sweepMaxSkips ticks, or a close-due session is
-// orphanAlertAge old, it queues for one close.
+// keep the slot busy for sweepMaxSkips ticks (whether or not a close is
+// known to be due), or a close-due session is orphanAlertAge old, it
+// queues for one hold and closes at most one session.
 func (p *Pool) ScanOrphans(ctx context.Context) {
 	if p.gateClosed() {
 		return
@@ -727,7 +733,11 @@ func (p *Pool) ScanOrphans(ctx context.Context) {
 		skips, due, oldest := p.sweepSkips, len(p.closeDueAt), p.oldestDueLocked(p.now())
 		p.mu.Unlock()
 		p.alertStarved(due, oldest)
-		if due == 0 || (skips < sweepMaxSkips && oldest < orphanAlertAge) {
+		// After sweepMaxSkips busy ticks, queue for one hold whether or not
+		// anything is known to be due: closeDueAt is only filled by a scan
+		// that held the slot, so a session that became close-due while the
+		// slot stayed busy is found by the queued scan (under p.mu).
+		if skips < sweepMaxSkips && (due == 0 || oldest < orphanAlertAge) {
 			return
 		}
 		t, err := p.slot.acquire(ctx, "")
@@ -736,6 +746,9 @@ func (p *Pool) ScanOrphans(ctx context.Context) {
 		}
 		tok, forced = t, true
 	}
+	p.mu.Lock()
+	p.sweepSkips = 0 // this tick holds the slot
+	p.mu.Unlock()
 	for {
 		out, err := p.scan(ctx, tok, scanSweep)
 		if err != nil {
@@ -745,9 +758,6 @@ func (p *Pool) ScanOrphans(ctx context.Context) {
 		}
 		if out.close != nil {
 			p.closeWithToken(ctx, tok, out.close.id, out.close.reason, "rescan", closeCallTimeout)
-			p.mu.Lock()
-			p.sweepSkips = 0
-			p.mu.Unlock()
 		} else {
 			p.alertStarved(out.due, out.oldest)
 		}

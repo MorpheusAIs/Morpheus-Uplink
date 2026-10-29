@@ -382,3 +382,88 @@ func TestKnownDuplicateClosedBySweepNotRequest(t *testing.T) {
 		t.Fatalf("closes %v, want the sweep to close the known duplicate", lr.closesSent())
 	}
 }
+
+// busyTicks runs up to n sweep ticks (tick is the RunSweep body) while
+// opens hold the wallet slot continuously: the slot is held when each
+// tick starts and is handed over only if the tick queues for it, then
+// taken back. It returns the tick on which done reported true (0: never).
+func busyTicks(t *testing.T, p *Pool, n int, tick func(), done func() bool) int {
+	t.Helper()
+	hold := p.slot.tryAcquire("open")
+	if hold == nil {
+		t.Fatal("slot not free at the start")
+	}
+	defer func() {
+		if hold != nil {
+			p.slot.release(hold)
+		}
+	}()
+	for i := 1; i <= n; i++ {
+		fin := make(chan struct{})
+		go func() { tick(); close(fin) }()
+		select {
+		case <-fin:
+		case <-waitQueued(p):
+			p.slot.release(hold)
+			hold = nil
+			<-fin
+			hold = p.slot.tryAcquire("open")
+			if hold == nil {
+				t.Fatal("slot still held after the tick")
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("tick %d neither returned nor queued", i)
+		}
+		if done() {
+			return i
+		}
+	}
+	return 0
+}
+
+// waitQueued is closed once a waiter is queued on the slot.
+func waitQueued(p *Pool) <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for p.slot.queued() == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if p.slot.queued() > 0 {
+			close(ch)
+		}
+	}()
+	return ch
+}
+
+// No backlog when the slot gets busy: an orphan that appears while opens
+// keep the slot busy is still closed within sweepMaxSkips ticks.
+func TestOrphanDuringBusySlotClosedWithinThreeTicks(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	ctx := context.Background()
+	p.ScanOrphans(ctx) // nothing due: no backlog
+	lr.addChain("0xorphan", modelC, c.Now().Add(-30*time.Minute), c.Now().Add(-time.Minute))
+	tick := func() { p.sweepRetired(ctx, 0, false); p.ScanOrphans(ctx) }
+	if got := busyTicks(t, p, sweepMaxSkips, tick, func() bool { return lr.closedCount("0xorphan") == 1 }); got == 0 {
+		t.Fatalf("orphan not closed within %d ticks under continuous slot use (closes %v)", sweepMaxSkips, lr.closesSent())
+	}
+}
+
+// No backlog when the slot gets busy: a session released under steady
+// opens (retired, nothing in flight: unheld) is closed within
+// sweepMaxSkips ticks.
+func TestReleaseUnderSteadyOpensClosedWithinThreeTicks(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	ctx := context.Background()
+	l, res := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	ageAll(c)
+	p.ScanOrphans(ctx) // nothing due: no backlog
+	tick := func() { p.sweepRetired(ctx, 0, false); p.ScanOrphans(ctx) }
+	if out := p.Release(modelB, "k1"); out.Reason != "closing" {
+		t.Fatalf("release %+v, want closing", out)
+	}
+	if got := busyTicks(t, p, sweepMaxSkips, tick, func() bool { return lr.closedCount(res.SessionID) == 1 }); got == 0 {
+		t.Fatalf("released session not closed within %d ticks under steady opens (closes %v)", sweepMaxSkips, lr.closesSent())
+	}
+}
