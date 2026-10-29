@@ -12,7 +12,7 @@
 # (README.md, "Unset on Railway").
 #
 # H3: single replica for wallet-bearing proxy-router.
-# Lumerin pin: v7.17.0 digest. The Uplink image is pinned to its digest in
+# Lumerin pin: v7.18.0 digest. The Uplink image is pinned to its digest in
 # the release assets (scripts/deploy-assets.sh).
 x-logging: &default-logging
   driver: json-file
@@ -69,7 +69,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba
     restart: unless-stopped
     logging: *default-logging
     init: true
@@ -80,7 +80,7 @@ services:
     stop_grace_period: 45s
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS:?set one Base RPC URL}
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
       - ETH_NODE_USE_SUBSCRIPTIONS=${ETH_NODE_USE_SUBSCRIPTIONS:-false}
       - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}

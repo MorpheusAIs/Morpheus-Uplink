@@ -63,8 +63,8 @@ wait_for() {
   fail "timed out waiting for: $desc"
 }
 
-pin=$(sed -n 's/^ *image: *\(ghcr.io\/morpheusais\/morpheus-lumerin-node:v7\.17\.0@sha256:[0-9a-f]\{64\}\).*/\1/p' deploy/secretvm/docker-compose.yml)
-[ -n "$pin" ] || fail "router image is not the pinned v7.17.0 digest"
+pin=$(sed -n 's/^ *image: *\(ghcr.io\/morpheusais\/morpheus-lumerin-node:v7\.18\.0@sha256:[0-9a-f]\{64\}\).*/\1/p' deploy/secretvm/docker-compose.yml)
+[ -n "$pin" ] || fail "router image is not the pinned v7.18.0 digest"
 echo "router image: $pin"
 
 echo "== up =="
@@ -175,6 +175,23 @@ jq -e '.adopted == 0 and .closed == 0 and .failed == 0' <<<"$l" >/dev/null || fa
 status_json | jq -e '.sessionReconcile.state == "ok" and .sessionReconcile.opensHeld == false' >/dev/null \
   || fail "status sessionReconcile: $(status_json | jq -c .sessionReconcile)"
 echo "OK boot reconcile: empty list, nothing adopted or closed, opens not held"
+
+echo "== router v7.18.0 checks =="
+rver() { status_json | jq -r '(.router.version // .router.Version // "")'; }
+rver | grep -qE '(^|[^0-9])7\.18\.0([^0-9]|$)' || fail "/admin/status does not report router v7.18.0 ($(rver))"
+echo "OK /admin/status reports router $(rver)"
+# Error-text pin, ping case: an open by an unknown bid id fails at the
+# provider ping before any transaction (getBid returns a zero bid, and the
+# zero provider has no endpoint). The wallet is throwaway and never funded,
+# so no stake can lock. Uplink must classify the text as a provider fault:
+# it contains one of its provider stage texts.
+ubid="0x$(printf '%063d1' 0)"
+ub=$(dc exec -T uplink curl -sS -m 60 -u "$COOKIE_CONTENT" -H 'Content-Type: application/json' \
+  --data-binary '{"sessionDuration":600,"failover":false,"directPayment":false}' \
+  "http://proxy-router:8082/blockchain/bids/$ubid/session" || true)
+printf '%s' "$ub" | tr 'A-Z' 'a-z' | grep -qF 'provider healthcheck ping failed' \
+  || fail "unknown-bid open: unexpected router text: $(printf '%s' "$ub" | sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g' | head -c 400)"
+echo "OK unknown-bid open fails at the provider ping (provider fault): $(printf '%s' "$ub" | sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g' | head -c 200)"
 
 echo "== graceful stop =="
 grace=$(docker inspect -f '{{.Config.StopTimeout}}' "$(cid uplink)")

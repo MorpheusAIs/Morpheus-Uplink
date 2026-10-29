@@ -152,10 +152,10 @@ jobs:
               exit 1
             fi
           done < <(grep -nF '${' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
-          # Required fillables must be prompted.
+          # Required fillables must be prompted: ${VAR}, or ${VAR:?message}
+          # for a value compose must refuse to start without.
           for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS WEB_PUBLIC_URL; do
-            needle='${'"${req}"'}'
-            if ! grep -qF "$needle" deploy/secretvm/docker-compose.yml; then
+            if ! grep -qE '\$\{'"${req}"'(:\?[^}]*)?\}' deploy/secretvm/docker-compose.yml; then
               echo "❌ Missing required secret prompt: $req"
               exit 1
             fi
@@ -173,7 +173,8 @@ jobs:
           fi
           echo "OK: port guard JSON fixtures"
       - name: Router image digest must stay pinned
-        run: bash scripts/check-router-digest.sh
+        # --resolve: the tag digest on GHCR and its provenance commit, resolved at run time.
+        run: bash scripts/check-router-digest.sh --resolve
       - name: Compose templates must render
         run: bash scripts/check-compose-config.sh
       - name: Compose policy (uplink PID 1 stop grace, no router healthcheck gate)
@@ -230,7 +231,7 @@ jobs:
         run: bash scripts/e2e-mock-router.sh
 
   e2e-real-router:
-    name: E2E smoke (real pinned v7.17.0 router)
+    name: E2E smoke (real pinned v7.18.0 router)
     runs-on: ubuntu-latest
     needs: [test]
     steps:
