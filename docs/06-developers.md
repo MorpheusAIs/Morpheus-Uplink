@@ -319,7 +319,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | Var | Required | Purpose |
 |---|---|---|
 | `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet, **router only** (Uplink holds no key; reclaim runs via the router API) |
-| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC, exactly one URL |
+| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC for the router; Uplink also receives it, only to know whether a provided RPC is set |
 | `COOKIE_CONTENT` | yes | Router `user:pass` (proxy-router + Uplink). Uplink reads `ROUTER_AUTH` first, then `COOKIE_CONTENT` |
 | `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
 | `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |

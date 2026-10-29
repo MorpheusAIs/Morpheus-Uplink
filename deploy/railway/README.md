@@ -40,10 +40,9 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
-- RPC credentials (`ETH_NODE_ADDRESS`, **required: exactly one URL**, and any
-  provider key material). Railway does not run the compose file, so nothing
-  refuses a deploy without it; Uplink logs `rpc_url_count` and disables fast
-  retries until exactly one URL is set.
+- RPC credentials (`ETH_NODE_ADDRESS` and any provider key material). Set
+  `ETH_NODE_ADDRESS` on the uplink service too: Uplink uses it only to know
+  whether a provided RPC is set.
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are not Railway Secrets, and Railway applies none of the compose

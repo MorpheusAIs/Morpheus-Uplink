@@ -6,7 +6,8 @@
 #
 # Operator fillables (Encrypted Secrets): ADMIN_PASSWORD, API_KEY_SEED,
 # COOKIE_CONTENT, WALLET_PRIVATE_KEY, ETH_NODE_ADDRESS, WEB_PUBLIC_URL.
-# WALLET_PRIVATE_KEY and ETH_NODE_ADDRESS go to proxy-router only.
+# WALLET_PRIVATE_KEY goes to proxy-router only. Uplink also receives
+# ETH_NODE_ADDRESS, only to know whether a provided RPC is set.
 #
 # Lumerin pin: v7.18.0 digest. The Uplink image is pinned to its digest in
 # the release assets (scripts/deploy-assets.sh).
@@ -47,6 +48,8 @@ services:
       # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Presence only: whether the router's RPC is set (the value is not used).
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
     configs:
       - source: uplink_bake_env
         target: /etc/uplink/bake.env
@@ -71,9 +74,11 @@ services:
     stop_grace_period: 45s
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS:?set one Base RPC URL}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Presence only: whether the router's RPC is set (the value is not used).
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
     configs:
       - source: router_network_env
         target: /app/.env

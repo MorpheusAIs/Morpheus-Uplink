@@ -152,10 +152,10 @@ jobs:
               exit 1
             fi
           done < <(grep -nF '${' deploy/secretvm/docker-compose.yml | grep -vE '^[0-9]+:[[:space:]]*#')
-          # Required fillables must be prompted: ${VAR}, or ${VAR:?message}
-          # for a value compose must refuse to start without.
+          # Required fillables must be prompted.
           for req in ADMIN_PASSWORD API_KEY_SEED COOKIE_CONTENT WALLET_PRIVATE_KEY ETH_NODE_ADDRESS WEB_PUBLIC_URL; do
-            if ! grep -qE '\$\{'"${req}"'(:\?[^}]*)?\}' deploy/secretvm/docker-compose.yml; then
+            needle='${'"${req}"'}'
+            if ! grep -qF "$needle" deploy/secretvm/docker-compose.yml; then
               echo "❌ Missing required secret prompt: $req"
               exit 1
             fi

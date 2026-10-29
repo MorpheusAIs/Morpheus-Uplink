@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Require the pinned Lumerin router digest on every compose template, doc
-# and llms file, and the required one-URL ETH_NODE_ADDRESS on every
-# compose template.
+# and llms file.
 #
 # --resolve (CI, needs network): also resolve the official tag on GHCR and
 # require its OCI index digest to equal WANT, and require the image's SLSA
@@ -12,7 +11,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WANT='ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba'
 TAG="${WANT%%@*}"
 TAG="${TAG##*:}"
-ETH_REQ='ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS:?set one Base RPC URL}'
 bad=0
 composes=("$ROOT"/deploy/*/docker-compose.yml "$ROOT"/docker-compose.local.yml)
 for f in "${composes[@]}"; do
@@ -24,10 +22,6 @@ for f in "${composes[@]}"; do
   # No unpinned router tag without the digest
   if grep -nE 'morpheus-lumerin-node:v7\.18\.0(["[:space:]]|$)' "$f" | grep -v '@sha256:'; then
     echo "Unpinned router tag in $f"
-    bad=1
-  fi
-  if ! grep -qF -- "$ETH_REQ" "$f"; then
-    echo "ETH_NODE_ADDRESS is not required (\${ETH_NODE_ADDRESS:?...}) in $f"
     bad=1
   fi
 done
@@ -44,7 +38,7 @@ for f in "${docs[@]}"; do
   done < <(grep -oE 'ghcr\.io/morpheusais/morpheus-lumerin-node:[^@`"[:space:]]+@sha256:[0-9a-f]+' "$f" || true)
 done
 if [ "$bad" -ne 0 ]; then exit 1; fi
-echo "OK: router digest pinned, ETH_NODE_ADDRESS required"
+echo "OK: router digest pinned"
 
 if [ "${1:-}" = "--resolve" ]; then
   repo=morpheusais/morpheus-lumerin-node

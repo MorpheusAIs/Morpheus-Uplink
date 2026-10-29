@@ -5,7 +5,9 @@
 #
 # Operator fillables (H4) in Railway Secrets / vars, never in this file:
 # WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED, COOKIE_CONTENT,
-# ETH_NODE_ADDRESS, WEB_PUBLIC_URL (wallet key and RPC go to proxy-router only).
+# ETH_NODE_ADDRESS, WEB_PUBLIC_URL. The wallet key goes to proxy-router only;
+# Uplink also receives ETH_NODE_ADDRESS, only to know whether a provided RPC
+# is set.
 #
 # Railway does not run this file: no compose default or literal value below
 # applies there. Set the active lines of env.example as service variables
@@ -58,6 +60,8 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Presence only: whether the router's RPC is set (the value is not used).
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
       - DATA_DIR=/data
@@ -80,7 +84,7 @@ services:
     stop_grace_period: 45s
     environment:
       - WALLET_PRIVATE_KEY=${WALLET_PRIVATE_KEY}
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS:?set one Base RPC URL}
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ETH_NODE_CHAIN_ID=${ETH_NODE_CHAIN_ID:-8453}
       - ETH_NODE_USE_SUBSCRIPTIONS=${ETH_NODE_USE_SUBSCRIPTIONS:-false}
       - BLOCKSCOUT_API_URL=${BLOCKSCOUT_API_URL:-https://base.blockscout.com/api/v2}
@@ -88,6 +92,8 @@ services:
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Presence only: whether the router's RPC is set (the value is not used).
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
       - COOKIE_FILE_PATH=/app/data/.cookie
       - ENVIRONMENT=production

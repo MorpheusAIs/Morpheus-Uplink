@@ -9,7 +9,7 @@ import (
 )
 
 // Every 429 text captured from the router's own open path classifies as
-// recorded (one RPC URL, window retry unused, 1s POST). A window-stage
+// recorded (operator RPC set, window retry unused, 1s POST). A window-stage
 // text is maybe-sent when the 18 s rule may not be used.
 func TestClassifierRouter429Captures(t *testing.T) {
 	f, err := os.Open("testdata/router-v7.18.0-rpc429-captures.txt")

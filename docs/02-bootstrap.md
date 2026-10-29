@@ -188,7 +188,7 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 | Var | Used by | Notes |
 |-----|---------|--------|
 | `WALLET_PRIVATE_KEY` | Router only | The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. Fund it from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
-| `ETH_NODE_ADDRESS` | Router only | Required: exactly one Base HTTPS RPC URL; Uplink's retry safety assumes one URL. Compose refuses to start without it. Uplink reads chain state through the router API. |
+| `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC for the router. Uplink also receives it, only to know whether a provided RPC is set; it never logs the value and reads chain state through the router API. |
 | `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
