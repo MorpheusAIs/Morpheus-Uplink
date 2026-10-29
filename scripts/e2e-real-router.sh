@@ -186,11 +186,18 @@ echo "OK /admin/status reports router $(rver)"
 # so no stake can lock. Uplink must classify the text as a provider fault:
 # it contains one of its provider stage texts.
 ubid="0x$(printf '%063d1' 0)"
-ub=$(dc exec -T uplink curl -sS -m 60 -u "$COOKIE_CONTENT" -H 'Content-Type: application/json' \
-  --data-binary '{"sessionDuration":600,"failover":false,"directPayment":false}' \
+ubout=$(dc exec -T uplink curl -sS -m 60 -u "$COOKIE_CONTENT" -H 'Content-Type: application/json' \
+  -w '\n%{http_code}' --data-binary '{"sessionDuration":600,"failover":false,"directPayment":false}' \
   "http://proxy-router:8082/blockchain/bids/$ubid/session" || true)
+ubcode=$(printf '%s' "$ubout" | tail -n 1)
+ub=$(printf '%s' "$ubout" | sed '$d')
 printf '%s' "$ub" | tr 'A-Z' 'a-z' | grep -qF 'provider healthcheck ping failed' \
   || fail "unknown-bid open: unexpected router text: $(printf '%s' "$ub" | sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g' | head -c 400)"
+# The same body through Uplink's own open classifier: provider fault.
+ubfile=$(mktemp); printf '%s' "$ub" > "$ubfile"
+go test -count=1 -run '^TestClassifyCapturedOpenBody$' ./internal/pool/ -args -open-body="$ubfile" -open-code="${ubcode:-500}" -open-want=provider_fault \
+  || { rm -f "$ubfile"; fail "unknown-bid open: Uplink's classifier does not call the router text a provider fault (status $ubcode)"; }
+rm -f "$ubfile"
 echo "OK unknown-bid open fails at the provider ping (provider fault): $(printf '%s' "$ub" | sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g' | head -c 200)"
 
 echo "== graceful stop =="

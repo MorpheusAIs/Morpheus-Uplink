@@ -236,6 +236,9 @@ jobs:
     needs: [test]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod # the script runs Uplink's classifier on a captured router reply
       - name: Build image (no registry push)
         run: docker build -t uplink:e2e --build-arg VERSION=e2e .
       - name: Real router + Uplink (throwaway key, no secrets)
