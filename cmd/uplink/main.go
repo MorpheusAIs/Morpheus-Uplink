@@ -144,6 +144,12 @@ func main() {
 		}
 	}()
 
+	// Orphan sweep: every 2 min, and soon after a release, a cut open or
+	// an unresolved open, it scans the wallet's sessions, adopts or closes
+	// the unheld ones (one close per wallet-slot hold), and refreshes the
+	// router's RPC URL count.
+	go pl.RunSweep(hkCtx)
+
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()

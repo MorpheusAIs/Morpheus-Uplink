@@ -23,7 +23,9 @@ import (
 //     opening a new one. Never extended, never re-opened.
 //   - close "expired": past its end, or inside the expiry buffer.
 //   - close "duplicate": another usable session for a model that already
-//     has an adopted one.
+//     has an adopted one (the kept one: latest end, then latest open,
+//     then lowest id). A duplicate opened less than pruneGrace ago is
+//     skipped ("young") and left to the sweep.
 //   - skip "unconfigured": the model is not in a non-empty catalog
 //     (compared case-insensitively) and its provider is not excluded.
 //     Never closed at boot; left to expire.
@@ -64,6 +66,7 @@ const (
 	ReasonDuplicate    = "duplicate"
 	ReasonUnconfigured = "unconfigured"
 	ReasonExcluded     = "provider_excluded"
+	ReasonYoung        = "young"
 )
 
 // ConfiguredModels reports the model ids Uplink serves. ok=false means the
@@ -138,6 +141,9 @@ func PlanReconcile(open []router.Session, now time.Time, configured map[string]b
 	useCatalog := catalogKnown && len(cfg) > 0
 	buf := int64(expiryBuffer.Seconds())
 	best := map[string]int{}
+	better := func(a, b router.Session) bool { // a kept over b (pickOne order)
+		return pickOne([]router.Session{b, a}).ID == a.ID && a.ID != b.ID
+	}
 	out := make([]ReconcileDecision, len(open))
 	for i, s := range open {
 		out[i].Session = s
@@ -153,13 +159,21 @@ func PlanReconcile(open []router.Session, now time.Time, configured map[string]b
 			out[i].Action, out[i].Reason = ActSkip, ReasonUnconfigured
 		default:
 			out[i].Action, out[i].Reason = ActAdopt, ReasonUsable
-			if j, ok := best[m]; !ok || s.EndsAt > open[j].EndsAt {
+			if j, ok := best[m]; !ok || better(s, open[j]) {
 				best[m] = i
 			}
 		}
 	}
+	young := now.Add(-pruneGrace).Unix()
 	for i, s := range open {
 		if out[i].Action == ActAdopt && best[normModel(s.ModelAgentID)] != i {
+			if s.OpenedAt > young {
+				// Opened moments ago (an open may have been in flight
+				// across the restart): never closed by the plan; a later
+				// sweep decides once it is older.
+				out[i].Action, out[i].Reason = ActSkip, ReasonYoung
+				continue
+			}
 			out[i].Action, out[i].Reason = ActClose, ReasonDuplicate
 		}
 	}
@@ -202,6 +216,22 @@ func (p *Pool) gateClosed() bool {
 		return false
 	default:
 		return true
+	}
+}
+
+// waitGateCtx is waitGate bounded by ctx.
+func (p *Pool) waitGateCtx(ctx context.Context) error {
+	p.mu.Lock()
+	g := p.gate
+	p.mu.Unlock()
+	if g == nil {
+		return nil
+	}
+	select {
+	case <-g:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -304,41 +334,67 @@ func (p *Pool) plan(configured ConfiguredModels, late bool, emit func(ReconcileE
 		closes = closes[:MaxBootCloses]
 		emit(ReconcileEvent{Kind: "session_reconcile_cap", Reason: fmt.Sprintf("max %d closes per pass", MaxBootCloses), Result: "deferred", Count: res.Deferred, Source: "boot"})
 	}
+	// Marked closing now, so no scan adopts them while the closes wait for
+	// the wallet slot.
+	p.mu.Lock()
+	for _, d := range closes {
+		p.closingIDs[strings.ToLower(d.Session.ID)] = time.Time{}
+	}
+	p.walletAddr = addr
+	p.mu.Unlock()
 	p.stateKnown.Store(true)
 	return res, closes, nil
 }
 
 func (p *Pool) isClosing(id string) bool {
-	p.recMu.Lock()
-	defer p.recMu.Unlock()
-	return p.closing[id]
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closingMarkedLocked(id)
 }
 
+// runCloses runs the boot plan's closes like sweep closes: try-slot (never
+// queued behind opens), one close per hold, release between. When the
+// slot is busy, after a cut close, or while a cut open's router-busy
+// window is open, the rest are deferred to the sweep (their marks clear,
+// so the sweep decides afresh).
 func (p *Pool) runCloses(res *ReconcileResult, closes []ReconcileDecision, emit func(ReconcileEvent)) {
-	p.recMu.Lock()
-	if p.closing == nil {
-		p.closing = map[string]bool{}
-	}
-	for _, d := range closes {
-		p.closing[d.Session.ID] = true
-	}
-	p.recMu.Unlock()
-	defer func() {
-		p.recMu.Lock()
-		for _, d := range closes {
-			delete(p.closing, d.Session.ID)
+	ctx := context.Background()
+	unmark := func(ds []ReconcileDecision) {
+		p.mu.Lock()
+		for _, d := range ds {
+			if exp, ok := p.closingIDs[strings.ToLower(d.Session.ID)]; ok && exp.IsZero() {
+				delete(p.closingIDs, strings.ToLower(d.Session.ID))
+			}
 		}
-		p.recMu.Unlock()
-	}()
-	for _, d := range closes {
+		p.mu.Unlock()
+	}
+	for i, d := range closes {
+		p.mu.Lock()
+		now := p.now()
+		hold := p.routerBusyLocked(now) || p.cutCloseMarkLocked(now)
+		p.mu.Unlock()
+		if hold {
+			res.Deferred += len(closes) - i
+			unmark(closes[i:])
+			p.requestSweep()
+			return
+		}
 		ev := ReconcileEvent{Kind: "session_reconcile_close", Reason: d.Reason, Session: short(d.Session.ID), Result: "ok", Source: "boot"}
-		if err := p.client.CloseSession(d.Session.ID); err != nil {
-			warnf("pool: reconcile close (%s) session %s: %v", d.Reason, short(d.Session.ID), err)
+		tok := p.slot.tryAcquire("")
+		if tok == nil {
+			res.Deferred += len(closes) - i
+			unmark(closes[i:])
+			p.requestSweep()
+			return
+		}
+		out, cerr := p.closeWithToken(ctx, tok, d.Session.ID, d.Reason, "", closeCallTimeout)
+		p.slot.release(tok)
+		if out == closeOK || out == closeAlready {
+			res.Closed++
+		} else {
+			warnf("pool: reconcile close (%s) session %s: %v", d.Reason, short(d.Session.ID), cerr)
 			res.Failed++
 			ev.Result = "failed"
-		} else {
-			res.Closed++
-			p.notifyClosed(d.Session.ID)
 		}
 		emit(ev)
 	}

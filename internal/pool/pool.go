@@ -3,6 +3,7 @@
 package pool
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/big"
@@ -78,7 +79,6 @@ type Pool struct {
 	stateKnown  atomic.Bool
 	gated       atomic.Bool
 	recMu       sync.Mutex
-	closing     map[string]bool // ids the reconcile is closing (rehydrate skips them)
 	recState    ReconcileState
 	onState     func(ReconcileState)
 	onRescan    func(ReconcileEvent)
@@ -91,6 +91,28 @@ type Pool struct {
 	// lastScanLog: the counts the last "rehydrated" log line reported; the
 	// line repeats only when they change (status polls rescan often).
 	lastScanLog *scanCounts
+
+	// Wallet slot and open reconcile (slot.go, transient.go, sweep.go).
+	slot    walletSlot
+	sleepFn func(ctx context.Context, d time.Duration) error // SetSleep (tests)
+	// Under mu:
+	pending     []*attempt           // unresolved open attempts (maybe sent)
+	knownDup    map[string]bool      // lowercase id: an extra session from our own open (the sweep closes it)
+	closingIDs  map[string]time.Time // lowercase id -> mark expiry; zero: a close is in progress
+	closeDueAt  map[string]time.Time // lowercase id -> when the sweep first saw it close-due
+	busyUntil   time.Time            // router-busy window (a cut open), pool clock
+	busyAttempt *attempt             // the attempt that set it
+	opened      map[string]bool      // lowercase ids this process opened or matched to its own attempt
+	closedByUs  map[string]bool      // lowercase ids this process closed
+	foreignAt   []time.Time          // adoptions of sessions this process never opened (last hour)
+	sweepSkips  int
+	started     time.Time // pool clock at New or SetClock (uptime)
+	warnAt      map[string]time.Time
+	warnSkipped map[string]int
+	walletAddr  string
+	scanKick    chan struct{} // buffered 1: run the sweep now
+	rpcURLs     atomic.Int64  // router RPC URL count (GET /config); 0: unknown
+	retiredBusy atomic.Bool   // a retired close found the wallet slot busy
 }
 
 // scanCounts is what the "rehydrated" log line reports.
@@ -125,7 +147,18 @@ func New(client *router.Client, durationSec int) *Pool {
 
 		sess:   map[string]*sessState{},
 		durMax: 1800,
+
+		knownDup:    map[string]bool{},
+		closingIDs:  map[string]time.Time{},
+		closeDueAt:  map[string]time.Time{},
+		opened:      map[string]bool{},
+		closedByUs:  map[string]bool{},
+		warnAt:      map[string]time.Time{},
+		warnSkipped: map[string]int{},
+		scanKick:    make(chan struct{}, 1),
+		started:     time.Now(),
 	}
+	p.slot.now = p.now
 	p.duration.Store(int64(durationSec))
 	return p
 }
@@ -259,16 +292,17 @@ func (p *Pool) ActiveStakeWei() *big.Int {
 	return sum
 }
 
-// Rehydrate loads open sessions from the router (which reads chain), adopts
-// one usable session per model into the reuse pool, and asks the router to
-// close sessions that are past endsAt (unused stake returns; used → daylock).
+// Rehydrate is the status poll's scan: it lists the wallet's open
+// sessions and adopts one usable unheld session per model (never a young
+// one that may be an open of ours still in flight). It never closes
+// anything; the sweep closes. It also refreshes the router's RPC URL count.
 //
-// force=false skips work when a scan ran recently (status polling).
+// It skips work when a scan ran recently.
 func (p *Pool) Rehydrate() error {
 	return p.rehydrate(false)
 }
 
-// RehydrateForce always rescans (e.g. after Close all).
+// RehydrateForce always rescans (adopt-only, like Rehydrate).
 func (p *Pool) RehydrateForce() error {
 	return p.rehydrate(true)
 }
@@ -289,134 +323,10 @@ func (p *Pool) rehydrate(force bool) error {
 		if fresh {
 			return nil
 		}
+		p.RefreshRPCURLCount(context.Background())
 	}
-
-	scanStart := p.now()
-	addr, err := p.client.WalletAddress()
-	if err != nil {
-		p.setRehydrateErr(err.Error())
-		return err
-	}
-	open, err := p.client.ListOpenSessions(addr)
-	if err != nil {
-		p.setRehydrateErr(err.Error())
-		return err
-	}
-
-	now := p.now()
-	nowUnix := now.Unix()
-	best := map[string]router.Session{} // model -> farthest-ending usable
-	display := make([]ChainSession, 0, len(open))
-
-	for _, s := range open {
-		usable := s.EndsAt > nowUnix+int64(expiryBuffer.Seconds())
-		stakeStr := "0"
-		if s.Stake != nil {
-			stakeStr = s.Stake.String()
-		}
-		if p.isClosing(s.ID) {
-			continue // the boot reconcile is closing it
-		}
-		skipAdopt := p.isRetired(s.ID) || p.IsCooling(s.ModelAgentID, s.Provider) || p.IsProviderExcluded(s.Provider)
-		if !usable {
-			// Past end (or inside buffer): ask router to close so unused
-			// returns and used moves to the daylock queue.
-			ev := ReconcileEvent{Kind: "session_reconcile_close", Reason: ReasonExpired, Session: short(s.ID), Result: "ok", Source: "rescan"}
-			if err := p.client.CloseSession(s.ID); err != nil {
-				ev.Result = "failed"
-				p.emitRescan(ev)
-				warnf("pool: close expired session %s: %v", short(s.ID), err)
-				// Still show it — close failed, stake remains active.
-				display = append(display, ChainSession{
-					ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stakeStr,
-					EndsAt: time.Unix(s.EndsAt, 0).UTC(), Usable: false,
-				})
-			} else {
-				p.emitRescan(ev)
-				log.Printf("pool: closed expired session %s (model %s)", short(s.ID), s.ModelAgentID)
-				p.notifyClosed(s.ID)
-			}
-			continue
-		}
-		// Retired (failed over) sessions and sessions on a cooling provider
-		// stay visible but are never adopted back into the pool.
-		if cur, ok := best[normModel(s.ModelAgentID)]; !skipAdopt && (!ok || s.EndsAt > cur.EndsAt) {
-			best[normModel(s.ModelAgentID)] = s
-		}
-		display = append(display, ChainSession{
-			ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stakeStr,
-			EndsAt: time.Unix(s.EndsAt, 0).UTC(), Usable: true,
-		})
-	}
-
-	adopted := 0
-	p.mu.Lock()
-	for modelID, s := range best {
-		ends := time.Unix(s.EndsAt, 0)
-		usableUntil := ends.Add(-expiryBuffer)
-		if e, ok := p.entries[modelID]; ok && e.expiresAt.After(usableUntil) {
-			// Keep a fresher local open.
-			continue
-		}
-		if st := p.sess[s.ID]; st != nil && (st.retired || st.closing) {
-			continue // retired by a failover, release or sweep: never handed out again
-		}
-		p.entries[modelID] = entry{
-			sessionID: s.ID,
-			expiresAt: usableUntil,
-			stake:     s.Stake,
-			provider:  s.Provider,
-		}
-		if p.sess[s.ID] == nil {
-			// Adopted: opener unknown.
-			p.newStateLocked(modelID, s.ID, time.Unix(s.OpenedAt, 0), ends, "")
-		}
-		adopted++
-	}
-	// Prune pool slots whose session is not in the scanned open list
-	// (closed elsewhere): only with nothing in flight, and never a session
-	// opened after this scan started or within pruneGrace before it (the
-	// list may lag behind it). Only a successful scan gets here.
-	keepAfter := scanStart.Add(-pruneGrace)
-	onChain := make(map[string]bool, len(open))
-	for _, s := range open {
-		onChain[strings.ToLower(s.ID)] = true
-	}
-	for modelID, e := range p.entries {
-		if onChain[strings.ToLower(e.sessionID)] {
-			continue
-		}
-		if st := p.sess[e.sessionID]; st != nil && (st.inflight > 0 || st.openedAt.After(keepAfter)) {
-			continue
-		}
-		delete(p.entries, modelID)
-	}
-	// Mark which display rows are pooled.
-	pooledNow := map[string]bool{}
-	for _, e := range p.entries {
-		pooledNow[e.sessionID] = true
-	}
-	p.mu.Unlock()
-
-	for i := range display {
-		display[i].Pooled = pooledNow[display[i].SessionID]
-	}
-
-	p.chainMu.Lock()
-	p.chainOpen = display
-	p.chainFetched = now
-	p.rehydrateErr = ""
-	counts := scanCounts{open: len(open), adopted: adopted, wallet: addr}
-	changed := p.lastScanLog == nil || *p.lastScanLog != counts
-	p.lastScanLog = &counts
-	p.chainMu.Unlock()
-	p.stateKnown.Store(true)
-
-	if changed {
-		log.Printf("pool: rehydrated %d open on-chain session(s), adopted %d into reuse pool (wallet %s)",
-			len(open), adopted, addr)
-	}
-	return nil
+	_, err := p.scan(context.Background(), nil, scanAdoptOnly)
+	return err
 }
 
 func (p *Pool) setRehydrateErr(msg string) {
@@ -425,7 +335,8 @@ func (p *Pool) setRehydrateErr(msg string) {
 	p.chainMu.Unlock()
 }
 
-// CloseSession closes one session by id (pooled and/or on-chain), then rescans.
+// CloseSession closes one session by id (admin): it waits for the wallet
+// slot, closes, then rescans (adopt-only) outside the slot.
 func (p *Pool) CloseSession(sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("empty session id")
@@ -438,12 +349,18 @@ func (p *Pool) CloseSession(sessionID string) error {
 		}
 	}
 	p.mu.Unlock()
-	if err := p.client.CloseSession(sessionID); err != nil {
-		_ = p.RehydrateForce()
+	ctx := context.Background()
+	tok, err := p.slot.acquire(ctx, "")
+	if err != nil {
 		return err
 	}
-	p.notifyClosed(sessionID)
-	return p.RehydrateForce()
+	_, cerr := p.closeWithToken(ctx, tok, sessionID, "", "", closeCallTimeout)
+	p.slot.release(tok)
+	rerr := p.RehydrateForce()
+	if cerr != nil {
+		return cerr
+	}
+	return rerr
 }
 
 // CloseAllResult summarizes a mass close attempt.
@@ -455,39 +372,61 @@ type CloseAllResult struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
-// CloseAll closes every pooled session, then any remaining on-chain opens
-// from the last scan (recovers unused stake sooner than waiting for expiry).
-func (p *Pool) CloseAll() CloseAllResult {
+type closeTarget struct{ id, label string }
+
+// closeTargets empties the pool and lists every pooled and last-scanned
+// on-chain session once.
+func (p *Pool) closeTargets() []closeTarget {
 	p.mu.Lock()
 	entries := p.entries
 	p.entries = map[string]entry{}
 	p.mu.Unlock()
+	var targets []closeTarget
 	seen := map[string]bool{}
-	res := CloseAllResult{}
-	tryClose := func(sessionID, label string) {
-		if sessionID == "" || seen[sessionID] {
-			return
+	add := func(id, label string) {
+		if id != "" && !seen[strings.ToLower(id)] {
+			seen[strings.ToLower(id)] = true
+			targets = append(targets, closeTarget{id, label})
 		}
-		seen[sessionID] = true
-		res.Attempted++
-		if err := p.client.CloseSession(sessionID); err != nil {
-			res.Failed++
-			msg := label + ": close failed" // fixed text; the router's text is logged only
-			if len(res.Errors) < 5 {
-				res.Errors = append(res.Errors, msg)
-			}
-			warnf("pool: close session %s: %v", short(sessionID), err)
-			return
-		}
-		res.Closed++
-		log.Printf("pool: closed session %s (%s)", short(sessionID), label)
-		p.notifyClosed(sessionID)
 	}
-	for modelID, e := range entries {
-		tryClose(e.sessionID, "pooled "+modelID)
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		add(entries[k].sessionID, "pooled "+k)
 	}
 	for _, s := range p.ChainOpen() {
-		tryClose(s.SessionID, "on-chain "+s.ModelID)
+		add(s.SessionID, "on-chain "+s.ModelID)
+	}
+	return targets
+}
+
+// CloseAll closes every pooled session, then any remaining on-chain opens
+// from the last scan (recovers unused stake sooner than waiting for
+// expiry). Each close waits for the wallet slot; a rescan follows.
+func (p *Pool) CloseAll() CloseAllResult {
+	res := CloseAllResult{}
+	ctx := context.Background()
+	for _, t := range p.closeTargets() {
+		res.Attempted++
+		tok, err := p.slot.acquire(ctx, "")
+		if err == nil {
+			var out closeOutcome
+			out, err = p.closeWithToken(ctx, tok, t.id, "", "", closeCallTimeout)
+			p.slot.release(tok)
+			if out == closeOK || out == closeAlready {
+				res.Closed++
+				log.Printf("pool: closed session %s (%s)", short(t.id), t.label)
+				continue
+			}
+		}
+		res.Failed++
+		if len(res.Errors) < 5 {
+			res.Errors = append(res.Errors, t.label+": close failed") // fixed text; the router's text is logged only
+		}
+		warnf("pool: close session %s: %v", short(t.id), err)
 	}
 	_ = p.RehydrateForce()
 	return res
@@ -498,26 +437,10 @@ func (p *Pool) CloseAll() CloseAllResult {
 // counted in Left and logged as left for the boot reconcile. It does not
 // rescan afterwards.
 func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseAllResult {
-	p.mu.Lock()
-	entries := p.entries
-	p.entries = map[string]entry{}
-	p.mu.Unlock()
-	type target struct{ id, label string }
-	var targets []target
-	seen := map[string]bool{}
-	add := func(id, label string) {
-		if id != "" && !seen[id] {
-			seen[id] = true
-			targets = append(targets, target{id, label})
-		}
-	}
-	for modelID, e := range entries {
-		add(e.sessionID, "pooled "+modelID)
-	}
-	for _, s := range p.ChainOpen() {
-		add(s.SessionID, "on-chain "+s.ModelID)
-	}
+	targets := p.closeTargets()
 	res := CloseAllResult{}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
 	for i, t := range targets {
 		left := time.Until(deadline)
 		if left <= 0 {
@@ -531,25 +454,28 @@ func (p *Pool) CloseAllWithin(deadline time.Time, perClose time.Duration) CloseA
 		if left < wait {
 			wait = left
 		}
+		tok, err := p.slot.acquire(ctx, "")
+		if err != nil {
+			res.Left++
+			warnf("pool: session %s (%s) left for boot reconcile (wallet slot busy)", short(t.id), t.label)
+			continue
+		}
 		res.Attempted++
-		done := make(chan error, 1)
-		go func(id string) { done <- p.client.CloseSession(id) }(t.id)
-		select {
-		case err := <-done:
-			if err != nil {
-				res.Failed++
-				if len(res.Errors) < 5 {
-					res.Errors = append(res.Errors, t.label+": close failed")
-				}
-				warnf("pool: close session %s: %v (left for boot reconcile)", short(t.id), err)
-				continue
-			}
+		out, cerr := p.closeWithToken(ctx, tok, t.id, "", "", wait)
+		p.slot.release(tok)
+		switch out {
+		case closeOK, closeAlready:
 			res.Closed++
 			log.Printf("pool: closed session %s (%s)", short(t.id), t.label)
-			p.notifyClosed(t.id)
-		case <-time.After(wait):
+		case closeCut:
 			res.Left++
 			warnf("pool: session %s (%s) left for boot reconcile (close timed out after %s)", short(t.id), t.label, wait)
+		default:
+			res.Failed++
+			if len(res.Errors) < 5 {
+				res.Errors = append(res.Errors, t.label+": close failed")
+			}
+			warnf("pool: close session %s: %v (left for boot reconcile)", short(t.id), cerr)
 		}
 	}
 	return res

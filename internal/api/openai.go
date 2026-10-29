@@ -102,7 +102,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		durationSec := cl.durationSec
 		stream := bodyStream(body)
 
-		lease, ensured, ok := s.acquireSession(w, keyID, reqModel, modelID, cl)
+		lease, ensured, ok := s.acquireSession(r.Context(), w, keyID, reqModel, modelID, cl)
 		if !ok {
 			return
 		}
@@ -134,7 +134,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				lease.Done()
 				s.pool.Invalidate(modelID)
 				var ok bool
-				lease, ensured, ok = s.acquireSession(w, keyID, reqModel, modelID, cl)
+				lease, ensured, ok = s.acquireSession(r.Context(), w, keyID, reqModel, modelID, cl)
 				if !ok {
 					return
 				}
