@@ -586,3 +586,83 @@ func TestRehydrateAdoptsRegardlessOfHealth(t *testing.T) {
 	}
 	noOpens(t, lr, "rehydrate")
 }
+
+// TestRetryAfterOnlyForCoolingRefusals: only all_cooling and walk_exhausted
+// carry a Retry-After, and only when a healthy, non-excluded provider is
+// cooling. Every other refusal carries none (0: no header), even while
+// providers of the model are cooling; all_cooling caused only by a stream
+// cut (no cool-down known) carries none either.
+func TestRetryAfterOnlyForCoolingRefusals(t *testing.T) {
+	retryOf := func(t *testing.T, err error) time.Duration {
+		t.Helper()
+		var nae *NoAvailableError
+		if !errors.As(err, &nae) {
+			t.Fatalf("err = %v, want *NoAvailableError", err)
+		}
+		return nae.RetryAfter
+	}
+	coolBoth := func(p *Pool) {
+		p.MarkCooling(modelB, leaseProv1)
+		p.MarkCooling(modelB, leaseProv2)
+	}
+	for _, c := range []struct {
+		name  string
+		setup func(lr *leaseRouter, p *Pool)
+	}{
+		{"health_unknown", func(lr *leaseRouter, p *Pool) {
+			lr.mu.Lock()
+			lr.healthErr = errors.New("x")
+			lr.mu.Unlock()
+		}},
+		{"none_healthy", func(lr *leaseRouter, p *Pool) {
+			lr.setUnhealthy(modelB, leaseProv1)
+			lr.setUnhealthy(modelB, leaseProv2)
+		}},
+		{"healthy_all_excluded", func(lr *leaseRouter, p *Pool) {
+			lr.setUnhealthy(modelB, leaseProv2)
+			p.SetProviderExclude([]string{leaseProv1})
+		}},
+		{"rated_unreadable", func(lr *leaseRouter, p *Pool) {
+			lr.mu.Lock()
+			lr.bidders[modelB] = []string{}
+			lr.mu.Unlock()
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			lr, p := newLeaseRouter(t, newFakeClock())
+			c.setup(lr, p)
+			coolBoth(p)
+			_, _, err := p.openAvoidingCooling(modelB, 600)
+			if ra := retryOf(t, err); ra != 0 {
+				t.Fatalf("Retry-After = %v, want none", ra)
+			}
+			noOpens(t, lr, c.name)
+		})
+	}
+	t.Run("router_unreachable", func(t *testing.T) {
+		p := New(router.New("http://127.0.0.1:1", "u", "p"), 600)
+		p.SetHealthyBids(func(string) (map[string]struct{}, error) { return map[string]struct{}{}, nil })
+		coolBoth(p)
+		_, _, err := p.openAvoidingCooling(modelB, 600)
+		if ra := retryOf(t, err); ra != 0 {
+			t.Fatalf("Retry-After = %v, want none", ra)
+		}
+	})
+	t.Run("all_cooling cut only", func(t *testing.T) {
+		lr, p := newLeaseRouter(t, newFakeClock())
+		lr.setUnhealthy(modelB, leaseProv2)
+		p.MarkStreamCut(modelB, leaseProv1)
+		_, _, err := p.openAvoidingCooling(modelB, 600)
+		if ra := retryOf(t, err); ra != 0 {
+			t.Fatalf("Retry-After = %v, want none (no cool-down known)", ra)
+		}
+	})
+	t.Run("all_cooling", func(t *testing.T) {
+		_, p := newLeaseRouter(t, newFakeClock())
+		coolBoth(p)
+		_, _, err := p.openAvoidingCooling(modelB, 600)
+		if ra := retryOf(t, err); ra < time.Second || ra > MaxRetryAfter {
+			t.Fatalf("Retry-After = %v, want 1s..%v", ra, MaxRetryAfter)
+		}
+	})
+}

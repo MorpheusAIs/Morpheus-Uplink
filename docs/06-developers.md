@@ -598,7 +598,8 @@ the pool stays in charge of which session is open. Turning the
   `all_cooling` and `walk_exhausted`: the shortest remaining cool-down of
   a healthy, non-excluded provider, capped at 600 s and rounded up to
   whole seconds (at least 1); it is left off when no cool-down is known
-  (for example only a stream cut, or a cool-down of `0`). A refusal
+  (for example only a stream cut, or a cool-down of `0`), and never sent
+  as `0`. A refusal
   consumes a pending stream cut. Refusals are audited on the ops stream
   as `provider_unavailable`, one line per model per minute with a count.
   In a failover, the retired-session reopen that finds nothing available
@@ -628,13 +629,20 @@ the pool stays in charge of which session is open. Turning the
   `localhost` (a loopback test server); credentials in the URL are
   refused. Uplink does not start otherwise, and the error names the
   variable, not its value.
-- *Status page:* the Status tab shows one "Data feeds" line with the age
-  of the models and bids feeds ("not loaded yet" before the first good
-  copy), from `feeds` in `/admin/status` (admin only: per feed
-  `last_good_fetch_at`, `feed_last_updated`, `age_seconds`, `stale`,
-  `loaded`, plus `health_source`: `bids`, `bid_detail` or `none`). The
-  age turns red with a tooltip past 30 minutes; requests continue on the
-  last good copy. Reading the status never fetches a feed.
+- *Status page:* the Status header line ends with one more item after
+  the router version, `active.mor.org (last updated 12 min ago)`: the age
+  of the staler of the models and bids feeds ("just now" under a minute,
+  then minutes, then hours), from `feeds` in `/admin/status` (admin only:
+  per feed `last_good_fetch_at`, `feed_last_updated`, `age_seconds`,
+  `stale`, `loaded`, plus `health_source`: `bids`, `bid_detail` or
+  `none`). It reads `active.mor.org (not loaded yet)` before any good
+  copy, and `active.mor.org (age unknown)` when a feed is loaded but no
+  valid age is reported. The item turns red, and the health bullet yellow (red when health
+  is already bad), past 30 minutes, when a feed reports `stale`, or when
+  either feed is not loaded or has no valid age. The word "Healthy",
+  `/healthcheck` and inference are unaffected: requests continue on the
+  last good copy. The item links to https://active.mor.org (new tab) and
+  its tooltip explains it. Reading the status never fetches a feed.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
   the answer cannot be restarted. Two upstream events count as a

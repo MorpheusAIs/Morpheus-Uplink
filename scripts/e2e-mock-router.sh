@@ -26,9 +26,9 @@
 #                last_updated keeps opening on the last good copy and
 #                /admin/status shows feeds.bids loaded with a growing age;
 #                with the bids feed never loaded and no bidDetail, a request
-#                needing an open gets 503 no_available_provider. The mock
-#                runs in uplink's network namespace (router and feeds at
-#                http://127.0.0.1:8082).
+#                needing an open gets 503 no_available_provider. Uplink
+#                runs in the mock's network namespace (router and feeds at
+#                http://127.0.0.1:8082); the mock is never restarted.
 #  2fa           2FA starts off (password-only); turning it on (enroll,
 #                password in the body; confirm re-issues the session and
 #                ends the old cookie) makes login need TOTP or a recovery code; the switch

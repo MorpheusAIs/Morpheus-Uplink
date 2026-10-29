@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/config"
+	"github.com/absgrafx/morpheus-uplink/internal/pool"
 )
 
 // No healthy bid for the model → 503 no_available_provider, no ids, no
@@ -179,5 +180,44 @@ func TestStatusFeedsAdminOnly(t *testing.T) {
 	st := getStatusFeeds(t, adminClient(t, ts, cfg), ts.URL)
 	if st.Feeds.HealthSource == "" {
 		t.Fatal("admin status: empty health_source")
+	}
+}
+
+// Retry-After only for all_cooling / walk_exhausted: refusals for no
+// healthy bid, every healthy one excluded, or every rated one excluded
+// carry no Retry-After even while providers are cooling; a sub-second
+// value is never sent as "0".
+func TestRetryAfterAbsentOutsideCooling(t *testing.T) {
+	a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+	for _, c := range []struct {
+		name  string
+		setup func(m *fakeMarket, e *failoverEnv)
+		typ   string
+	}{
+		{"none_healthy", func(m *fakeMarket, e *failoverEnv) { m.unhealthy[a40], m.unhealthy[b40] = true, true }, "no_available_provider"},
+		{"healthy_all_excluded", func(m *fakeMarket, e *failoverEnv) {
+			m.unhealthy[b40] = true
+			e.srv.pool.SetProviderExclude([]string{a40})
+		}, "no_available_provider"},
+		{"all_excluded", func(m *fakeMarket, e *failoverEnv) { e.srv.pool.SetProviderExclude([]string{a40, b40}) }, "no_eligible_provider"},
+		{"rated_unreadable", func(m *fakeMarket, e *failoverEnv) { m.bidsFail = true }, "no_available_provider"},
+	} {
+		m := newFakeMarket(t, a40, b40)
+		e := newFailoverEnv(t, m, nil)
+		c.setup(m, e)
+		e.srv.pool.MarkCooling(testModelID, a40)
+		e.srv.pool.MarkCooling(testModelID, b40)
+		code, hdr, body := chatFull(t, e, "test-model")
+		if code != 503 || !strings.Contains(body, `"type":"`+c.typ+`"`) {
+			t.Errorf("%s: %d %s", c.name, code, body)
+		}
+		if _, ok := hdr["Retry-After"]; ok {
+			t.Errorf("%s: Retry-After %q", c.name, hdr.Get("Retry-After"))
+		}
+	}
+	rec := httptest.NewRecorder()
+	writeNoAvailableProvider(rec, &pool.NoAvailableError{RetryAfter: 300 * time.Millisecond})
+	if _, ok := rec.Header()["Retry-After"]; ok {
+		t.Fatalf("sub-second Retry-After sent: %q", rec.Header().Get("Retry-After"))
 	}
 }

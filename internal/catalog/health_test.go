@@ -3,6 +3,7 @@ package catalog
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -346,12 +347,82 @@ func TestBidDetailFallbackValidation(t *testing.T) {
 		h.wantSet(t, bad)
 	}
 
-	// A numeric status cannot decode into the model list: the whole models
-	// copy fails, so it is never a health source.
-	h2 := newHarness(t)
-	h2.bids.fail(http.StatusInternalServerError)
-	h2.models.set(modelsFile(unix(t0), modelRow(mdlM, "example-model", detailRow(bid4, healthy), detailRow(bid3, `1`))))
-	h2.wantUnknown(t, mdlM)
+}
+
+// TestBidDetailNonStringStatusSkipped: a bidDetail row whose status is not
+// a JSON string ("status": 1, true, null, {}) is skipped and counted; for
+// each value the models file still loads (no failure, no rollback), the
+// other rows stay usable and their healthy set is served, and List /
+// Resolve return the same models as without the bad row.
+func TestBidDetailNonStringStatusSkipped(t *testing.T) {
+	type view struct {
+		names, ids []string
+		rows       []int
+	}
+	snapshot := func(t *testing.T, c *Catalog) view {
+		t.Helper()
+		l, err := c.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		var v view
+		for _, m := range l {
+			id, err := c.Resolve(m.Name)
+			if err != nil {
+				t.Fatalf("Resolve(%q): %v", m.Name, err)
+			}
+			v.names, v.ids = append(v.names, m.Name), append(v.ids, id)
+			usable := 0
+			for _, d := range m.BidDetail {
+				if d.Status != "" {
+					usable++
+				}
+			}
+			v.rows = append(v.rows, usable)
+		}
+		return v
+	}
+	file := func(bad string) string {
+		details := []string{detailRow(bid4, healthy), detailRow(bid2, degraded)}
+		if bad != "" {
+			details = append(details[:1], append([]string{detailRow(bid3, bad)}, details[1:]...)...)
+		}
+		return modelsFile(unix(t0),
+			modelRow(mdlM, "example-model", details...),
+			modelRow(mdlN, "example-embed", detailRow(bid1, healthy)))
+	}
+	base := newHarness(t)
+	base.bids.fail(http.StatusInternalServerError)
+	base.models.set(file(""))
+	base.wantSet(t, mdlM, bid4)
+	want := snapshot(t, base.c)
+	for _, bad := range []string{`1`, `true`, `null`, `{}`} {
+		t.Run(bad, func(t *testing.T) {
+			lb := captureLogs(t)
+			h := newHarness(t)
+			h.bids.fail(http.StatusInternalServerError)
+			h.models.set(file(bad))
+			// Other rows usable, their healthy set served.
+			h.wantSet(t, mdlM, bid4)
+			h.wantSet(t, mdlN, bid1)
+			// The file loaded: copy in use, no models failure or rollback logged,
+			// the bad row skipped and counted.
+			if m, _, src := h.status(t); !m.Loaded || m.LastGoodFetchAt == nil || *m.FeedLastUpdated != rfc(t0) || src != "bid_detail" {
+				t.Fatalf("models feed not loaded: %+v %s", m, src)
+			}
+			if lb.count(`msg="catalog feed refreshed"`, "feed=models", "rows=4", "usable=3", "healthy=2", "skipped=1") != 1 {
+				t.Fatalf("models counts not logged:\n%s", lb)
+			}
+			if lb.count("rollback") != 0 || lb.count("malformed") != 0 || lb.count("feed failed", "feed=models") != 0 {
+				t.Fatalf("failure logged:\n%s", lb)
+			}
+			// List / Resolve: the same models as without the bad row.
+			got := snapshot(t, h.c)
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("List/Resolve = %+v, want %+v", got, want)
+			}
+		})
+	}
 }
 
 func TestBidDetailAllNonHealthyReplacesSnapshot(t *testing.T) {
@@ -492,11 +563,16 @@ func TestFeedOlderLastUpdatedDoesNotReplace(t *testing.T) {
 		if *b.LastGoodFetchAt != rfc(T) || *b.AgeSeconds != int64(h.clk.now().Sub(T)/time.Second) {
 			t.Fatalf("fetchedAt refreshed by a rollback: %+v", b)
 		}
-		// C: same stamp, different set: only the fetch time moves.
+		// C: same stamp, different set: A's set is kept and only the fetch
+		// time (last_good_fetch_at) is refreshed; age_seconds does not drop,
+		// because it is measured from the older of the fetch time and
+		// last_updated.
+		_, bPrev, _ := h.status(t)
 		h.bids.set(bidsFile(unix(T), bidRow(bid3, mdlM, healthy)))
 		h.past()
 		h.wantSet(t, mdlM, bid1)
-		if _, b, _ := h.status(t); *b.LastGoodFetchAt != rfc(h.clk.now()) || *b.FeedLastUpdated != rfc(T) {
+		if _, b, _ := h.status(t); *b.LastGoodFetchAt != rfc(h.clk.now()) || *b.FeedLastUpdated != rfc(T) ||
+			*b.AgeSeconds < *bPrev.AgeSeconds || *b.AgeSeconds != int64(h.clk.now().Sub(T)/time.Second) {
 			t.Fatalf("equal stamp: %+v", b)
 		}
 		// D: newer replaces.
@@ -520,10 +596,13 @@ func TestFeedOlderLastUpdatedDoesNotReplace(t *testing.T) {
 		if src != "bid_detail" || *m.LastGoodFetchAt != rfc(T) || *m.FeedLastUpdated != rfc(T) {
 			t.Fatalf("models status from detailSnap: %+v %s", m, src)
 		}
+		// C: same stamp: only last_good_fetch_at moves; age_seconds does
+		// not drop.
+		mPrev, _, _ := h.status(t)
 		h.models.set(modelsFile(unix(T), modelRow(mdlM, "example-model", detailRow(bid3, healthy))))
 		h.past()
 		h.wantSet(t, mdlM, bid1)
-		if m, _, _ := h.status(t); *m.LastGoodFetchAt != rfc(h.clk.now()) {
+		if m, _, _ := h.status(t); *m.LastGoodFetchAt != rfc(h.clk.now()) || *m.AgeSeconds < *mPrev.AgeSeconds {
 			t.Fatalf("equal stamp: %+v", m)
 		}
 		h.models.set(modelsFile(unix(T.Add(5*time.Minute)), modelRow(mdlM, "example-model", detailRow(bid4, healthy))))
@@ -732,19 +811,88 @@ func TestHealthyBidsRowValidation(t *testing.T) {
 	h.wantSet(t, zero)
 }
 
+// TestHealthyBidsNonStringStatusSkipped: a bids row whose health.status is
+// not a JSON string ("status": 1, true, null, {}) is skipped and counted;
+// for each value the bids file still loads (no failure, no rollback), the
+// other rows stay usable and their healthy set is served, and List /
+// Resolve return the same models as without the bad row. A file with only
+// non-string statuses has no usable row and is a failed file.
 func TestHealthyBidsNonStringStatusSkipped(t *testing.T) {
-	h := newHarness(t)
-	h.bids.set(bidsFile(unix(t0), bidRow(bid2, mdlM, `1`), bidRow(bid3, mdlM, `true`), bidRow(bid4, mdlM, `null`),
-		bidRow(bid2, mdlN, `{"s":"healthy"}`), bidRow(bid3, mdlN, `["healthy"]`), bidRow(bid1, mdlM, healthy)))
-	h.wantSet(t, mdlM, bid1)
-	h.wantSet(t, mdlN)
+	type view struct{ names, ids []string }
+	snapshot := func(t *testing.T, c *Catalog) view {
+		t.Helper()
+		l, err := c.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		var v view
+		for _, m := range l {
+			id, err := c.Resolve(m.Name)
+			if err != nil {
+				t.Fatalf("Resolve(%q): %v", m.Name, err)
+			}
+			v.names, v.ids = append(v.names, m.Name), append(v.ids, id)
+		}
+		return v
+	}
+	file := func(bad string) string {
+		rows := []string{bidRow(bid1, mdlM, healthy), bidRow(bid4, mdlN, healthy), bidRow(bid3, mdlN, degraded)}
+		if bad != "" {
+			rows = append(rows, bidRow(bid2, mdlM, bad))
+		}
+		return bidsFile(unix(t0), rows...)
+	}
+	base := newHarness(t)
+	base.bids.set(file(""))
+	base.wantSet(t, mdlM, bid1)
+	want := snapshot(t, base.c)
+	for _, bad := range []string{`1`, `true`, `null`, `{}`} {
+		t.Run(bad, func(t *testing.T) {
+			lb := captureLogs(t)
+			h := newHarness(t)
+			h.bids.set(file(bad))
+			// Other rows usable, their healthy set served.
+			h.wantSet(t, mdlM, bid1)
+			h.wantSet(t, mdlN, bid4)
+			// The file loaded: bids copy in use, no bids failure or
+			// rollback logged, the bad row skipped and counted.
+			if _, b, src := h.status(t); !b.Loaded || b.LastGoodFetchAt == nil || *b.FeedLastUpdated != rfc(t0) || src != "bids" {
+				t.Fatalf("bids feed not loaded: %+v %s", b, src)
+			}
+			if lb.count(`msg="catalog feed refreshed"`, "feed=bids", "rows=4", "usable=3", "healthy=2", "skipped=1") != 1 {
+				t.Fatalf("bids counts not logged:\n%s", lb)
+			}
+			if lb.count("rollback") != 0 || lb.count("malformed") != 0 || lb.count("feed failed", "feed=bids") != 0 {
+				t.Fatalf("failure logged:\n%s", lb)
+			}
+			// List / Resolve: the same models as without the bad row.
+			if got := snapshot(t, h.c); fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("List/Resolve = %+v, want %+v", got, want)
+			}
+		})
+	}
 
 	// Only non-string statuses: no usable row, a failed file.
 	h2 := newHarness(t)
-	h2.bids.set(bidsFile(unix(t0), bidRow(bid2, mdlM, `1`), bidRow(bid3, mdlM, `true`)))
+	h2.bids.set(bidsFile(unix(t0), bidRow(bid2, mdlM, `1`), bidRow(bid3, mdlM, `true`), bidRow(bid4, mdlM, `null`), bidRow(bid1, mdlN, `{}`)))
 	h2.wantSet(t, mdlM, bid3)
 	if _, b, _ := h2.status(t); b.Loaded {
 		t.Fatal("non-string-only bids file loaded")
+	}
+}
+
+// TestJSONStringOnlyStrings: the shared status helper accepts only JSON
+// strings; null (which json.Unmarshal into a string accepts without an
+// error), numbers, booleans, objects, arrays and empty input are not
+// usable.
+func TestJSONStringOnlyStrings(t *testing.T) {
+	for raw, want := range map[string]bool{
+		`"healthy"`: true, ` "x" `: true, `""`: true,
+		`null`: false, ` null`: false, `1`: false, `true`: false, `false`: false, `{}`: false, `["healthy"]`: false, ``: false, `"unterminated`: false,
+	} {
+		if _, ok := jsonString(json.RawMessage(raw)); ok != want {
+			t.Errorf("jsonString(%q) ok = %v, want %v", raw, ok, want)
+		}
 	}
 }
 

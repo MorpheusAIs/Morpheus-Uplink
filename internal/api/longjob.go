@@ -290,12 +290,15 @@ func setTimeoutHeaders(w http.ResponseWriter, cl callLimits) {
 }
 
 // writeNoAvailableProvider answers ErrNoAvailableProvider: a typed 503 with
-// a fixed message (no ids) and, when a cool-down is known, Retry-After in
-// whole seconds.
+// a fixed message (no ids) and, when a cool-down is known (all_cooling or
+// walk_exhausted; the pool sets RetryAfter only there), Retry-After in
+// whole seconds. No value known → no header; never "0".
 func writeNoAvailableProvider(w http.ResponseWriter, err error) {
 	var na *pool.NoAvailableError
-	if errors.As(err, &na) && na.RetryAfter > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(int(na.RetryAfter/time.Second)))
+	if errors.As(err, &na) {
+		if sec := int(na.RetryAfter / time.Second); sec >= 1 {
+			w.Header().Set("Retry-After", strconv.Itoa(sec))
+		}
 	}
 	writeTypedError(w, http.StatusServiceUnavailable, "no_available_provider", "no provider is available for this model right now; retry later")
 }

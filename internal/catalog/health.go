@@ -136,8 +136,12 @@ func hexID(s string) (string, bool) {
 	return s, true
 }
 
-// jsonString returns the value of a JSON string, ok=false for any other
-// JSON value (or none).
+// jsonString is the one status helper for both feeds (bids
+// health.status and models bidDetail status): it returns the value of a
+// JSON string and ok=false for any other JSON value or none. It checks
+// that the raw value starts with '"' before decoding, because
+// json.Unmarshal of null into a string returns no error and would
+// otherwise make a null status look usable.
 func jsonString(raw json.RawMessage) (string, bool) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || raw[0] != '"' {

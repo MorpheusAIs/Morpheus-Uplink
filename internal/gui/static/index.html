@@ -30,6 +30,7 @@
     --btn-fg: #03160E;
     --ok: #20DC8E;
     --bad: #ef4444;
+    --warn: #c90;
     --radius: 0.5rem;
     --header-base: #050806;
     --wash-edge: rgba(5,8,6,0.96);
@@ -52,6 +53,7 @@
     --btn-fg: #03160E;
     --ok: #0F9F66;
     --bad: #DC2626;
+    --warn: #c90;
     --header-base: #050806;
     --wash-edge: rgba(5,8,6,0.96);
     --wash-mid: rgba(5,8,6,0.28);
@@ -376,6 +378,10 @@
   #tab-status .sys-line .dot { font-size: 12px; margin-right: 6px; }
   #tab-status .sys-line .dot.ok { color: var(--ok); }
   #tab-status .sys-line .dot.bad { color: var(--bad); }
+  #tab-status .sys-line .dot.warn { color: var(--warn); }
+  .sys-line a.feed.tip { display: inline; font-size: inherit; color: var(--text); cursor: pointer; text-decoration: none; border-radius: 0; }
+  .sys-line a.feed.tip:hover { color: var(--green-light); }
+  .sys-line a.feed.tip.bad { color: var(--bad); font-weight: 600; }
   body.enroll-only .tab:not([data-tab="security"]) { display: none; }
   .tiles-head { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 10px; min-height: 18px; font-size: 12px; color: var(--muted); }
   .tile {
@@ -917,7 +923,6 @@
       <section id="statusOverview" aria-label="Status">
         <div class="sys-line" id="stats" role="status"></div>
         <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
-        <div class="sys-line hidden" id="feedStatus" role="status"></div>
         <div class="callout warn hidden" id="originWarn" role="alert"></div>
         <div class="tiles-head">
           <span data-copy="tilesHead"></span>
@@ -1382,12 +1387,8 @@ const UI_COPY = {
   // Admin changes are accepted only from WEB_PUBLIC_URL.
   originMismatch: (here, want) => 'This page is open at ' + here + ', but WEB_PUBLIC_URL is ' + want
     + '. Admin changes (keys, 2FA, sessions) are refused until they match: set WEB_PUBLIC_URL to the address you open (scheme and host) and redeploy.',
-  // Data feeds line (Status): gateway feed ages from /admin/status feeds.
-  feedsLabel: 'Data feeds',
-  feedModels: 'Models',
-  feedBids: 'Bids',
-  feedNotLoaded: 'not loaded yet',
-  feedStaleTip: 'This data feed has not updated for over 30 minutes. Uplink keeps using the last good copy, so requests continue, but provider health may be out of date.',
+  // Status line feed item (active.mor.org freshness, from /admin/status feeds).
+  feedFreshTip: 'Uplink uses active.mor.org to see which provider bids are healthy. This shows how long ago its data last changed. If it has not updated for over 30 minutes, Uplink keeps using the last good copy so requests continue, but provider health may be out of date. Click to open active.mor.org.',
   // Status line
   healthy: 'Healthy',
   routerAuthFail: 'Router rejected Uplink\'s credential',
@@ -1927,6 +1928,8 @@ function tipHTML(text) {
 function setTip(el, text) {
   if (!el) return;
   el.setAttribute('data-tip', text);
+  // A link keeps its own role and name (its text) for screen readers.
+  if (el.tagName === 'A') return;
   el.setAttribute('aria-label', text);
   el.setAttribute('role', 'img');
 }
@@ -2824,10 +2827,9 @@ async function doRefresh() {
     setHeaderBalances(mor.liquidWei ?? bal.mor, bal.eth);
     checkForUpdate(st.version || 'dev');
 
-    renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).filter(sessionIsReal).length);
+    renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).filter(sessionIsReal).length, st.feeds);
     renderMasterKeyBanner(st);
     renderDiskStatus(st.disk || null);
-    renderFeedStatus(st.feeds || null);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
     const hk = st.housekeep || {};
@@ -2914,48 +2916,51 @@ function diskMeterHTML(p) {
   </div>`;
 }
 
-/** "4m ago" style age for a whole number of seconds. */
+/** Feed age as shown on the Status line: under 1 min "just now", under
+ * 60 min "N min ago", else "N h ago" (floor). */
 function fmtFeedAge(sec) {
-  const n = Math.max(0, Math.floor(Number(sec) || 0));
-  if (n < 60) return n + 's ago';
-  if (n < 3600) return Math.floor(n / 60) + 'm ago';
-  if (n < 86400) return Math.floor(n / 3600) + 'h ago';
-  return Math.floor(n / 86400) + 'd ago';
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return Math.floor(sec / 60) + ' min ago';
+  return Math.floor(sec / 3600) + ' h ago';
 }
 
-/** Data feeds line: createElement + textContent only (never innerHTML). */
+const FEED_STALE_SEC = 1800;
+
+/** Status line item for the gateway feeds: "active.mor.org (last updated
+ * N min ago)", the age of the staler valid feed (models, bids). A feed is
+ * valid only with loaded === true and an age_seconds that is a number,
+ * finite and >= 0 (no coercion). No valid feed: "not loaded yet" when
+ * no feed reports loaded:true, else "age unknown". Stale (red string, yellow bullet) when
+ * the age shown is over 30 min, either feed says stale, or either feed is
+ * invalid or not loaded. Returns { node, stale }. createElement +
+ * textContent only, never innerHTML; the link is the constant
+ * https://active.mor.org, never a value from the API or the feed, and has
+ * no role attribute. Display only: staleness never changes /healthcheck
+ * or stops inference. */
 function renderFeedStatus(feeds) {
-  const el = document.getElementById('feedStatus');
-  if (!el) return;
-  el.replaceChildren();
-  if (!feeds || typeof feeds !== 'object') { el.classList.add('hidden'); return; }
-  el.classList.remove('hidden');
-  const add = (tag, cls, text) => {
-    const n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (text != null) n.textContent = text;
-    el.appendChild(n);
-    return n;
-  };
-  add('span', '', UI_COPY.feedsLabel);
-  for (const [key, label] of [['models', UI_COPY.feedModels], ['bids', UI_COPY.feedBids]]) {
-    const f = (feeds[key] && typeof feeds[key] === 'object') ? feeds[key] : {};
-    add('span', 'sep', '·').setAttribute('aria-hidden', 'true');
-    add('span', '', label + ' ');
-    if (f.loaded !== true || f.age_seconds == null) {
-      add('span', '', UI_COPY.feedNotLoaded);
+  let age = -1, stale = false, anyLoaded = false;
+  for (const key of ['models', 'bids']) {
+    const f = (feeds && typeof feeds === 'object' && feeds[key] && typeof feeds[key] === 'object') ? feeds[key] : null;
+    const v = f ? f.age_seconds : undefined;
+    if (f && f.loaded === true) anyLoaded = true;
+    if (!f || f.loaded !== true || typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      stale = true;
       continue;
     }
-    const stale = f.stale === true;
-    add('span', stale ? 'bad' : '', 'updated ' + fmtFeedAge(Number(f.age_seconds)));
-    if (stale) {
-      const tip = add('span', 'tip', '\u24D8');
-      tip.tabIndex = 0;
-      tip.setAttribute('data-tip-key', 'feedStaleTip');
-      tip.style.marginLeft = '6px';
-      setTip(tip, UI_COPY.feedStaleTip);
-    }
+    if (v > age) age = v;
+    if (f.stale === true) stale = true;
   }
+  const valid = age >= 0;
+  if (age > FEED_STALE_SEC) stale = true;
+  const a = document.createElement('a');
+  a.className = 'feed tip' + (stale ? ' bad' : '');
+  a.href = 'https://active.mor.org';
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.setAttribute('data-tip-key', 'feedFreshTip');
+  setTip(a, UI_COPY.feedFreshTip);
+  a.textContent = 'active.mor.org (' + (valid ? 'last updated ' + fmtFeedAge(age) : anyLoaded ? 'age unknown' : 'not loaded yet') + ')';
+  return { node: a, stale };
 }
 
 function renderDiskStatus(disk) {
@@ -3031,23 +3036,39 @@ function sessionIsReal(s) {
   return Number.isFinite(t) && t > 0;
 }
 
-/** ● Healthy · N open sessions · Uplink vX · Router vY */
-function renderSysLine(uplinkVer, routerVer, health, openSessions) {
+/** ● Healthy · N open sessions · Uplink vX · Router vY · active.mor.org (last updated N min ago)
+ * Built with createElement + textContent only. A stale feed turns the
+ * bullet yellow (the word and the health meaning stay); bad health keeps
+ * the bullet red. */
+function renderSysLine(uplinkVer, routerVer, health, openSessions, feeds) {
   const el = document.getElementById('stats');
   if (!el) return;
   const h = health || { ok: true, text: UI_COPY.healthy };
-  const up = escapeHtml(String(uplinkVer).replace(/^v?/, 'v'));
-  const rt = routerVer ? escapeHtml(String(routerVer).replace(/^v?/, 'v')) : '—';
+  const up = String(uplinkVer).replace(/^v?/, 'v');
+  const rt = routerVer ? String(routerVer).replace(/^v?/, 'v') : '—';
   const n = Number(openSessions) || 0;
   const cls = h.ok ? 'ok' : 'bad';
-  el.innerHTML =
-    `<span class="dot ${cls}" aria-hidden="true">●</span><span class="${cls}">${escapeHtml(h.text)}</span>` +
-    `<span class="sep">·</span>` +
-    `<span class="sessions">${escapeHtml(UI_COPY.openSessions(n))}</span>` +
-    `<span class="sep">·</span>` +
-    `<span class="ver" id="uplinkChip">${escapeHtml(UI_COPY.uplinkVer(up))}</span>` +
-    `<span class="sep">·</span>` +
-    `<a class="ver" id="routerChip" href="https://github.com/MorpheusAIs/Morpheus-Lumerin-Node" target="_blank" rel="noopener noreferrer" title="Morpheus Lumerin Node">${escapeHtml(UI_COPY.routerVer(rt))}</a>`;
+  const feed = renderFeedStatus(feeds);
+  const node = (tag, c, text) => {
+    const x = document.createElement(tag);
+    if (c) x.className = c;
+    if (text != null) x.textContent = text;
+    return x;
+  };
+  const sep = () => node('span', 'sep', '·');
+  const dot = node('span', 'dot ' + (h.ok ? (feed.stale ? 'warn' : 'ok') : 'bad'), '●');
+  dot.setAttribute('aria-hidden', 'true');
+  const router = node('a', 'ver', UI_COPY.routerVer(rt));
+  router.id = 'routerChip';
+  router.href = 'https://github.com/MorpheusAIs/Morpheus-Lumerin-Node';
+  router.target = '_blank';
+  router.rel = 'noopener noreferrer';
+  router.title = 'Morpheus Lumerin Node';
+  const upChip = node('span', 'ver', UI_COPY.uplinkVer(up));
+  upChip.id = 'uplinkChip';
+  el.replaceChildren(dot, node('span', cls, h.text), sep(),
+    node('span', 'sessions', UI_COPY.openSessions(n)), sep(),
+    upChip, sep(), router, sep(), feed.node);
 }
 
 /** Local time an on-hold stake returns, e.g. "8:00 PM EDT" (weekday added if not today). */
@@ -4579,7 +4600,8 @@ function enterUiPreview() {
   liquidWei = String(135864n * 10n ** 14n); // 13.5864 MOR
   const ethWei = String(374n * 10n ** 13n); // 0.00374 ETH
   setHeaderBalances(liquidWei, ethWei);
-  renderSysLine('v1.0.15', 'v7.17.0', { ok: true, text: UI_COPY.healthy }, 0);
+  renderSysLine('v1.0.15', 'v7.17.0', { ok: true, text: UI_COPY.healthy }, 0,
+    { models: { loaded: true, age_seconds: 240, stale: false }, bids: { loaded: true, age_seconds: 720, stale: false } });
   const nextMidnight = new Date(); nextMidnight.setUTCHours(24, 0, 0, 0);
   renderMorTiles({
     walletWei: liquidWei, activeWei: '0', onHoldWei: String(3636n * 10n ** 14n),

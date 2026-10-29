@@ -2,11 +2,14 @@
 # deploy/secretvm/docker-compose.yml so caps, volumes, networks and the
 # bake.env config are exactly the SecretVM ones. Only swaps / test knobs:
 #   - uplink -> local image
-#   - proxy-router -> stateful python mock (same service name, port 8082),
-#     run in the uplink container's network namespace so Uplink reaches it
-#     (router and both feeds) at http://127.0.0.1:8082: the feed URLs must
-#     be https or loopback http. Base networks are reset for it, and
-#     uplink's depends_on on it is reset (it now depends on uplink).
+#   - proxy-router -> stateful python mock (same service name, port 8082).
+#     It owns the network namespace; uplink runs in it (network_mode
+#     service:proxy-router, base networks reset) and reaches the router and
+#     both feeds at http://127.0.0.1:8082: the feed URLs must be https or
+#     loopback http. The mock is never restarted mid-run, so every uplink
+#     restart rejoins the same namespace. Uplink's depends_on is cleared
+#     (compose adds the namespace dependency); the mock depends on nothing.
+#     No ports are published.
 #   - traefik -> disabled (needs SecretVM certs)
 #   - short reconcile gate/retry
 #   - bake.env: the SecretVM content with the model catalog served by the
@@ -16,6 +19,8 @@ services:
   uplink:
     image: ${UPLINK_E2E_IMAGE:-uplink:e2e}
     pull_policy: never
+    network_mode: "service:proxy-router"
+    networks: !reset []
     depends_on: !reset []
     environment:
       - UPLINK_RECONCILE_GATE_SECONDS=6
@@ -29,8 +34,6 @@ services:
   proxy-router:
     image: python:3.12-alpine
     entrypoint: ["python3", "/mock/e2e_mock_router.py", "8082"]
-    network_mode: "service:uplink"
-    networks: !reset []
     environment:
       - MOCK_MOR=${E2E_MOCK_MOR:-1000000}
     volumes:

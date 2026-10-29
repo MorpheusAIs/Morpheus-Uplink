@@ -26,6 +26,24 @@ type BidDetail struct {
 	Status          string  `json:"status"`
 }
 
+// UnmarshalJSON decodes status as raw JSON, like the bids feed: a
+// non-string status leaves Status empty (not healthy) instead of failing
+// the whole models file. The health parse (parseBidDetail) skips and
+// counts such a row as unusable.
+func (b *BidDetail) UnmarshalJSON(data []byte) error {
+	type plain BidDetail
+	var row struct {
+		plain
+		Status json.RawMessage `json:"status"`
+	}
+	if err := json.Unmarshal(data, &row); err != nil {
+		return err
+	}
+	*b = BidDetail(row.plain)
+	b.Status, _ = jsonString(row.Status)
+	return nil
+}
+
 type Model struct {
 	Name      string      `json:"Name"`
 	ID        string      `json:"Id"`

@@ -222,7 +222,22 @@ const els = {};
 const elem = (id) => (els[id] = els[id] || { id, innerHTML: '', textContent: '', open: false, attrs: {},
   classList: { _s: new Set(), toggle(c, on) { on ? this._s.add(c) : this._s.delete(c); }, add(c) { this._s.add(c); }, contains(c) { return this._s.has(c); } },
   setAttribute(k, v) { this.attrs[k] = v; } });
-global.document = { getElementById: elem };
+// Minimal DOM for createElement-built lines: setting innerHTML on a
+// created node, or on the status line, fails the check.
+function domNode(tag) {
+  const n = { tagName: String(tag).toUpperCase(), className: '', children: [], attrs: {}, _text: '',
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+    hasAttribute(k) { return k in this.attrs; },
+    appendChild(c) { this.children.push(c); return c; },
+    replaceChildren(...c) { this.children = c; },
+    get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join('') : this._text; },
+    set textContent(v) { this.children = []; this._text = String(v); },
+    get innerHTML() { fail('innerHTML read on a DOM-built node'); },
+    set innerHTML(v) { fail('innerHTML set on a DOM-built node: ' + v); } };
+  return n;
+}
+els.stats = Object.assign(domNode('div'), { id: 'stats', classList: { toggle() {}, add() {}, contains: () => false } });
+global.document = { getElementById: elem, createElement: domNode };
 let store = {};
 global.localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
 let clip = [];
@@ -234,9 +249,10 @@ eval([
   'const RECOVERY_HINT_KEY = "uplink.2fa.recoveryLeft"; let loginPassword = ""; let recoveryMode = false;',
   'function flashIconCopied() {} function probeDurationSec() { return 600; }',
   ...['escapeHtml', 'escapeAttr', 'tipHTML', 'setTip', 'fmtMor', 'fmtUnlockLocal', 'weiIsPositive', 'morTileHTML', 'renderMorTiles',
-      'routerProblem', 'renderMasterKeyBanner', 'statusHealth', 'renderSysLine',
+      'routerProblem', 'renderMasterKeyBanner', 'statusHealth', 'fmtFeedAge', 'renderFeedStatus', 'renderSysLine',
       'modelBySendableId', 'stakeKeyFor', 'stakeRecord', 'modelTitle', 'connectDefaultDurationSec', 'connectStakeMor', 'fmtMorRate', 'fmtDuration',
       'connectModelOptionLabel', 'populateConnectModels', 'copyConnectModel', 'recoveryHint', 'setLoginStep', 'setRecoveryMode'].map(extract),
+  'const FEED_STALE_SEC = 1800;',
   'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, statusHealth, renderSysLine, renderMasterKeyBanner,',
   '  populateConnectModels, copyConnectModel, setLoginStep, setModels(m, st) { allModels = m; modelStakes = st || {}; } };',
 ].join('\n'));
@@ -283,9 +299,94 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (T.statusHealth({}).text !== 'Healthy') fail('healthy');
   if (T.statusHealth({ routerError: 'x' }).text !== T.UI_COPY.routerDown) fail('router down reason');
   if (T.statusHealth({ routerAuth: { ok: false } }).text !== T.UI_COPY.routerAuthFail) fail('router auth reason');
-  T.renderSysLine('1.0.15', '7.17.0', T.statusHealth({}), 0);
-  const line = els.stats.innerHTML.replace(/<[^>]+>/g, '');
-  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.17.0') fail('status line: ' + line);
+  const fresh = (m, b) => ({ models: { loaded: true, age_seconds: m, stale: false }, bids: { loaded: true, age_seconds: b, stale: false } });
+  T.renderSysLine('1.0.15', '7.17.0', T.statusHealth({}), 0, fresh(240, 720));
+  const line = els.stats.textContent;
+  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.17.0·active.mor.org (last updated 12 min ago)') fail('status line: ' + line);
+
+  // Feed freshness item (last header item): see the cases below.
+  const kids = () => els.stats.children;
+  const feedEl = () => kids()[kids().length - 1];
+  const bullet = () => kids()[0].className;
+  const view = (feeds, health) => {
+    T.renderSysLine('1.0.15', '7.17.0', health || T.statusHealth({}), 0, feeds);
+    const a = feedEl();
+    return { text: a.textContent, red: / bad\b/.test(a.className), bullet: bullet(), a };
+  };
+  // Fresh both feeds: "last updated N min ago", no red, bullet green.
+  let v = view(fresh(240, 720));
+  if (v.text !== 'active.mor.org (last updated 12 min ago)' || v.red || v.bullet !== 'dot ok') fail('fresh feeds: ' + JSON.stringify(v));
+  if (view(fresh(5, 30)).text !== 'active.mor.org (last updated just now)') fail('under 1 min must be just now');
+  if (view(fresh(7300, 60)).text !== 'active.mor.org (last updated 2 h ago)' || !view(fresh(7300, 60)).red) fail('hours format / stale');
+  // The link: constant href, new tab, noopener noreferrer, no role, tooltip key and copy.
+  const a = v.a;
+  if (a.tagName !== 'A' || a.href !== 'https://active.mor.org' || a.target !== '_blank' || a.rel !== 'noopener noreferrer') fail('feed link attrs: ' + JSON.stringify(a));
+  if (a.hasAttribute('role') || a.hasAttribute('aria-label')) fail('feed link must keep its link role and text name: ' + JSON.stringify(a.attrs));
+  if (a.getAttribute('data-tip-key') !== 'feedFreshTip' || a.getAttribute('data-tip') !== T.UI_COPY.feedFreshTip || !/\btip\b/.test(a.className)) fail('feed tooltip');
+  if (T.UI_COPY.feedFreshTip !== 'Uplink uses active.mor.org to see which provider bids are healthy. This shows how long ago its data last changed. If it has not updated for over 30 minutes, Uplink keeps using the last good copy so requests continue, but provider health may be out of date. Click to open active.mor.org.') fail('feedFreshTip copy');
+  if (!/href = 'https:\/\/active\.mor\.org';/.test(src)) fail('href must be the string literal');
+  // One feed at 31 min: red string, yellow bullet.
+  v = view(fresh(1860, 60));
+  if (v.text !== 'active.mor.org (last updated 31 min ago)' || !v.red || v.bullet !== 'dot warn') fail('31 min: ' + JSON.stringify(v));
+  // A stale flag alone: red, yellow.
+  v = view({ models: { loaded: true, age_seconds: 60, stale: true }, bids: { loaded: true, age_seconds: 60, stale: false } });
+  if (!v.red || v.bullet !== 'dot warn') fail('stale flag: ' + JSON.stringify(v));
+  // Neither loaded: "not loaded yet", red, yellow (also with no feeds at all).
+  for (const f of [{ models: { loaded: false, age_seconds: null }, bids: { loaded: false, age_seconds: null } }, undefined, null, {}]) {
+    v = view(f);
+    if (v.text !== 'active.mor.org (not loaded yet)' || !v.red || v.bullet !== 'dot warn') fail('neither loaded: ' + JSON.stringify(v));
+  }
+  // Only one feed loaded: red, yellow.
+  v = view({ models: { loaded: true, age_seconds: 60, stale: false }, bids: { loaded: false, age_seconds: null, stale: false } });
+  if (v.text !== 'active.mor.org (last updated 1 min ago)' || !v.red || v.bullet !== 'dot warn') fail('one loaded: ' + JSON.stringify(v));
+  // Invalid ages (null, "", true, a string, negative, NaN, Infinity): that feed
+  // is invalid, red, yellow, never "just now".
+  for (const bad of [null, '', true, '30', -1, NaN, Infinity, undefined]) {
+    for (const f of [{ models: { loaded: true, age_seconds: bad, stale: false }, bids: { loaded: true, age_seconds: bad, stale: false } },
+      { models: { loaded: true, age_seconds: bad, stale: false }, bids: { loaded: true, age_seconds: 120, stale: false } }]) {
+      v = view(f);
+      if (!v.red || v.bullet !== 'dot warn' || /just now/.test(v.text)) fail('invalid age ' + JSON.stringify(String(bad)) + ': ' + JSON.stringify(v));
+    }
+  }
+  // loaded must be exactly true.
+  v = view({ models: { loaded: 'true', age_seconds: 60, stale: false }, bids: { loaded: 1, age_seconds: 60, stale: false } });
+  if (v.text !== 'active.mor.org (not loaded yet)' || !v.red) fail('loaded must be === true: ' + JSON.stringify(v));
+  // Bad health + stale: the bullet stays red.
+  v = view(fresh(1900, 1900), T.statusHealth({ routerError: 'x' }));
+  if (!v.red || v.bullet !== 'dot bad') fail('bad health + stale: ' + JSON.stringify(v));
+  // Both feeds loaded:true with malformed ages: "age unknown", red, yellow.
+  for (const bad of [null, '', true, '30', -1, NaN, undefined]) {
+    v = view({ models: { loaded: true, age_seconds: bad, stale: false }, bids: { loaded: true, age_seconds: bad, stale: false } });
+    if (v.text !== 'active.mor.org (age unknown)' || !v.red || v.bullet !== 'dot warn') fail('age unknown ' + String(bad) + ': ' + JSON.stringify(v));
+  }
+  // Missing age_seconds key, missing feeds.models / feeds.bids, no
+  // st.feeds key: that feed invalid, red, yellow, nothing throws, and the
+  // rest of the header (health, sessions, versions) still renders.
+  const head = '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.17.0·';
+  const viaStatus = (st) => {
+    let r;
+    try { r = view(st.feeds); } catch (e) { fail('threw: ' + (e.stack || e)); }
+    if (!els.stats.textContent.startsWith(head)) fail('rest of header missing: ' + els.stats.textContent);
+    return r;
+  };
+  for (const [name, st, want] of [
+    ['missing age_seconds', { feeds: { models: { loaded: true, stale: false }, bids: { loaded: true, age_seconds: 60, stale: false } } }, 'active.mor.org (last updated 1 min ago)'],
+    ['missing age_seconds on both', { feeds: { models: { loaded: true, stale: false }, bids: { loaded: true, stale: false } } }, 'active.mor.org (age unknown)'],
+    ['missing feeds.models', { feeds: { bids: { loaded: true, age_seconds: 60, stale: false }, health_source: 'bids' } }, 'active.mor.org (last updated 1 min ago)'],
+    ['missing feeds.bids', { feeds: { models: { loaded: true, age_seconds: 60, stale: false }, health_source: 'bid_detail' } }, 'active.mor.org (last updated 1 min ago)'],
+    ['no st.feeds key', {}, 'active.mor.org (not loaded yet)'],
+  ]) {
+    v = viaStatus(st);
+    if (v.text !== want || !v.red || v.bullet !== 'dot warn') fail(name + ': ' + JSON.stringify(v));
+  }
+  // Markup in a numeric field: text / not loaded, never HTML.
+  const mk = '<img src=x onerror=alert(1)>';
+  v = view({ models: { loaded: true, age_seconds: mk, stale: false }, bids: { loaded: true, age_seconds: mk, stale: mk } });
+  if (v.text !== 'active.mor.org (age unknown)' || !v.red || v.a.children.length !== 0) fail('markup: ' + JSON.stringify(v));
+  v = view({ models: { loaded: mk, age_seconds: mk }, bids: { loaded: false, age_seconds: mk } });
+  if (v.text !== 'active.mor.org (not loaded yet)' || !v.red || v.a.children.length !== 0) fail('markup not loaded: ' + JSON.stringify(v));
+  if (/<|>/.test(els.stats.textContent)) fail('markup reached the status line');
+  if (/id="feedStatus"|feedsLabel|Data feeds/.test(html)) fail('old Data feeds line still present');
 
   // Model dropdown: name + lock, no hash; copy copies the full ID.
   const ID = '0x' + 'ab'.repeat(32);
@@ -323,7 +424,7 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   delete store['uplink.2fa.recoveryLeft'];
   T.setLoginStep('code');
   if (els.recoveryToggle.classList.contains('hidden')) fail('recovery toggle hidden when unknown');
-  console.log('OK: status tiles, reclaim placement, unlock time, Add MOR collapsed, health line, model labels, copy keys, login recovery toggle');
+  console.log('OK: status tiles, reclaim placement, unlock time, Add MOR collapsed, health line, feed freshness item, model labels, copy keys, login recovery toggle');
 })().catch((e) => fail(e.stack || e));
 NODE
 
