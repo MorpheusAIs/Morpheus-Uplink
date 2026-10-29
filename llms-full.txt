@@ -95,7 +95,7 @@ There is no separate docs host or MCP for Uplink.
    (`deploy/railway/`, reference asset `docker-compose.railway.deployed.yml`).
    Every image in the assets is digest-pinned. Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.17.0 by digest**
+   over forks. Proxy-router (Lumerin) is **pinned to v7.18.0 by digest**
    (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
@@ -295,7 +295,7 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 - Same shape clients already know: `POST /v1/chat/completions`, embeddings,
   `GET /v1/models`, Bearer `sk-…` keys
 - Sessions open and reuse automatically (model name → on-chain session)
-- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a dedicated wallet ([details](docs/06-developers.md#sessions-across-restarts))
+- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. ([details](docs/06-developers.md#sessions-across-restarts))
 - Admin GUI at `/gui` — balances, keys, Probe, usage
 - You pay providers in MOR from the wallet you fund — no multi-tenant credits
 
@@ -385,7 +385,7 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.17.0**
+Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.18.0**
 (Lumerin `main` / #889 caps — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
@@ -402,7 +402,7 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Every image in them is
-  digest-pinned, Uplink and **proxy-router v7.17.0** included (not `:latest`).
+  digest-pinned, Uplink and **proxy-router v7.18.0** included (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
@@ -540,7 +540,7 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.17.0**). Pick the skin that matches your host:
+proxy-router **v7.18.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
@@ -548,11 +548,11 @@ proxy-router **v7.17.0**). Pick the skin that matches your host:
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 | **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `docker-compose.railway.deployed.yml` + `env.railway.example` (reference; Railway does not run compose) + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
 
-**Pin note:** tag `v7.17.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.18.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
-**CA bundle note:** the proxy-router `v7.17.0` image ships a refreshed CA bundle that removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS after the upgrade. The default endpoints in the compose files were checked against the new bundle on 2026-10-27.
+**CA bundle note:** the proxy-router `v7.18.0` image ships the same CA bundle as the previously pinned router (byte-identical, 145 roots). Compared with older router images it removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS. The default endpoints in the compose files were re-checked against the `v7.18.0` bundle on 2026-10-29.
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
@@ -711,8 +711,8 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 | Var | Used by | Notes |
 |-----|---------|--------|
-| `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
-| `ETH_NODE_ADDRESS` | Router only | Base HTTPS RPC. Uplink reads chain state through the router API. |
+| `WALLET_PRIVATE_KEY` | Router only | The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. Fund it from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
+| `ETH_NODE_ADDRESS` | Router only | Required: exactly one Base HTTPS RPC URL; Uplink's retry safety assumes one URL. Compose refuses to start without it. Uplink reads chain state through the router API. |
 | `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
@@ -726,9 +726,9 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 A session stake is locked while the session runs and is returned to this
 wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink
-only opens staking-mode sessions (`directPayment` is always false). Use a
-dedicated wallet: the boot reconcile and a graceful stop act on every open
-session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
+only opens staking-mode sessions (`directPayment` is always false).
+The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. The boot reconcile, the background sweep and a graceful stop act on
+every open session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
 
 </details>
 
@@ -1191,8 +1191,11 @@ curl -sS -X POST https://YOUR_HOST/v1/sessions/release \
   -H "Authorization: Bearer sk-…" -d '{"model":"…"}'
 ```
 
-  Answers `{"released":true,"closed":true}`, `…"closed":false,"reason":"shared"`
-  (another key still uses it) or `{"released":false,"reason":"not_held"}`.
+  Answers `{"released":true,"closed":false,"reason":"closing"}` (you were
+  the last holder; the close runs in the background shortly after),
+  `…"closed":false,"reason":"shared"` (another key still uses it) or
+  `{"released":false,"reason":"not_held"}`. Earlier builds answered
+  `"closed":true` for the last holder; treat `closing` like `closed`.
   When the operator turned release off (`sessionRelease` on the Settings
   tab) the answer is `403` `release_disabled`.
 - Details: [Long jobs](06-developers.md#long-jobs).
@@ -1236,6 +1239,24 @@ unlock `/v1/usage`.
 2. Download the new release compose (`docker-compose.secretvm.deployed.yml`, `docker-compose.generic.deployed.yml`, or for Railway the digests in `docker-compose.railway.deployed.yml`). Keep the **same** secrets / `.env` (`API_KEY_SEED`, `WALLET_PRIVATE_KEY`).
 3. Export ephemeral keys **before** wiping storage if volumes recreate.
 4. After restart: Status health → Probe once → reclaim if **To claim** &gt; 0.
+
+---
+
+## Upgrading to a build that requires `ETH_NODE_ADDRESS`
+
+- `ETH_NODE_ADDRESS` is now required (one URL). Deploys that left it empty
+  relied on the router's public RPC fallback, and will not start until it is
+  set. Compose-based deploys will not start until it is set; on Railway,
+  Uplink logs `rpc_url_count` and disables fast retries until exactly one
+  URL is set.
+- The bundled proxy-router moves to v7.18.0 (digest-pinned in the release
+  compose).
+- `POST /v1/sessions/release` from the last holder now answers
+  `"closed":false,"reason":"closing"`: the close runs in the background
+  ([details](04-clients.md#long-jobs-timeouts-session-length-release)).
+- A chain RPC rate limit at the router now gets a clean `503` with a short
+  `Retry-After` (1 to 4 s) instead of cooling the provider.
+- The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold.
 
 ---
 
@@ -1644,7 +1665,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | Var | Required | Purpose |
 |---|---|---|
 | `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet, **router only** (Uplink holds no key; reclaim runs via the router API) |
-| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
+| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC, exactly one URL |
 | `COOKIE_CONTENT` | yes | Router `user:pass` (proxy-router + Uplink). Uplink reads `ROUTER_AUTH` first, then `COOKIE_CONTENT` |
 | `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
 | `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
@@ -1726,9 +1747,11 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 Tests: `scripts/check-no-direct-payment.sh`, `scripts/check-compose-policy.sh`,
 the mock-router e2e `scripts/e2e-mock-router.sh` (session logic) and the
-real-router smoke `scripts/e2e-real-router.sh` (pinned v7.17.0 image).
+real-router smoke `scripts/e2e-real-router.sh` (pinned v7.18.0 image).
 
 ### Sessions across restarts
+
+The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold.
 
 **Stop.** The `uplink` service has no `init: true`: the entrypoint `exec`s
 `su-exec uplink /usr/local/bin/uplink`, so the app is PID 1 and receives
@@ -2435,7 +2458,7 @@ unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.17.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.18.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup or send journal/lease headers.
 Rely on native router expiry + Uplink housekeeping. Sessions can stay locked
@@ -2547,7 +2570,7 @@ unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.17.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.18.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked
@@ -2579,7 +2602,7 @@ module; put a reverse-proxy / WAF rate limit in front, or rebuild Caddy with
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.17.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.18.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -2599,7 +2622,7 @@ Railway does not run compose, so use them as the reference: copy the image
 digests and variables into the Railway services instead of `:latest`.
 Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba`
 
 ## Services
 
@@ -2617,7 +2640,10 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
-- RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+- RPC credentials (`ETH_NODE_ADDRESS`, **required: exactly one URL**, and any
+  provider key material). Railway does not run the compose file, so nothing
+  refuses a deploy without it; Uplink logs `rpc_url_count` and disables fast
+  retries until exactly one URL is set.
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are not Railway Secrets, and Railway applies none of the compose
@@ -2642,7 +2668,7 @@ under `docker compose`.
 
 Railway applies neither the compose `${VAR:-default}` defaults nor its
 literal values. An unset variable takes the process's own default (Uplink
-code, Uplink image, or stock router v7.17.0):
+code, Uplink image, or stock router v7.18.0):
 
 | Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
 |---|---|---|---|
@@ -2690,7 +2716,7 @@ cross-replica wallet lock on the stock router).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.17.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.18.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -2714,7 +2740,7 @@ set them as `proxy-router` service variables:
   (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.17.0 digest until verified.
+privacy on the pinned v7.18.0 digest until verified.
 
 ## M1 / keep list
 

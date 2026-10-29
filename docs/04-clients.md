@@ -117,8 +117,11 @@ curl -sS -X POST https://YOUR_HOST/v1/sessions/release \
   -H "Authorization: Bearer sk-…" -d '{"model":"…"}'
 ```
 
-  Answers `{"released":true,"closed":true}`, `…"closed":false,"reason":"shared"`
-  (another key still uses it) or `{"released":false,"reason":"not_held"}`.
+  Answers `{"released":true,"closed":false,"reason":"closing"}` (you were
+  the last holder; the close runs in the background shortly after),
+  `…"closed":false,"reason":"shared"` (another key still uses it) or
+  `{"released":false,"reason":"not_held"}`. Earlier builds answered
+  `"closed":true` for the last holder; treat `closing` like `closed`.
   When the operator turned release off (`sessionRelease` on the Settings
   tab) the answer is `403` `release_disabled`.
 - Details: [Long jobs](06-developers.md#long-jobs).

@@ -319,7 +319,7 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 | Var | Required | Purpose |
 |---|---|---|
 | `WALLET_PRIVATE_KEY` | yes (deploy) | Consumer wallet, **router only** (Uplink holds no key; reclaim runs via the router API) |
-| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC |
+| `ETH_NODE_ADDRESS` | yes (deploy) | Base HTTPS RPC, exactly one URL |
 | `COOKIE_CONTENT` | yes | Router `user:pass` (proxy-router + Uplink). Uplink reads `ROUTER_AUTH` first, then `COOKIE_CONTENT` |
 | `ADMIN_PASSWORD` | yes | GUI/admin login (`admin`) |
 | `API_KEY_SEED` | yes | Master/Prompt derivation (`openssl rand -hex 32`) |
@@ -401,9 +401,11 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 Tests: `scripts/check-no-direct-payment.sh`, `scripts/check-compose-policy.sh`,
 the mock-router e2e `scripts/e2e-mock-router.sh` (session logic) and the
-real-router smoke `scripts/e2e-real-router.sh` (pinned v7.17.0 image).
+real-router smoke `scripts/e2e-real-router.sh` (pinned v7.18.0 image).
 
 ### Sessions across restarts
+
+The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold.
 
 **Stop.** The `uplink` service has no `init: true`: the entrypoint `exec`s
 `su-exec uplink /usr/local/bin/uplink`, so the app is PID 1 and receives

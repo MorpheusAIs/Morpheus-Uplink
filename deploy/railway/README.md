@@ -2,7 +2,7 @@
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.17.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.18.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -22,7 +22,7 @@ Railway does not run compose, so use them as the reference: copy the image
 digests and variables into the Railway services instead of `:latest`.
 Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba`
 
 ## Services
 
@@ -40,7 +40,10 @@ compose values. Same fillables as SecretVM Encrypted Secrets / generic `.env`:
 - `ADMIN_PASSWORD`
 - `API_KEY_SEED`
 - `COOKIE_CONTENT`
-- RPC credentials (`ETH_NODE_ADDRESS` and any provider key material)
+- RPC credentials (`ETH_NODE_ADDRESS`, **required: exactly one URL**, and any
+  provider key material). Railway does not run the compose file, so nothing
+  refuses a deploy without it; Uplink logs `rpc_url_count` and disables fast
+  retries until exactly one URL is set.
 - `WEB_PUBLIC_URL` (Railway HTTPS origin)
 
 Tunables are not Railway Secrets, and Railway applies none of the compose
@@ -65,7 +68,7 @@ under `docker compose`.
 
 Railway applies neither the compose `${VAR:-default}` defaults nor its
 literal values. An unset variable takes the process's own default (Uplink
-code, Uplink image, or stock router v7.17.0):
+code, Uplink image, or stock router v7.18.0):
 
 | Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
 |---|---|---|---|
@@ -113,7 +116,7 @@ cross-replica wallet lock on the stock router).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.17.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.18.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -137,7 +140,7 @@ set them as `proxy-router` service variables:
   (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.17.0 digest until verified.
+privacy on the pinned v7.18.0 digest until verified.
 
 ## M1 / keep list
 

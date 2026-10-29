@@ -13,6 +13,24 @@
 
 ---
 
+## Upgrading to a build that requires `ETH_NODE_ADDRESS`
+
+- `ETH_NODE_ADDRESS` is now required (one URL). Deploys that left it empty
+  relied on the router's public RPC fallback, and will not start until it is
+  set. Compose-based deploys will not start until it is set; on Railway,
+  Uplink logs `rpc_url_count` and disables fast retries until exactly one
+  URL is set.
+- The bundled proxy-router moves to v7.18.0 (digest-pinned in the release
+  compose).
+- `POST /v1/sessions/release` from the last holder now answers
+  `"closed":false,"reason":"closing"`: the close runs in the background
+  ([details](04-clients.md#long-jobs-timeouts-session-length-release)).
+- A chain RPC rate limit at the router now gets a clean `503` with a short
+  `Retry-After` (1 to 4 s) instead of cooling the provider.
+- The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold.
+
+---
+
 ## Upgrading to a build with settings in one place
 
 Console settings are no longer read from `.env` or the platform's
