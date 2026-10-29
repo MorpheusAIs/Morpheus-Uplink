@@ -151,8 +151,8 @@ func ErrorHint(kind string) string {
 	return ""
 }
 
-func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequest(method, c.BaseURL+path, body)
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +165,12 @@ func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request,
 }
 
 func (c *Client) doJSON(method, path string, reqBody any, out any) error {
+	return c.doJSONCtx(context.Background(), method, path, reqBody, out)
+}
+
+// doJSONCtx is doJSON bounded by ctx as well as AdminTimeout (the outer
+// client timeout): the call ends at whichever comes first.
+func (c *Client) doJSONCtx(ctx context.Context, method, path string, reqBody any, out any) error {
 	var payload []byte
 	if reqBody != nil {
 		raw, err := json.Marshal(reqBody)
@@ -173,7 +179,7 @@ func (c *Client) doJSON(method, path string, reqBody any, out any) error {
 		}
 		payload = raw
 	}
-	status, raw, err := c.roundTrip(method, path, payload)
+	status, raw, err := c.roundTrip(ctx, method, path, payload)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
@@ -191,7 +197,7 @@ func (c *Client) doJSON(method, path string, reqBody any, out any) error {
 	return nil
 }
 
-func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, error) {
+func (c *Client) roundTrip(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
 	// Guard for every session/bid path (and anything else): never ask the
 	// router for a direct-payment session.
 	if requestsDirectPayment(payload) {
@@ -201,7 +207,7 @@ func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, er
 	if payload != nil {
 		body = bytes.NewReader(payload)
 	}
-	req, err := c.newRequest(method, path, body)
+	req, err := c.newRequest(ctx, method, path, body)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -291,6 +297,11 @@ func requestsDirectPayment(payload []byte) bool {
 // the pick is never left to the router. The body is OpenSessionRequest
 // (staking only, router failover off).
 func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
+	return c.OpenSessionByBidCtx(context.Background(), bidID, durationSec)
+}
+
+// OpenSessionByBidCtx is OpenSessionByBid bounded by ctx.
+func (c *Client) OpenSessionByBidCtx(ctx context.Context, bidID string, durationSec int) (string, error) {
 	bidID = strings.TrimSpace(bidID)
 	if bidID == "" {
 		return "", fmt.Errorf("empty bid id")
@@ -299,7 +310,7 @@ func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error)
 	var res struct {
 		SessionID string `json:"sessionID"`
 	}
-	if err := c.doJSON(http.MethodPost, "/blockchain/bids/"+url.PathEscape(bidID)+"/session", body, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodPost, "/blockchain/bids/"+url.PathEscape(bidID)+"/session", body, &res); err != nil {
 		return "", err
 	}
 	if res.SessionID == "" {
@@ -326,6 +337,11 @@ var ErrRatedBidsIncomplete = errors.New("rated bids contain unusable rows")
 // lowercase); when any row does not, the valid rows come back with an
 // error matching ErrRatedBidsIncomplete.
 func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
+	return c.RatedBidsCtx(context.Background(), modelID)
+}
+
+// RatedBidsCtx is RatedBids bounded by ctx.
+func (c *Client) RatedBidsCtx(ctx context.Context, modelID string) ([]RatedBid, error) {
 	var res struct {
 		Bids []struct {
 			ID  string `json:"ID"`
@@ -336,7 +352,7 @@ func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
 			Score float64 `json:"Score"`
 		} `json:"bids"`
 	}
-	if err := c.doJSON(http.MethodGet, "/blockchain/models/"+url.PathEscape(modelID)+"/bids/rated", nil, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, "/blockchain/models/"+url.PathEscape(modelID)+"/bids/rated", nil, &res); err != nil {
 		return nil, err
 	}
 	out := make([]RatedBid, 0, len(res.Bids))
@@ -386,13 +402,42 @@ func hexValue(s string, n int) (string, bool) {
 }
 
 func (c *Client) CloseSession(sessionID string) error {
+	return c.CloseSessionCtx(context.Background(), sessionID)
+}
+
+// CloseSessionCtx is CloseSession bounded by ctx. When ctx ends first, the
+// call returns then; the router may still finish the close on its side.
+func (c *Client) CloseSessionCtx(ctx context.Context, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return fmt.Errorf("empty session id")
 	}
 	// Empty JSON body — some proxies reject POST with no body.
 	path := "/blockchain/sessions/" + url.PathEscape(sessionID) + "/close"
-	return c.doJSON(http.MethodPost, path, map[string]any{}, nil)
+	return c.doJSONCtx(ctx, http.MethodPost, path, map[string]any{}, nil)
+}
+
+// RPCURLCount asks the router how many chain RPC URLs it uses (GET
+// /config, DerivedConfig.EthNodeURLs). Only the count is decoded: the
+// URLs can embed RPC keys, so they are never read out, logged, stored or
+// put in an error.
+func (c *Client) RPCURLCount(ctx context.Context) (int, error) {
+	var res struct {
+		DerivedConfig struct {
+			EthNodeURLs []json.RawMessage `json:"EthNodeURLs"`
+		} `json:"DerivedConfig"`
+	}
+	status, raw, err := c.roundTrip(ctx, http.MethodGet, "/config", nil)
+	if err != nil {
+		return 0, errors.New("GET /config: request failed")
+	}
+	if status < 200 || status >= 300 {
+		return 0, fmt.Errorf("GET /config: status %d", status)
+	}
+	if json.Unmarshal(raw, &res) != nil {
+		return 0, errors.New("GET /config: unreadable answer")
+	}
+	return len(res.DerivedConfig.EthNodeURLs), nil
 }
 
 // Balance returns the router wallet's ETH and MOR balances (wei-scale ints).
@@ -613,11 +658,10 @@ func (c *Client) ForwardWith(ctx context.Context, w http.ResponseWriter, path, s
 	defer cancel(nil)
 	timers := startTimers(cancel, o)
 	defer timers.stop()
-	req, err := c.newRequest(http.MethodPost, path, bytes.NewReader(body))
+	req, err := c.newRequest(ctx, http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
 	if ct := header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
