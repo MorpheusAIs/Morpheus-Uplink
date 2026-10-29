@@ -439,8 +439,9 @@ func TestEscalationExtraOpenTxReverts(t *testing.T) {
 		logs := captureLogs(t)
 		c, lr, p, _ := rpcEnv(t)
 		lr.set(func(lr *leaseRouter) { lr.hideLanded = 1 })
-		lr.setOpenFault(faultBurst(1, routerErr("failed to send transaction: parse session receipt failed: transaction reverted"), true))
-		if got := classifyOpenErr(errors.New("status 500: "+routerErr("failed to send transaction: parse session receipt failed: transaction reverted")), time.Second, true); got != maybeSent {
+		const reverted = "failed to send transaction: parse session receipt failed: Transaction failed with status 0" // v7.18.0 text
+		lr.setOpenFault(faultBurst(1, routerErr(reverted), true))
+		if got := classifyOpenErr(status500(reverted), time.Second, true); got != maybeSent {
 			t.Fatalf("reverted receipt: %s, want maybe_sent", got)
 		}
 		_, res := mustAcquire(t, p, modelB, AcquireOpts{})

@@ -186,8 +186,9 @@ provider_fault	1s	failed to get bid: provider request failed: too many requests
 
 # Everything else on the open is maybe-sent.
 maybe_sent	1s	failed to send transaction: open session failed: failed to send transaction: 429 Too Many Requests
-maybe_sent	1s	failed to send transaction: open session failed: transaction could not be confirmed on-chain — the network may be congested, try again shortly. Original: escalation failed
-maybe_sent	1s	failed to send transaction: parse session receipt failed: no SessionOpened event
+maybe_sent	1s	failed to send transaction: open session failed: transaction could not be confirmed on-chain — the network may be congested, try again shortly. Original: transaction not mined after all escalation attempts
+maybe_sent	1s	failed to send transaction: parse session receipt failed: OpenSession event not found in transaction logs
+maybe_sent	1s	failed to send transaction: parse session receipt failed: Transaction failed with status 0
 maybe_sent	1s	session created on-chain (tx mined) but not yet visible after retries: session not found
 maybe_sent	1s	context cancelled during openSession retry: context deadline exceeded
 maybe_sent	1s	rate limit exceeded
