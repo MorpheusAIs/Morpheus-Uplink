@@ -357,15 +357,9 @@ func TestOpenDeadlineIsMaybeSent(t *testing.T) {
 	if n := lists(); n > 1+reconcilePolls {
 		t.Fatalf("lists = %d, want ≤ %d", n, 1+reconcilePolls)
 	}
-	if !p.routerBusy() {
-		t.Fatal("router-busy window not set by the cut open")
-	}
 	waitUntil(t, "late mint recorded", func() bool { lr.mu.Lock(); defer lr.mu.Unlock(); return lr.n == 1 })
 	c.Advance(3*time.Minute + time.Second)
 	lateAdopt(t, c, lr, p, 1)
-	if p.routerBusy() {
-		t.Fatal("router-busy window still set after the cut open was matched")
-	}
 }
 
 // TestReceiptWait429Reconciled: the open tx landed but the receipt wait

@@ -605,7 +605,11 @@ the pool stays in charge of which session is open. Turning the
   consumes a pending stream cut. Refusals are audited on the ops stream
   as `provider_unavailable`, one line per model per minute with a count.
   In a failover, the retired-session reopen that finds nothing available
-  relays the original error (audit `no_available`). The rated bids are
+  relays the original error (audit `no_available`). An open the router
+  refuses before sending it because the wallet lacks funds (gas, MOR or
+  allowance) is not a refusal of this kind: the request gets `402`
+  `wallet_insufficient_funds` (no `Retry-After`; in a failover too, audit
+  `wallet_funds`), with no retry, cool-down or other bid. The rated bids are
   read just before the open; a provider that starts bidding in between is
   not seen.
 - *Health feeds:* the bids feed (`GATEWAY_BIDS_URL`) gives each bid's

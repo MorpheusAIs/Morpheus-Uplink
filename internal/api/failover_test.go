@@ -187,7 +187,7 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 		m.t.Errorf("open body directPayment=%v", v)
 	}
 	for k := range body {
-		if k != "sessionDuration" && k != "failover" && k != "directPayment" {
+		if k != "sessionDuration" && k != "failover" && k != "directPayment" && k != "rejectExisting" {
 			m.t.Errorf("open body carries %q (staking-only body; avoidance goes by bid)", k)
 		}
 	}

@@ -29,6 +29,11 @@
   `ETH_NODE_ADDRESS` set, Uplink retries the same bid with a short capped
   backoff; either way the client then gets a clean `503` with a short
   `Retry-After` (1 to 4 s).
+- When the router refuses an open because the wallet lacks funds (gas,
+  MOR or allowance) before sending it, the client gets `402`
+  `wallet_insufficient_funds` at once ("The Uplink wallet needs funds
+  (gas, MOR or allowance) to open a session", no `Retry-After`), with no
+  retry, cool-down or move to another bid. Fund the wallet, then retry.
 - The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold.
 
 ---

@@ -100,8 +100,6 @@ type Pool struct {
 	knownDup     map[string]bool      // lowercase id: an extra session from our own open (the sweep closes it)
 	closingIDs   map[string]time.Time // lowercase id -> mark expiry; zero: a close is in progress
 	closeDueAt   map[string]time.Time // lowercase id -> when the sweep first saw it close-due
-	busyUntil    time.Time            // router-busy window (a cut open), pool clock
-	busyAttempt  *attempt             // the attempt that set it
 	opened       map[string]bool      // lowercase ids this process opened or matched to its own attempt
 	closedByUs   map[string]bool      // lowercase ids this process closed
 	foreignAt    []time.Time          // adoptions of sessions this process never opened (last hour)

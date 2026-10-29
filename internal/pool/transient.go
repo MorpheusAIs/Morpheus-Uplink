@@ -25,9 +25,11 @@ import (
 // router's RPC set by the operator (ETH_NODE_ADDRESS has a value) it is
 // retried with a capped backoff; without it, the router's own RPC list
 // and retries apply, so Uplink makes one attempt and answers
-// router_transient. Provider-stage texts always cool the provider.
-// Anything else on the open may have been sent: it is reconciled against
-// the wallet's session list, never re-opened.
+// router_transient. Provider-stage texts always cool the provider. A
+// chain-stage error before the send that says the wallet lacks funds (gas,
+// MOR or allowance) fails fast: no retry, no cool-down, no walk. Anything
+// else on the open may have been sent: it is reconciled against the
+// wallet's session list, never re-opened.
 //
 // Every value is a constant: there is no setting for any of them.
 const (
@@ -38,9 +40,8 @@ const (
 	reconcilePolls      = 3                      // maybe-sent: list polls inside the request
 	reconcileGap        = 2 * time.Second        // between those polls
 	attemptSkew         = 30 * time.Second       // match window slack, both ends
-	routerOpenMaxLife   = 13 * time.Minute       // upper bound on a router open call's life after Uplink stops waiting
-	routerCloseMaxLife  = 10 * time.Minute       // the same for a router close call
-	attemptKeep         = routerOpenMaxLife      // unresolved attempts kept in memory
+	attemptKeep         = 13 * time.Minute       // unresolved attempts kept in memory and matched (a router open call's life after Uplink stops waiting)
+	routerCloseMaxLife  = 10 * time.Minute       // upper bound on a router close call's life after Uplink stops waiting
 	maxPendingAttempts  = 32                     // bound on that list; the oldest is dropped with a warning
 	maxWindowRetries    = 1                      // at most one P* (18 s rule) retry per open operation
 	preSendProofWindow  = 18 * time.Second       // below the router's 20 s wait after a send
@@ -68,6 +69,9 @@ const (
 	// transientWindow: a P* chain-stage error proven pre-send only by the
 	// 18 s rule: back off on the same bid at most maxWindowRetries times.
 	transientWindow
+	// walletFunds: a chain-stage error before the send saying the wallet
+	// lacks funds (gas, MOR or allowance): fail fast (ErrWalletNeedsFunds).
+	walletFunds
 )
 
 func (c openClass) String() string {
@@ -78,6 +82,8 @@ func (c openClass) String() string {
 		return "transient_presend"
 	case transientWindow:
 		return "transient_window"
+	case walletFunds:
+		return "wallet_funds"
 	}
 	return "maybe_sent"
 }
@@ -105,6 +111,10 @@ var (
 		"failed to get provider: ",
 		"failed to get current mor allowance: ",
 		"failed to send transaction: approve mor allowance failed: ",
+		// The rejectExisting check runs before the open (no transaction).
+		"get wallet address for existing-session check: ",
+		"read bid for existing-session check: ",
+		"check existing live sessions: ",
 	}
 	// windowPrefixes (P*) are pre-send only when the open POST failed in
 	// under preSendProofWindow, with the operator's RPC set.
@@ -113,6 +123,23 @@ var (
 		"failed to send transaction: open session failed: failed to get initial gas prices: ",
 		"failed to send transaction: open session failed: failed to get nonce: ",
 		"failed to send transaction: open session failed: failed to build transaction: ",
+	}
+	// openStagePrefix starts every error of the open transaction's stage.
+	// The router rewrites a funding error there into its own words
+	// (classifyOpenSessionError), so the text no longer starts with a P*
+	// prefix; it is pre-send only by the 18 s rule, like a P* one.
+	openStagePrefix = "failed to send transaction: open session failed: "
+	// fundingMarkers say the wallet lacks funds: the router's own rewrites
+	// (insufficient ETH for gas, insufficient MOR balance) and the chain
+	// texts it matches (isInsufficientETH, isInsufficientMOR,
+	// isInsufficientAllowance in proxy-router v7.18.0).
+	fundingMarkers = []string{
+		"insufficient eth for gas",
+		"insufficient mor balance",
+		"insufficient funds for gas",
+		"insufficient funds for intrinsic transaction cost",
+		"transfer amount exceeds balance",
+		"insufficient allowance",
 	}
 	// rateLimitMarkers are the router's own rate-limit words (its RPC retry
 	// filter) plus the incident's "compute units per second". 429 is a
@@ -132,6 +159,16 @@ var (
 	// rated bids).
 	readPrefixes = []string{"failed to call contract"}
 )
+
+// hasFundingMarker reports whether text says the wallet lacks funds.
+func hasFundingMarker(text string) bool {
+	for _, m := range fundingMarkers {
+		if strings.Contains(text, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // hasRateLimitMarker reports whether rest carries a rate-limit marker and
 // no "revert" (the router never retries a revert either).
@@ -179,8 +216,9 @@ func isTransportErr(err error) bool {
 // the open POST ran; windowOK is false when the 18 s rule may not be used
 // (the operator did not set the router's RPC, or the operation's one
 // window retry is spent). Order: transport first, then the provider-stage
-// deny list, then the anchored pre-send prefixes; everything else is
-// maybe-sent.
+// deny list, then the anchored pre-send prefixes (a funding marker there
+// fails fast), then the P* prefixes and the open stage's funding texts
+// (pre-send only by the 18 s rule); everything else is maybe-sent.
 func classifyOpenErr(err error, postElapsed time.Duration, windowOK bool) openClass {
 	if err == nil {
 		return maybeSent
@@ -202,18 +240,30 @@ func classifyOpenErr(err error, postElapsed time.Duration, windowOK bool) openCl
 	}
 	for _, p := range preSendPrefixes {
 		if strings.HasPrefix(text, p) {
+			if hasFundingMarker(text[len(p):]) {
+				return walletFunds
+			}
 			return transientPreSend
 		}
 	}
+	window := false
 	for _, p := range windowPrefixes {
 		if strings.HasPrefix(text, p) {
-			if !windowOK || postElapsed >= preSendProofWindow {
-				return maybeSent
-			}
-			return transientWindow
+			window = true
+			break
 		}
 	}
-	return maybeSent
+	funds := strings.HasPrefix(text, openStagePrefix) && hasFundingMarker(text[len(openStagePrefix):])
+	if !window && !funds {
+		return maybeSent
+	}
+	if !windowOK || postElapsed >= preSendProofWindow {
+		return maybeSent
+	}
+	if funds {
+		return walletFunds
+	}
+	return transientWindow
 }
 
 // isTransientRead reports whether a read error (rated bids, session list,

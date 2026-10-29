@@ -356,9 +356,8 @@ func (p *Pool) isClosing(id string) bool {
 
 // runCloses runs the boot plan's closes like sweep closes: try-slot (never
 // queued behind opens), one close per hold, release between. When the
-// slot is busy, after a cut close, or while a cut open's router-busy
-// window is open, the rest are deferred to the sweep (their marks clear,
-// so the sweep decides afresh).
+// slot is busy or after a cut close, the rest are deferred to the sweep
+// (their marks clear, so the sweep decides afresh).
 func (p *Pool) runCloses(res *ReconcileResult, closes []ReconcileDecision, emit func(ReconcileEvent)) {
 	ctx := context.Background()
 	unmark := func(ds []ReconcileDecision) {
@@ -373,7 +372,7 @@ func (p *Pool) runCloses(res *ReconcileResult, closes []ReconcileDecision, emit 
 	for i, d := range closes {
 		p.mu.Lock()
 		now := p.now()
-		hold := p.routerBusyLocked(now) || p.cutCloseMarkLocked(now)
+		hold := p.cutCloseMarkLocked(now)
 		p.mu.Unlock()
 		if hold {
 			res.Deferred += len(closes) - i

@@ -379,7 +379,7 @@ b=$(chat_body e2e-gamma)
 after=$(gamma_open)
 case "$after" in *" $PB") ;; *) fail "want the e2e-gamma session on provider B, got: $after" ;; esac
 [ "$(opens)" = $((o4 + 1)) ] || fail "want exactly one new open, got $(( $(opens) - o4 ))"
-mockctl GET /e2e/opens | jq -e --arg a "$PA" '.opens | last | .bid != "" and (.fields - ["directPayment", "failover", "sessionDuration"]) == [] and .failover == false and .provider != $a' >/dev/null \
+mockctl GET /e2e/opens | jq -e --arg a "$PA" '.opens | last | .bid != "" and (.fields - ["directPayment", "failover", "rejectExisting", "sessionDuration"]) == [] and .failover == false and .rejectExisting == false and .provider != $a' >/dev/null \
   || fail "failover open: $(mockctl GET /e2e/opens | jq -c '.opens | last')"
 fo_lines | jq -e -s 'map(select(.result == "retried_ok" and .status == "402")) | length == 1' >/dev/null || fail "no provider_failover retried_ok audit: $(fo_lines)"
 echo "OK 402 on A: closed A, opened on B by bid (staking-only body) and failover:false, answered 200, audited"

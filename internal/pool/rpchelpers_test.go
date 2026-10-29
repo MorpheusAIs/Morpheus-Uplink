@@ -349,3 +349,22 @@ func within(t *testing.T, d time.Duration, what string, f func()) {
 }
 
 var _ = fmt.Sprintf
+
+// holdCloses puts a session on chain with a cut-close mark (as a close
+// cut before its answer leaves it) so background closes wait; the
+// returned func lets that close land and clears the mark.
+func holdCloses(c *fakeClock, lr *leaseRouter, p *Pool) func() {
+	const id, model = "0xcutclosemark", "0xeeee000000000000000000000000000000000000000000000000000000000000"
+	lr.addChain(id, model, c.Now().Add(-time.Hour), c.Now().Add(time.Hour))
+	p.mu.Lock()
+	p.closingIDs[id] = c.Now().Add(time.Minute)
+	p.mu.Unlock()
+	return func() {
+		lr.mu.Lock()
+		lr.sessions[id].closed = true
+		lr.mu.Unlock()
+		p.mu.Lock()
+		delete(p.closingIDs, id)
+		p.mu.Unlock()
+	}
+}

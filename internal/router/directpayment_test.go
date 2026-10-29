@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,7 +12,8 @@ import (
 )
 
 // The by-bid open (the only open) posts to /blockchain/bids/{id}/session
-// with exactly {sessionDuration, failover:false, directPayment:false}.
+// with exactly {sessionDuration, failover:false, directPayment:false,
+// rejectExisting}.
 func TestOpenSessionByBidBodyPinned(t *testing.T) {
 	const bid = "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
 	var (
@@ -42,9 +44,51 @@ func TestOpenSessionByBidBodyPinned(t *testing.T) {
 	if v, ok := body["sessionDuration"]; !ok || v != float64(600) {
 		t.Fatalf("sessionDuration: %v", body)
 	}
+	if v, ok := body["rejectExisting"]; !ok || v != false {
+		t.Fatalf("rejectExisting must be present and false: %v", body)
+	}
 	// Staking-only body: nothing beyond these fields is sent.
-	if len(body) != 3 {
+	if len(body) != 4 {
 		t.Fatalf("unexpected open body fields: %v", body)
+	}
+}
+
+// With rejectExisting the flag is sent, and the router's 409 naming the
+// live session is an *ExistingSessionError; without it a 409 stays a
+// plain status error.
+func TestOpenSessionByBidRejectExisting(t *testing.T) {
+	const (
+		bid      = "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+		existing = "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+	)
+	var body map[string]any
+	answer := `{"existingSessionID":"` + existing + `"}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = nil
+		_ = json.Unmarshal(b, &body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(answer))
+	}))
+	defer ts.Close()
+	c := New(ts.URL, "u", "p")
+	_, err := c.OpenSessionByBidCtx(context.Background(), bid, 600, true)
+	var ex *ExistingSessionError
+	if !errors.As(err, &ex) || ex.SessionID != existing {
+		t.Fatalf("err = %v, want ExistingSessionError naming %s", err, existing)
+	}
+	if v, ok := body["rejectExisting"]; !ok || v != true {
+		t.Fatalf("rejectExisting must be true: %v", body)
+	}
+	if _, err := c.OpenSessionByBidCtx(context.Background(), bid, 600, false); errors.As(err, &ex) || err == nil {
+		t.Fatalf("flag off: err = %v, want a plain status error", err)
+	}
+	for _, bad := range []string{`{"existingSessionID":"0x12"}`, `{"error":"conflict"}`, `not json`} {
+		answer = bad
+		if _, err := c.OpenSessionByBidCtx(context.Background(), bid, 600, true); errors.As(err, &ex) || err == nil {
+			t.Fatalf("answer %s: err = %v, want a plain status error", bad, err)
+		}
 	}
 }
 

@@ -271,6 +271,11 @@ func (s *Server) acquireSession(ctx context.Context, w http.ResponseWriter, keyI
 		writeNoAvailableProvider(w, err)
 		return nil, res, false
 	}
+	if errors.Is(err, pool.ErrWalletNeedsFunds) {
+		warnf("api: open session for %s (%s): the wallet needs funds", reqModel, modelID)
+		writeWalletNeedsFunds(w)
+		return nil, res, false
+	}
 	if err != nil {
 		warnf("api: open session for %s (%s): %v", reqModel, modelID, err)
 		writeOpenAIError(w, http.StatusBadGateway, "failed to open session") // detail logged above; it names router internals
@@ -313,6 +318,14 @@ func writeNoAvailableProvider(w http.ResponseWriter, err error) {
 		}
 	}
 	writeTypedError(w, http.StatusServiceUnavailable, "no_available_provider", "no provider is available for this model right now; retry later")
+}
+
+// writeWalletNeedsFunds answers an open the router refused before sending
+// because the wallet lacks funds: 402, no Retry-After (retrying cannot
+// help until the wallet is funded).
+func writeWalletNeedsFunds(w http.ResponseWriter) {
+	writeTypedError(w, http.StatusPaymentRequired, "wallet_insufficient_funds",
+		"The Uplink wallet needs funds (gas, MOR or allowance) to open a session")
 }
 
 // auditProviderUnavailable records a fail-fast refusal on the ops stream,

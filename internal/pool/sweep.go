@@ -35,7 +35,7 @@ type attempt struct {
 	model string    // normModel
 	bid   string    // lowercase bid id
 	start time.Time // pool clock, taken before the POST
-	cut   bool      // Uplink stopped waiting on it (it set the router-busy window)
+	cut   bool      // Uplink stopped waiting on it (a cut open)
 }
 
 // matches reports whether an on-chain session can be the result of a.
@@ -44,7 +44,7 @@ func (a *attempt) matches(s router.Session) bool {
 		return false
 	}
 	op := time.Unix(s.OpenedAt, 0)
-	return !op.Before(a.start.Add(-attemptSkew)) && !op.After(a.start.Add(routerOpenMaxLife+attemptSkew))
+	return !op.Before(a.start.Add(-attemptSkew)) && !op.After(a.start.Add(attemptKeep+attemptSkew))
 }
 
 // addAttempt records an open POST about to be sent.
@@ -76,10 +76,6 @@ func (p *Pool) resolveAttemptLocked(a *attempt) {
 			p.pending = append(p.pending[:i], p.pending[i+1:]...)
 			break
 		}
-	}
-	if p.busyAttempt == a {
-		p.busyUntil, p.busyAttempt = time.Time{}, nil
-		slog.Info("pool: router-busy window cleared (the cut open was found)", "bid", short(a.bid))
 	}
 }
 
@@ -127,39 +123,18 @@ func pickOne(ss []router.Session) router.Session {
 	return best
 }
 
-// Router-busy window: set only by a cut open (Uplink stopped waiting, or a
-// transport error or 502/503/504 on the open). The router may still be
-// sending that open's transaction, so no new open starts until the open is
-// found on chain or routerOpenMaxLife passes. Pooled leases still work.
-
-func (p *Pool) routerBusy() bool {
+// markCut records that Uplink stopped waiting on a's open (our deadline,
+// a transport error or 502/503/504): the router may still be sending it.
+// The attempt stays pending, so a later scan adopts its session if it
+// lands, and the sweep does not take a young session on its bid for
+// another opener. New opens are not held back: an open with no live
+// session for the model asks the router to refuse it if one exists
+// (rejectExisting), and the session it names is adopted.
+func (p *Pool) markCut(a *attempt) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.routerBusyLocked(p.now())
-}
-
-func (p *Pool) routerBusyLocked(now time.Time) bool {
-	if p.busyUntil.IsZero() {
-		return false
-	}
-	if !now.Before(p.busyUntil) {
-		p.busyUntil, p.busyAttempt = time.Time{}, nil
-		return false
-	}
-	return true
-}
-
-func (p *Pool) setRouterBusy(a *attempt) {
-	p.mu.Lock()
-	now := p.now()
 	a.cut = true
-	until := now.Add(routerOpenMaxLife)
-	if until.After(p.busyUntil) {
-		p.busyUntil, p.busyAttempt = until, a
-	}
 	p.mu.Unlock()
-	slog.Warn("pool: router busy after a cut open; new opens wait until it is found or expires",
-		"bid", short(a.bid), "for", routerOpenMaxLife)
+	slog.Warn("pool: open cut before its answer; it is reconciled from the wallet's sessions", "bid", short(a.bid))
 	p.requestSweep()
 }
 
@@ -252,7 +227,8 @@ type scanOut struct {
 	close   *closeCand // sweep: the close picked (already marked closing)
 	due     int        // close-due ids after this scan
 	oldest  time.Duration
-	matched bool // a pending attempt was resolved
+	matched bool            // a pending attempt was resolved
+	live    map[string]bool // normModel ids with a live session in the list
 }
 
 // readOpen lists the wallet's open sessions; mk bounds each router call.
@@ -339,8 +315,12 @@ func (p *Pool) applyScan(open []router.Session, scanStart time.Time, mode int) s
 	buf := int64(expiryBuffer.Seconds())
 	uptimeOK := now.Sub(p.started) > pruneGrace
 	onChain := make(map[string]bool, len(open))
+	out.live = map[string]bool{}
 	for _, s := range open {
 		onChain[strings.ToLower(s.ID)] = true
+		if s.ClosedAt == 0 && s.EndsAt > nowUnix {
+			out.live[normModel(s.ModelAgentID)] = true
+		}
 	}
 	// A cut close resolved (gone from the list) or its mark expired.
 	for id, exp := range p.closingIDs {
@@ -538,7 +518,7 @@ func (p *Pool) applyScan(open []router.Session, scanStart time.Time, mode int) s
 		}
 		out.due = len(due)
 		out.oldest = p.oldestDueLocked(now)
-		if len(due) > 0 && !p.routerBusyLocked(now) && !p.cutCloseMarkLocked(now) {
+		if len(due) > 0 && !p.cutCloseMarkLocked(now) {
 			sort.Slice(due, func(i, j int) bool {
 				ai, aj := p.closeDueAt[strings.ToLower(due[i].s.ID)], p.closeDueAt[strings.ToLower(due[j].s.ID)]
 				if !ai.Equal(aj) {

@@ -218,12 +218,9 @@ func TestTarpitOpenBoundedByHoldCap(t *testing.T) {
 	if held < cut*9/10 || held > realDur(slotHoldCap)+250*time.Millisecond {
 		t.Fatalf("hold %v: want the POST cut at about %v and the hold ≤ %v", held, cut, realDur(slotHoldCap))
 	}
-	if !p.routerBusy() {
-		t.Fatal("router-busy window not set by the cut open")
-	}
-	assertOpenBusy(t, <-second)
-	if n := len(lr.bidsTried()); n != 1 {
-		t.Fatalf("open POSTs = %d, want 1 (the next waiter sends none)", n)
+	<-second // the next waiter (another model) may open once the slot frees
+	if n := len(lr.bidsTried()); n < 1 || n > 2 {
+		t.Fatalf("open POSTs = %d, want the cut one plus at most the next waiter's", n)
 	}
 	time.Sleep(realDur(slotHoldCap + watchdogSlack))
 	if n := p.slot.watchdogFired.Load(); n != 0 {
@@ -240,9 +237,6 @@ func cutOpen(t *testing.T, lr *leaseRouter, p *Pool, model string, mint time.Dur
 	_, _, err := p.Acquire(model, AcquireOpts{})
 	assertTransient(t, err, 4*time.Second, 4*time.Second)
 	lr.set(func(lr *leaseRouter) { lr.openHang = false })
-	if !p.routerBusy() {
-		t.Fatal("no router-busy window after a cut open")
-	}
 }
 
 func TestCutOpenMinesLateMatchedNoWarn(t *testing.T) {
@@ -255,9 +249,6 @@ func TestCutOpenMinesLateMatchedNoWarn(t *testing.T) {
 	}
 	c.Advance(time.Minute)
 	p.ScanOrphans(context.Background())
-	if p.routerBusy() {
-		t.Fatal("router-busy window not cleared by the match")
-	}
 	if ids := pooledIDs(p); len(ids) != 1 {
 		t.Fatalf("pooled %v, want the late session adopted", ids)
 	}
@@ -269,41 +260,6 @@ func TestCutOpenMinesLateMatchedNoWarn(t *testing.T) {
 		t.Fatalf("result %+v after %d POSTs, want the late session leased", res, len(lr.bidsTried()))
 	}
 	assertNoOrphans(t, lr, p)
-}
-
-func TestRouterBusyBlocksNewOpens(t *testing.T) {
-	setup := func(t *testing.T, mint time.Duration) (*fakeClock, *leaseRouter, *Pool) {
-		c, lr, p, _ := rpcEnv(t)
-		l, _ := mustAcquire(t, p, modelA, AcquireOpts{})
-		l.Done()
-		cutOpen(t, lr, p, modelB, mint)
-		before := len(lr.bidsTried())
-		l, res := mustAcquire(t, p, modelA, AcquireOpts{}) // pooled lease still works
-		l.Done()
-		if res.Opened {
-			t.Fatal("pooled model reopened")
-		}
-		_, _, err := p.Acquire(modelC, AcquireOpts{})
-		assertOpenBusy(t, err)
-		if n := len(lr.bidsTried()); n != before {
-			t.Fatalf("open POSTs during the window: %d, want 0", n-before)
-		}
-		return c, lr, p
-	}
-	t.Run("expires", func(t *testing.T) {
-		c, _, p := setup(t, time.Hour)
-		c.Advance(routerOpenMaxLife + time.Second)
-		if _, res := mustAcquire(t, p, modelC, AcquireOpts{}); !res.Opened {
-			t.Fatal("no open after the window expired")
-		}
-	})
-	t.Run("matched", func(t *testing.T) {
-		c, _, p := setup(t, 6*time.Minute)
-		c.Advance(6*time.Minute + time.Second)
-		if _, res := mustAcquire(t, p, modelC, AcquireOpts{}); !res.Opened {
-			t.Fatal("no open after the cut open was matched")
-		}
-	})
 }
 
 func TestCloseTimeoutKeepsMark(t *testing.T) {
@@ -391,9 +347,6 @@ func TestCutCloseDoesNotBlockOpens(t *testing.T) {
 	}
 	if !fr.Opened || fr.SessionID == res.SessionID {
 		t.Fatalf("failover %+v, want a reopen", fr)
-	}
-	if p.routerBusy() {
-		t.Fatal("a cut close set the router-busy window")
 	}
 	lr.set(func(lr *leaseRouter) { lr.closeHang = false })
 	_, _, err = p.Acquire(modelC, AcquireOpts{})
@@ -833,12 +786,11 @@ func TestSweepNotStarvedUnderSteadyOpens(t *testing.T) {
 	logs := captureLogs(t)
 	c, lr, p, _ := rpcEnv(t)
 	dueBacklog(c, lr, orphanAlertCount)
-	// The first tick records the backlog but closes nothing (a cut open's
-	// window); the window then clears.
-	a := p.addAttempt(modelB, bidID(modelB, leaseProv1))
-	p.setRouterBusy(a)
+	// The first tick records the backlog but closes nothing (a cut close's
+	// mark); the mark then clears.
+	release := holdCloses(c, lr, p)
 	p.ScanOrphans(context.Background())
-	p.dropAttempt(a)
+	release()
 	if len(lr.closesSent()) != 0 {
 		t.Fatal("closed during the window")
 	}

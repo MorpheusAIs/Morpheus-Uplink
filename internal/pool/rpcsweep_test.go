@@ -106,7 +106,7 @@ func TestAttemptWindowBoundaries(t *testing.T) {
 		want bool
 	}{
 		{-attemptSkew, true}, {-attemptSkew - time.Second, false},
-		{0, true}, {routerOpenMaxLife + attemptSkew, true}, {routerOpenMaxLife + attemptSkew + time.Second, false},
+		{0, true}, {attemptKeep + attemptSkew, true}, {attemptKeep + attemptSkew + time.Second, false},
 	} {
 		ses := s(start.Add(tc.at))
 		ses.BidID = "0x" + ses.BidID
@@ -181,16 +181,15 @@ func TestUnheldRecheckedInsideSlot(t *testing.T) {
 	l, res := mustAcquire(t, p, modelB, AcquireOpts{})
 	l.Done()
 	dup := orphans(c, lr, modelB, 1)[0]
-	// A tick records it close-due but cannot close (a cut open's window).
-	a := p.addAttempt(modelC, bidID(modelC, leaseProv1))
-	p.setRouterBusy(a)
+	// A tick records it close-due but cannot close (a cut close's mark).
+	release := holdCloses(c, lr, p)
 	p.ScanOrphans(context.Background())
 	// Before the next tick our session goes and an Acquire leases the old one.
 	lr.mu.Lock()
 	lr.sessions[res.SessionID].closed = true
 	lr.mu.Unlock()
 	p.notifyClosed(res.SessionID)
-	p.dropAttempt(a)
+	release()
 	_, r2 := mustAcquire(t, p, modelB, AcquireOpts{})
 	if r2.SessionID != dup {
 		t.Fatalf("leased %s, want %s adopted", r2.SessionID, dup)

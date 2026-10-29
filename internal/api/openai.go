@@ -200,9 +200,15 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 			outcome = "no_alternate"
 		case errors.Is(ferr, pool.ErrNoAvailableProvider):
 			outcome = "no_available" // every eligible provider is avoided; nothing opened
+		case errors.Is(ferr, pool.ErrWalletNeedsFunds):
+			outcome = "wallet_funds"
 		}
 		warnf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
+		if outcome == "wallet_funds" {
+			writeWalletNeedsFunds(w)
+			return nil, "", nil, errAnswered
+		}
 		relayRouterError(w, firstErr) // the original status and body
 		return nil, "", nil, errAnswered
 	}

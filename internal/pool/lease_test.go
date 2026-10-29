@@ -133,6 +133,33 @@ type leaseRouter struct {
 	calls atomic.Int64
 	// closeHook, when set, runs as each close arrives (before closeTake).
 	closeHook func(id string)
+	// rejects records the rejectExisting flag of every by-bid open;
+	// refused counts the opens the guard answered 409. Like the router,
+	// a flagged open is refused while a session of the bid's model is
+	// open and not ended (a pending late mint included), naming the
+	// newest one.
+	rejects []bool
+	refused int
+}
+
+// existingLocked is the router's existing-session guard: the newest open,
+// not-ended session of model ("" when none).
+func (lr *leaseRouter) existingLocked(model string) string {
+	now := lr.clock.Now().Unix()
+	for i := len(lr.order) - 1; i >= 0; i-- {
+		s := lr.sessions[lr.order[i]]
+		if s.model == model && !s.closed && s.ends > now && (s.closeAt == 0 || s.closeAt > now) {
+			return lr.order[i]
+		}
+	}
+	return ""
+}
+
+// rejectsSeen returns the rejectExisting flags sent so far.
+func (lr *leaseRouter) rejectsSeen() []bool {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return append([]bool(nil), lr.rejects...)
 }
 
 // endOnce ends a write gauge when the answer starts (the client cannot
@@ -402,7 +429,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		lr.mu.Lock()
 		defer lr.mu.Unlock()
 		lr.n++
-		id := fmt.Sprintf("0xs%03d", lr.n)
+		id := fmt.Sprintf("0x%064x", lr.n)
 		now := lr.clock.Now().Unix()
 		lr.sessions[id] = &leaseSess{model: model, prov: prov, opened: now, ends: now + int64(body.SessionDuration), durationOpened: body.SessionDuration}
 		lr.order = append(lr.order, id)
@@ -425,18 +452,39 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		open(w, r, m, ps[0])
 	})
 	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		var flag struct {
+			RejectExisting bool `json:"rejectExisting"`
+		}
+		_ = json.Unmarshal(raw, &flag)
 		lr.mu.Lock()
 		lr.byBid = append(lr.byBid, r.PathValue("id"))
+		lr.rejects = append(lr.rejects, flag.RejectExisting)
 		hang, take, extra := lr.openHang, lr.openTake, lr.extraMint
 		lr.mu.Unlock()
+		if flag.RejectExisting {
+			if m, _, ok := lr.bidOwner(r.PathValue("id")); ok {
+				lr.mu.Lock()
+				ex := lr.existingLocked(m)
+				if ex != "" {
+					lr.refused++
+				}
+				lr.mu.Unlock()
+				if ex != "" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]string{"existingSessionID": ex})
+					return
+				}
+			}
+		}
 		if take > 0 {
 			lr.clock.Advance(take)
 		}
 		if hang {
 			// Like the real router: the open goes on after the client gave
 			// up; the session mints mintDelay later.
-			b, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(b))
 			<-r.Context().Done()
 			m, pv, ok := lr.bidOwner(r.PathValue("id"))
 			if ok {

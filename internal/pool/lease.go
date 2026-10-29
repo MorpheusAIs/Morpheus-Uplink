@@ -258,8 +258,8 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 // (adopt-only), and opens by bid. ctx bounds the wait and every step up
 // to the open POST; once the POST is sent the open runs to its own
 // deadline and is reconciled whatever happens to ctx. Refusals:
-// open_busy (queue full or timed out, or the router-busy window after a
-// cut open; no Retry-After) and router_transient (Retry-After 1–4 s).
+// open_busy (queue full or timed out; no Retry-After), router_transient
+// (Retry-After 1–4 s) and ErrWalletNeedsFunds (fail fast).
 func (p *Pool) AcquireCtx(ctx context.Context, modelID string, o AcquireOpts) (*Lease, AcquireResult, error) {
 	dur := o.DurationSec
 	if dur <= 0 {
@@ -286,8 +286,6 @@ func (p *Pool) AcquireCtx(ctx context.Context, modelID string, o AcquireOpts) (*
 	if l != nil {
 		return l, res, nil
 	}
-	// A router-busy window (a cut open) is checked after the pre-open
-	// scan below: that scan may find the cut open's session and clear it.
 	tok, err := p.slot.acquire(ctx, o.KeyID)
 	if err != nil {
 		if errors.Is(err, errSlotBusy) {
@@ -306,7 +304,8 @@ func (p *Pool) AcquireCtx(ctx context.Context, modelID string, o AcquireOpts) (*
 	}
 	// Memory miss: prefer an already-staked on-chain session (adopt-only;
 	// it also resolves earlier open attempts).
-	if _, err := p.scan(ctx, tok, scanAdoptOnly); err != nil {
+	sc, err := p.scan(ctx, tok, scanAdoptOnly)
+	if err != nil {
 		if ctx.Err() != nil {
 			return nil, AcquireResult{}, ctx.Err()
 		}
@@ -322,25 +321,36 @@ func (p *Pool) AcquireCtx(ctx context.Context, modelID string, o AcquireOpts) (*
 		log.Printf("pool: adopted on-chain session %s for model %s", short_(res.SessionID), modelID)
 		return l, res, nil
 	}
-	if p.routerBusy() {
-		slog.Warn("pool: not opening", "model", modelID, "reason", "router_busy")
-		return nil, AcquireResult{}, errOpenBusyRefusal()
-	}
-
 	openDur := dur
 	// The cap applies to every open, with or without the header.
 	if mx := p.DurationMax(); mx > 0 && openDur > mx {
 		openDur = mx
 	}
 	op := p.newOpenOp(tok, modelID)
+	// rejectExisting only when Uplink holds no live session for the model
+	// (neither tracked nor in the list just read): a first open, or a
+	// retry of an open that was cut or may have been sent. The router then
+	// refuses the open if a session landed meanwhile, and names it.
+	p.mu.Lock()
+	op.rejectExisting = !p.holdsLiveLocked(key) && !(err == nil && sc.live[key])
+	p.mu.Unlock()
 	got, err := op.openAvoidingCooling(ctx, openDur)
 	if err != nil {
 		return nil, AcquireResult{}, err
 	}
 	p.mu.Lock()
-	st := p.poolOpenedLocked(key, got, openDur, o.KeyID)
+	var st *sessState
+	if got.resumed {
+		st = p.adoptLocked(key, got)
+	} else {
+		st = p.poolOpenedLocked(key, got, openDur, o.KeyID)
+	}
 	l = p.leaseLocked(got.id, st, o.KeyID)
 	p.mu.Unlock()
+	if got.resumed {
+		log.Printf("pool: adopted on-chain session %s for model %s (named by the router)", short_(got.id), modelID)
+		return l, AcquireResult{SessionID: got.id, DurationSec: dur}, nil
+	}
 	if got.adopted {
 		log.Printf("pool: open for model %s found on chain as session %s", modelID, short_(got.id))
 		return l, AcquireResult{SessionID: got.id, Opened: true, DurationSec: int(got.endsAt.Sub(got.openedAt) / time.Second)}, nil
@@ -360,6 +370,29 @@ func (p *Pool) poolOpenedLocked(key string, got openResult, durSec int, opener s
 	p.opened[strings.ToLower(got.id)] = true
 	p.entries[key] = entry{sessionID: got.id, expiresAt: ends.Add(-expiryBuffer), provider: normProv(got.provider), stake: got.stake}
 	return p.newStateLocked(key, got.id, opened, ends, opener)
+}
+
+// adoptLocked pools a live session this process did not open (the
+// router named it when it refused a rejectExisting open), as a scan
+// adopts one.
+func (p *Pool) adoptLocked(key string, got openResult) *sessState {
+	p.entries[key] = entry{sessionID: got.id, expiresAt: got.endsAt.Add(-expiryBuffer), provider: normProv(got.provider), stake: got.stake}
+	if st := p.sess[got.id]; st != nil {
+		return st
+	}
+	return p.newStateLocked(key, got.id, got.openedAt, got.endsAt, "")
+}
+
+// holdsLiveLocked reports whether Uplink tracks a session of the model
+// that is still live on chain (in use, retired or closing).
+func (p *Pool) holdsLiveLocked(key string) bool {
+	now := p.now()
+	for _, st := range p.sess {
+		if st.model == key && now.Before(st.endsAt) {
+			return true
+		}
+	}
+	return false
 }
 
 func short_(id string) string { return short(id) }
@@ -443,7 +476,7 @@ func (p *Pool) sweepRetired(ctx context.Context, grace time.Duration, idle bool)
 	for ctx.Err() == nil && !p.gateClosed() {
 		pick := func() string {
 			now := p.now()
-			if p.routerBusyLocked(now) || p.cutCloseMarkLocked(now) {
+			if p.cutCloseMarkLocked(now) {
 				return ""
 			}
 			var ids []string

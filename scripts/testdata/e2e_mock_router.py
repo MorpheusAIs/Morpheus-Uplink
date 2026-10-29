@@ -290,7 +290,8 @@ class H(BaseHTTPRequestHandler):
                     model = ref
                     pick = PROVIDERS[0] if PROVIDERS else None
                 S["opens"].append({"model": model, "bid": ref if by_bid else "", "fields": sorted(body.keys()),
-                                   "failover": body.get("failover"), "provider": pick})
+                                   "failover": body.get("failover"), "rejectExisting": body.get("rejectExisting"),
+                                   "provider": pick})
                 if pick is None:
                     return self._json(500, {"error": "no provider accepting session"})
                 dur = int(body.get("sessionDuration") or 600)

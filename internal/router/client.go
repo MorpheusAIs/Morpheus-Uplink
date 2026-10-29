@@ -228,9 +228,12 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, payload []b
 // "directPayment": false explicitly. There is no failover field either:
 // Uplink runs provider failover itself (internal/pool), so the router's
 // in-prompt failover, which would close and reopen behind the pool, is
-// always off ("failover": false).
+// always off ("failover": false). RejectExisting asks the router to refuse
+// the open, with HTTP 409 and the id of the session, when the wallet
+// already has a live session for the bid's model; it is always sent.
 type OpenSessionRequest struct {
-	SessionDuration int `json:"sessionDuration"`
+	SessionDuration int  `json:"sessionDuration"`
+	RejectExisting  bool `json:"rejectExisting"`
 }
 
 // MarshalJSON pins directPayment and failover to false.
@@ -239,7 +242,39 @@ func (r OpenSessionRequest) MarshalJSON() ([]byte, error) {
 		SessionDuration int  `json:"sessionDuration"`
 		Failover        bool `json:"failover"`
 		DirectPayment   bool `json:"directPayment"`
-	}{r.SessionDuration, false, false})
+		RejectExisting  bool `json:"rejectExisting"`
+	}{r.SessionDuration, false, false, r.RejectExisting})
+}
+
+// ExistingSessionError is the router's refusal of an open sent with
+// rejectExisting: the wallet already has a live session for the model
+// (HTTP 409 {"existingSessionID": "0x..."}).
+type ExistingSessionError struct {
+	SessionID string
+}
+
+func (e *ExistingSessionError) Error() string {
+	return "the wallet already has a live session for this model: " + e.SessionID
+}
+
+// existingSessionFrom reads the router's 409 answer to a guarded open; nil
+// when the answer is not that shape.
+func existingSessionFrom(err error) *ExistingSessionError {
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusConflict {
+		return nil
+	}
+	var v struct {
+		ExistingSessionID string `json:"existingSessionID"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(se.Body)), &v) != nil {
+		return nil
+	}
+	id := strings.TrimSpace(v.ExistingSessionID)
+	if len(id) != 66 || !strings.HasPrefix(id, "0x") {
+		return nil
+	}
+	return &ExistingSessionError{SessionID: id}
 }
 
 // ErrDirectPayment is returned instead of sending any router request whose
@@ -297,22 +332,30 @@ func requestsDirectPayment(payload []byte) bool {
 // provider). It is the only way Uplink opens a session: the pool picks the
 // bid (healthy, not excluded or avoided, in the router's rated order), so
 // the pick is never left to the router. The body is OpenSessionRequest
-// (staking only, router failover off).
+// (staking only, router failover off, rejectExisting false).
 func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
-	return c.OpenSessionByBidCtx(context.Background(), bidID, durationSec)
+	return c.OpenSessionByBidCtx(context.Background(), bidID, durationSec, false)
 }
 
-// OpenSessionByBidCtx is OpenSessionByBid bounded by ctx.
-func (c *Client) OpenSessionByBidCtx(ctx context.Context, bidID string, durationSec int) (string, error) {
+// OpenSessionByBidCtx is OpenSessionByBid bounded by ctx. With
+// rejectExisting the router refuses the open when the wallet already has a
+// live session for the bid's model: the error is then an
+// *ExistingSessionError naming that session.
+func (c *Client) OpenSessionByBidCtx(ctx context.Context, bidID string, durationSec int, rejectExisting bool) (string, error) {
 	bidID = strings.TrimSpace(bidID)
 	if bidID == "" {
 		return "", fmt.Errorf("empty bid id")
 	}
-	body := OpenSessionRequest{SessionDuration: durationSec}
+	body := OpenSessionRequest{SessionDuration: durationSec, RejectExisting: rejectExisting}
 	var res struct {
 		SessionID string `json:"sessionID"`
 	}
 	if err := c.doJSONCtx(ctx, http.MethodPost, "/blockchain/bids/"+url.PathEscape(bidID)+"/session", body, &res); err != nil {
+		if rejectExisting {
+			if ex := existingSessionFrom(err); ex != nil {
+				return "", ex
+			}
+		}
 		return "", err
 	}
 	if res.SessionID == "" {

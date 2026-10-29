@@ -67,6 +67,12 @@ type NoAvailableError struct {
 func (e *NoAvailableError) Error() string        { return ErrNoAvailableProvider.Error() }
 func (e *NoAvailableError) Is(target error) bool { return target == ErrNoAvailableProvider }
 
+// ErrWalletNeedsFunds means the router refused an open before sending it
+// because the wallet lacks funds (gas, MOR or allowance). Nothing was
+// opened; no provider is cooled and no other bid is tried: every open
+// would fail the same way until the wallet is funded.
+var ErrWalletNeedsFunds = errors.New("the wallet needs funds (gas, MOR or allowance) to open a session")
+
 // MaxRetryAfter caps the Retry-After of ErrNoAvailableProvider.
 const MaxRetryAfter = 600 * time.Second
 
@@ -389,6 +395,11 @@ type openOp struct {
 	start         time.Time // pool clock
 	retries       int
 	windowRetries int
+	// rejectExisting is sent with every open of this operation: set only
+	// when Uplink holds no live session for the model on the wallet (a
+	// first open, or a retry of an open that was cut or may have been
+	// sent). Failover and replacement opens never set it.
+	rejectExisting bool
 }
 
 func (p *Pool) newOpenOp(tok *slotToken, modelID string) *openOp {
@@ -396,10 +407,13 @@ func (p *Pool) newOpenOp(tok *slotToken, modelID string) *openOp {
 }
 
 // openResult is a session an open produced: opened (the router returned
-// its id) or adopted (found on chain after an open whose answer was lost).
+// its id) or adopted (found on chain after an open whose answer was lost,
+// or named by the router's rejectExisting refusal). resumed: adopted from
+// that refusal without matching an open attempt of this process.
 type openResult struct {
 	id, provider     string
 	adopted          bool
+	resumed          bool
 	openedAt, endsAt time.Time
 	stake            *big.Int
 }
@@ -462,11 +476,13 @@ func (op *openOp) candidates(ctx context.Context, extraAvoid string) (cands, poo
 //   - a chain-stage error before the send: the same bid again after a
 //     backoff when the operator set the router's RPC; otherwise one
 //     attempt, then router_transient (never cooled, never walked);
+//   - a funding error before the send: ErrWalletNeedsFunds at once (no
+//     retry, never cooled, never walked);
 //   - maybe sent: never re-opened; the wallet's sessions are polled for
 //     it (reconcile). Found: it is the result. Not found: router_transient,
-//     and the attempt stays pending for later scans. A cut open (Uplink
-//     stopped waiting, transport error, 502/503/504) also starts the
-//     router-busy window.
+//     and the attempt stays pending for later scans;
+//   - the router's rejectExisting refusal (409): nothing was sent; the
+//     session it names is adopted (adoptExisting).
 //
 // A walk where every open was a provider fault returns an error matching
 // errBidWalkExhausted.
@@ -489,10 +505,6 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 			if err := ctx.Err(); err != nil {
 				return openResult{}, err
 			}
-			if p.routerBusy() {
-				slog.Warn("pool: not opening", "model", op.model, "reason", "router_busy")
-				return openResult{}, errOpenBusyRefusal()
-			}
 			if left := p.slot.remaining(op.tok); left < openMinPostTime+reconcileReserve {
 				slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "slot_deadline", "left", left.Round(time.Second))
 				return openResult{}, errTransient(transientCap)
@@ -502,18 +514,29 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 			// Once sent, the open is never cancelled by the caller: its
 			// result is reconciled whatever happens to the request.
 			pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), realDur(p.slot.remaining(op.tok)-reconcileReserve))
-			id, err := p.client.OpenSessionByBidCtx(pctx, b.ID, durationSec)
+			id, err := p.client.OpenSessionByBidCtx(pctx, b.ID, durationSec, op.rejectExisting)
 			cancel()
 			elapsed := p.now().Sub(postStart)
 			if err == nil {
 				p.dropAttempt(att)
 				return openResult{id: id, provider: b.Provider}, nil
 			}
+			var ex *router.ExistingSessionError
+			if errors.As(err, &ex) {
+				p.dropAttempt(att) // refused before any transaction
+				slog.Info("pool: open refused: the wallet already has a live session for the model",
+					"model", op.model, "bid", short(b.ID), "session", short(ex.SessionID))
+				return op.adoptExisting(ctx, ex.SessionID)
+			}
 			windowOK := p.providedRPC.Load() && op.windowRetries < maxWindowRetries
 			class := classifyOpenErr(err, elapsed, windowOK)
 			slog.Warn("pool: open failed", "model", op.model, "bid", short(b.ID), "provider", short(b.Provider),
 				"class", class.String(), "after", elapsed.Round(time.Millisecond), "err", router.SafeError(err))
 			switch class {
+			case walletFunds:
+				p.dropAttempt(att)
+				slog.Warn("pool: not opening", "model", op.model, "reason", "wallet_funds")
+				return openResult{}, ErrWalletNeedsFunds
 			case providerFault:
 				p.dropAttempt(att)
 				lastErr = err
@@ -535,7 +558,7 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 				}
 			default: // maybe sent
 				if isTransportErr(err) {
-					p.setRouterBusy(att)
+					p.markCut(att)
 				}
 				return op.reconcile(context.WithoutCancel(ctx), att)
 			}
@@ -578,6 +601,71 @@ func (op *openOp) reconcile(ctx context.Context, att *attempt) (openResult, erro
 	p.requestSweep()
 	slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "reconcile", "bid", short(att.bid))
 	return openResult{}, errTransient(transientCap)
+}
+
+// adoptExisting takes the session the router named when it refused a
+// rejectExisting open: read it, and adopt it when it is a live session of
+// this model that Uplink may use (not ending within the expiry buffer, not
+// closing, retired or a known duplicate, provider not excluded, not
+// already tracked). It resolves a pending open attempt it matches.
+// Otherwise (or when it cannot be read) the answer is router_transient and
+// the sweep is asked to run.
+func (op *openOp) adoptExisting(ctx context.Context, sessionID string) (openResult, error) {
+	p := op.p
+	refuse := func(why string) (openResult, error) {
+		slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "existing_session",
+			"session", short(sessionID), "why", why)
+		p.requestSweep()
+		return openResult{}, errTransient(transientCap)
+	}
+	rctx, cancel := p.slot.callCtx(ctx, op.tok, readCallTimeout)
+	s, err := p.client.GetSessionCtx(rctx, sessionID)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return openResult{}, ctx.Err()
+		}
+		return refuse("unreadable")
+	}
+	if s.ID == "" {
+		s.ID = sessionID
+	}
+	retired := p.isRetired(s.ID)
+	excluded := p.IsProviderExcluded(s.Provider)
+	got, why := p.adoptable(op.model, s, retired, excluded)
+	if why != "" {
+		return refuse(why)
+	}
+	return got, nil
+}
+
+// adoptable checks a session named by a rejectExisting refusal (see
+// adoptExisting) and, when it may be used, resolves a pending attempt it
+// matches. why is "" when it is adoptable.
+func (p *Pool) adoptable(model string, s router.Session, retired, excluded bool) (openResult, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	lid := strings.ToLower(s.ID)
+	switch {
+	case normModel(s.ModelAgentID) != model:
+		return openResult{}, "other_model"
+	case s.ClosedAt != 0:
+		return openResult{}, "closed"
+	case s.EndsAt <= p.now().Unix()+int64(expiryBuffer.Seconds()):
+		return openResult{}, "ending"
+	case retired || p.closingMarkedLocked(s.ID) || p.knownDup[lid] || p.sess[s.ID] != nil:
+		return openResult{}, "not_usable"
+	case excluded:
+		return openResult{}, "excluded"
+	}
+	got := openResult{id: s.ID, provider: s.Provider, adopted: true, resumed: true,
+		openedAt: time.Unix(s.OpenedAt, 0), endsAt: time.Unix(s.EndsAt, 0), stake: s.Stake}
+	if a := p.matchAttemptLocked(s); a != nil {
+		p.resolveAttemptLocked(a)
+		p.opened[lid] = true
+		got.resumed = false // an open of ours that landed
+	}
+	return got, ""
 }
 
 // matchOpen picks the session att opened from a list, if it is there.
@@ -833,10 +921,6 @@ func (p *Pool) FailoverCtx(ctx context.Context, modelID, failedID string, o Fail
 	// 5. Open on another provider, by bid from the filtered list (its own
 	// slot hold).
 	// 6. Pool it with its provider, leased.
-	if p.routerBusy() {
-		slog.Warn("pool: not opening", "model", modelID, "reason", "router_busy")
-		return res, errOpenBusyRefusal()
-	}
 	got, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
 		return op.openExcluding(ctx, durationSec, cands)
 	})
