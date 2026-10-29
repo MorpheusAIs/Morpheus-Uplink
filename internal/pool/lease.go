@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +49,30 @@ func (p *Pool) now() time.Time {
 		return c()
 	}
 	return time.Now()
+}
+
+// sleepHook, when set, replaces time.Sleep for the pool's waits between
+// attempts (tests, via SetSleep). Unset: the real time.Sleep.
+var sleepHook atomic.Pointer[func(time.Duration)]
+
+// SetSleep replaces the pool's sleep (tests) and returns a func that puts
+// the previous one back. nil restores the real time.Sleep.
+func SetSleep(f func(time.Duration)) (restore func()) {
+	var next *func(time.Duration)
+	if f != nil {
+		next = &f
+	}
+	prev := sleepHook.Swap(next)
+	return func() { sleepHook.Store(prev) }
+}
+
+// sleep waits d through the hook (default: time.Sleep).
+func sleep(d time.Duration) {
+	if f := sleepHook.Load(); f != nil {
+		(*f)(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 // SetDurationMax sets the sessionDurationMax setting (seconds).
