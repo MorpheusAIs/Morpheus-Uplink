@@ -612,7 +612,11 @@ the pool stays in charge of which session is open. Turning the
   the `bidDetail` status in the model catalog (`ACTIVE_MODELS_URL`) is
   used instead; once the bids feed has loaded, it alone decides, even
   when it has no healthy bid for a model. With neither loaded since
-  start, health is unknown and opens are refused. Each feed is refetched
+  start, health is unknown and opens are refused. A row whose status is
+  not a JSON string (a number, bool, null, object, or no status at all) is
+  unusable: the health parse skips and counts it, and a `bidDetail` row
+  like that is dropped from the model list too, so it never sets a listed
+  price or changes which model a shared name resolves to. Each feed is refetched
   after 5 minutes. A failed fetch (non-200, any redirect, more than 8 MiB
   decoded, malformed, no usable row, a `last_updated` that is missing,
   not an integer, more than 5 minutes in the future, or older than the

@@ -393,6 +393,75 @@ func catalogView(t *testing.T, c *Catalog) string {
 	return fmt.Sprintf("%+v shared=%s embed=%s", l, shared, embed)
 }
 
+// TestCheapNonStringStatusRowNoListOrResolveEffect: two models share a
+// name; the first's only bid costs 100 wei/s, the second's 500. A third row
+// on the second model costs 1 wei/s and has a status that is not a JSON
+// string (1, true, null, {}, or absent). It is dropped at decode: the name
+// still resolves to the first model, the second still lists at 500 wei/s
+// (5 MOR/h), the full List equals the file without the row, and the row is
+// never in the health set.
+func TestCheapNonStringStatusRowNoListOrResolveEffect(t *testing.T) {
+	first, second := "0x"+strings.Repeat("a1", 32), "0x"+strings.Repeat("a3", 32)
+	firstBid, secondBid, cheapBid := "0x"+strings.Repeat("e1", 32), "0x"+strings.Repeat("e3", 32), "0x"+strings.Repeat("ef", 32)
+	file := func(bad string) string {
+		extra := ""
+		if bad != "" {
+			st := `,"status":` + bad
+			if bad == "absent" {
+				st = ""
+			}
+			extra = fmt.Sprintf(`,{"bidId":%q,"providerId":%q,"pricePerSecond":"1","priceMorPerHour":0.0001%s}`, cheapBid, prv, st)
+		}
+		return fmt.Sprintf(`{"last_updated":%s,"models":[
+ {"Name":"shared","Id":%q,"bidDetail":[{"bidId":%q,"providerId":%q,"pricePerSecond":"100","priceMorPerHour":1,"status":"healthy"}]},
+ {"Name":"shared","Id":%q,"bidDetail":[{"bidId":%q,"providerId":%q,"pricePerSecond":"500","priceMorPerHour":5,"status":"healthy"}%s]}
+]}`, unix(t0), first, firstBid, prv, second, secondBid, prv, extra)
+	}
+	view := func(t *testing.T, raw string) (string, *Catalog) {
+		t.Helper()
+		h := newHarness(t)
+		h.bids.fail(http.StatusInternalServerError)
+		h.models.set(raw)
+		id, err := h.c.Resolve("shared")
+		if err != nil || id != first {
+			t.Fatalf("Resolve(shared) = %s %v, want %s", id, err, first)
+		}
+		l, err := h.c.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, m := range l {
+			if m.ID != second {
+				continue
+			}
+			b, ok := m.LowestBid()
+			if !ok || b.PricePerSecond != "500" || m.LowestMorPerHour() != 5 || m.LowestPricePerSecondWei().String() != "500" {
+				t.Fatalf("second model price: %+v %v mph=%v wei=%v, want 500 / 5", b, ok, m.LowestMorPerHour(), m.LowestPricePerSecondWei())
+			}
+		}
+		return fmt.Sprintf("%+v", l), h.c
+	}
+	want, _ := view(t, file(""))
+	for _, bad := range []string{`1`, `true`, `null`, `{}`, "absent"} {
+		t.Run(bad, func(t *testing.T) {
+			got, c := view(t, file(bad))
+			if got != want {
+				t.Fatalf("List changed by the bad row:\n got %s\nwant %s", got, want)
+			}
+			set, err := c.HealthyBidIDs(second)
+			if err != nil {
+				t.Fatalf("HealthyBidIDs: %v", err)
+			}
+			if _, in := set[cheapBid]; in {
+				t.Fatalf("bad row in health set: %v", set)
+			}
+			if _, in := set[secondBid]; !in {
+				t.Fatalf("good row missing from health set: %v", set)
+			}
+		})
+	}
+}
+
 // TestBidDetailNonStringStatusSkipped: a bidDetail row whose status is not
 // a JSON string ("status": 1, true, null, {}) is unusable: skipped and
 // counted by the health parse and dropped from the list at decode. For each

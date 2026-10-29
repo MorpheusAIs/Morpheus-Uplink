@@ -152,10 +152,7 @@ func TestNoHealthSourceRefuses(t *testing.T) {
 	if !errors.Is(err, ErrNoAvailableProvider) {
 		t.Fatalf("err = %v, want ErrNoAvailableProvider", err)
 	}
-	byModel, byBid := lr.paths()
-	if byModel != 0 || len(byBid) != 0 {
-		t.Fatalf("opens: byModel=%d byBid=%v, want 0 and empty", byModel, byBid)
-	}
+	noOpens(t, lr, "no health source")
 }
 
 // TestHealthPlusExclude: healthy {A,B} with A excluded opens B.
