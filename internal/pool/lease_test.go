@@ -69,6 +69,18 @@ type leaseRouter struct {
 	unhealthy map[string]bool
 	health    map[string][]string
 	healthErr error
+	// openFault, when set, is asked before every by-bid open: a non-empty
+	// body answers status 500 with it (the router's error shape); landed
+	// creates the session on chain first (tx sent, receipt wait failed).
+	openFault func(bid string) (body string, landed bool)
+	// ratedFault, when set, is asked before every rated-bids answer: a
+	// non-empty body answers status 500 with it.
+	ratedFault func(model string) string
+	// openHold delays every by-bid open while counting concurrent opens
+	// (inflight, maxInflight): the wallet-serialization probe.
+	openHold    time.Duration
+	inflight    int
+	maxInflight int
 }
 
 // healthy is the mock's healthy-bid source.
@@ -132,7 +144,7 @@ func bidID(model, prov string) string {
 
 // bidOwner maps a bid id back to its model and provider.
 func (lr *leaseRouter) bidOwner(id string) (string, string, bool) {
-	for _, m := range []string{modelA, modelB, modelC, modelD} {
+	for _, m := range append([]string{modelA, modelB, modelC, modelD}, extraModels...) {
 		for _, pv := range []string{leaseProv1, leaseProv2, leaseProv3} {
 			if bidID(m, pv) == id {
 				return m, pv, true
@@ -162,7 +174,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 			closedAt = s.ends
 		}
 		return map[string]any{"Id": id, "ModelAgentId": s.model, "Stake": "1000", "OpenedAt": s.opened, "EndsAt": s.ends, "ClosedAt": closedAt,
-			"Provider": s.prov}
+			"Provider": s.prov, "BidID": bidID(s.model, s.prov)}
 	}
 	mux.HandleFunc("GET /blockchain/sessions/user", func(w http.ResponseWriter, r *http.Request) {
 		lr.mu.Lock()
@@ -207,7 +219,14 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		lr.mu.Lock()
 		provs := lr.providersOf(m)
 		raw, isRaw := lr.rows[m]
+		fault := lr.ratedFault
 		lr.mu.Unlock()
+		if fault != nil {
+			if body := fault(m); body != "" {
+				http.Error(w, body, 500)
+				return
+			}
+		}
 		if isRaw {
 			_ = json.NewEncoder(w).Encode(map[string]any{"bids": raw})
 			return
@@ -217,7 +236,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
 	})
-	open := func(w http.ResponseWriter, r *http.Request, model, prov string) {
+	open := func(w http.ResponseWriter, r *http.Request, model, prov string) string {
 		var body struct {
 			SessionDuration int `json:"sessionDuration"`
 		}
@@ -230,7 +249,10 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		lr.sessions[id] = &leaseSess{model: model, prov: prov, opened: now, ends: now + int64(body.SessionDuration), durationOpened: body.SessionDuration}
 		lr.order = append(lr.order, id)
 		lr.opens = append(lr.opens, body.SessionDuration)
-		_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": id})
+		if w != nil {
+			_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": id})
+		}
+		return id
 	}
 	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) {
 		m := r.PathValue("id")
@@ -248,10 +270,32 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		lr.mu.Lock()
 		lr.byBid = append(lr.byBid, r.PathValue("id"))
 		lr.mu.Unlock()
+		lr.mu.Lock()
+		fault, hold := lr.openFault, lr.openHold
+		lr.inflight++
+		lr.maxInflight = max(lr.maxInflight, lr.inflight)
+		lr.mu.Unlock()
+		defer func() {
+			lr.mu.Lock()
+			lr.inflight--
+			lr.mu.Unlock()
+		}()
+		if hold > 0 {
+			time.Sleep(hold)
+		}
 		m, pv, ok := lr.bidOwner(r.PathValue("id"))
 		if !ok {
 			http.Error(w, `{"error":"provider unreachable"}`, 500)
 			return
+		}
+		if fault != nil {
+			if body, landed := fault(r.PathValue("id")); body != "" {
+				if landed {
+					open(nil, r, m, pv)
+				}
+				http.Error(w, body, 500)
+				return
+			}
 		}
 		open(w, r, m, pv)
 	})

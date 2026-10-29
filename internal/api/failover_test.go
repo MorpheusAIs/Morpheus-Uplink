@@ -146,6 +146,11 @@ type fakeMarket struct {
 	unhealthy   map[string]bool // provider whose bid the bids feed marks degraded
 	byModel     int             // by-model opens (must stay 0)
 	openFail    map[string]bool // provider whose opens answer 500
+	// openErrBody, when set, answers every open with status 500 and this
+	// body (the router's shape for a chain RPC fault); no session opens.
+	openErrBody string
+	// ratedErrBody, when set, answers rated bids with status 500 and this body.
+	ratedErrBody string
 	// sessionLookup: "" normal; "fail" session detail answers 500;
 	// "empty" session detail has no provider.
 	sessionLookup string
@@ -189,6 +194,10 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 		}
 	}
 	m.opens = append(m.opens, openRec{bid: byBid, provider: prov, body: body})
+	if m.openErrBody != "" {
+		http.Error(w, m.openErrBody, http.StatusInternalServerError)
+		return
+	}
 	if prov == "" || m.openFail[prov] {
 		http.Error(w, `{"error":"no provider accepting session"}`, http.StatusInternalServerError)
 		return
@@ -280,6 +289,10 @@ func (m *fakeMarket) server() *httptest.Server {
 		defer m.mu.Unlock()
 		if m.bidsFail {
 			http.Error(w, `{"error":"bids unavailable"}`, http.StatusInternalServerError)
+			return
+		}
+		if m.ratedErrBody != "" {
+			http.Error(w, m.ratedErrBody, http.StatusInternalServerError)
 			return
 		}
 		// Router shape: the outer ID is left unset (zero hash); the bid id is Bid.Id.
