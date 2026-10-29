@@ -20,6 +20,15 @@
 #                provider A closes A and opens on B by bid (router
 #                failover off) and the request answers 200; an impaired
 #                400 on B with A cooling keeps the session (no alternate).
+#  health        opens go only to bids the gateway bids feed marks healthy:
+#                a provider marked unhealthy is never opened; after a good
+#                load, a bids feed answering 500, a redirect or a frozen
+#                last_updated keeps opening on the last good copy and
+#                /admin/status shows feeds.bids loaded with a growing age;
+#                with the bids feed never loaded and no bidDetail, a request
+#                needing an open gets 503 no_available_provider. The mock
+#                runs in uplink's network namespace (router and feeds at
+#                http://127.0.0.1:8082).
 #  2fa           2FA starts off (password-only); turning it on (enroll,
 #                password in the body; confirm re-issues the session and
 #                ends the old cookie) makes login need TOTP or a recovery code; the switch
@@ -27,7 +36,8 @@
 #                re-enrollment; turning it off (password + code) ends every
 #                session, login is password-only again, and that survives a
 #                restart. The state file is read as uid 10001.
-#  final         no secrets in logs, no direct-payment request.
+#  final         no secrets in logs, no direct-payment request, no open by
+#                model (every open names a bid).
 #
 # Needs a Docker daemon. Image: $UPLINK_E2E_IMAGE (default uplink:e2e);
 # pass --build to build it first. E2E_EXTRA_COMPOSE adds a third overlay
@@ -380,6 +390,70 @@ pfail "$PA" 0 x; pfail "$PB" 0 x
 [ "$(stats | jq -r .failover_true_opens)" = 0 ] || fail "an open asked the router for failover"
 echo "OK impaired 400 on B, A cooling: no alternate, session kept, original status relayed; no open ever sent failover:true"
 
+echo "== provider health: unhealthy never opened, last good kept, never loaded refuses =="
+bids_fetches() { stats | jq -r '.bids_fetches // 0'; }
+nopens() { mockctl GET /e2e/opens | jq '.opens | length'; }
+close_pool() { uapi POST /admin/pool/close-all >/dev/null; }
+feeds() { status_json | jq -c .feeds; }
+# opens_since N: the opens after the first N, as "provider bid" lines.
+opens_since() { mockctl GET /e2e/opens | jq -r --argjson n "$1" '.opens[$n:][] | .provider + " " + .bid'; }
+# open_on_b_only N WHAT: every open after the first N is by bid on provider B.
+open_on_b_only() {
+  local o; o=$(opens_since "$1")
+  [ -n "$o" ] || fail "$2: no open"
+  printf '%s\n' "$o" | awk -v b="$PB" '$1 != b || $2 == "" {bad=1} END {exit bad}' || fail "$2: opens not all by bid on B: $o"
+}
+mockctl POST "/e2e/bids-mode?m=unhealthy:$PA" >/dev/null
+kill_restart
+close_pool
+n=$(nopens)
+for m in e2e-alpha e2e-beta e2e-gamma; do [ "$(chat "$m")" = 200 ] || fail "chat $m with provider A unhealthy"; done
+open_on_b_only "$n" "provider A unhealthy"
+f=$(feeds); echo "feeds: $f"
+jq -e '.health_source == "bids" and .bids.loaded == true and .bids.stale == false and .models.loaded == true' <<<"$f" >/dev/null || fail "status feeds after a good load: $f"
+echo "OK unhealthy provider A never opened; every open by bid on B"
+
+# After a good load the copy is refetched only past the 5 min TTL; then each
+# failed fetch pauses 10 s. A, unhealthy in the last good copy, stays unused.
+age0=$(feeds | jq -r .bids.age_seconds)
+mockctl POST "/e2e/bids-mode?m=500" >/dev/null
+f0=$(bids_fetches)
+refetched() { chat e2e-alpha >/dev/null; [ "$(bids_fetches)" -gt "$1" ]; }
+echo "waiting for the bids TTL (5 min) ..."
+for _ in $(seq 1 40); do refetched "$f0" && break; sleep 10; done
+[ "$(bids_fetches)" -gt "$f0" ] || fail "uplink never refetched the bids feed after the TTL"
+for mode in 500 redirect stale; do
+  mockctl POST "/e2e/bids-mode?m=$mode" >/dev/null
+  f1=$(bids_fetches)
+  wait_for "bids refetch ($mode)" 40 refetched "$f1"
+  close_pool
+  n=$(nopens)
+  [ "$(chat e2e-alpha)" = 200 ] || fail "chat with the bids feed on $mode"
+  open_on_b_only "$n" "bids feed $mode (last good copy)"
+  f=$(feeds); echo "bids=$mode feeds: $f"
+  jq -e --argjson a "$age0" '.health_source == "bids" and .bids.loaded == true and .bids.age_seconds > $a' <<<"$f" >/dev/null \
+    || fail "status feeds with the bids feed on $mode: $f"
+done
+[ "$(stats | jq -r '.bids_redirect_followed // 0')" = 0 ] || fail "uplink followed a bids feed redirect"
+echo "OK bids feed 500 / redirect / frozen after a good load: opens on the last good copy, status shows it loaded and ageing"
+
+mockctl POST "/e2e/bids-mode?m=500" >/dev/null
+mockctl POST "/e2e/catalog-mode?m=nodetail" >/dev/null
+kill_restart
+close_pool
+n=$(nopens)
+b=$(chat_body e2e-alpha)
+[ "$(cat "$E2E_BOOT_DIR/ccode")" = 503 ] || fail "never-loaded bids + no bidDetail: got $(cat "$E2E_BOOT_DIR/ccode") $b"
+printf '%s' "$b" | jq -e '.error.type == "no_available_provider"' >/dev/null || fail "never-loaded bids body: $b"
+[ "$(nopens)" = "$n" ] || fail "an open was sent with no health known"
+f=$(feeds); echo "feeds: $f"
+jq -e '.health_source == "none" and .bids.loaded == false' <<<"$f" >/dev/null || fail "status feeds with no health: $f"
+mockctl POST "/e2e/bids-mode?m=normal" >/dev/null
+mockctl POST "/e2e/catalog-mode?m=normal" >/dev/null
+kill_restart
+[ "$(chat e2e-alpha)" = 200 ] || fail "chat after the bids feed recovered"
+echo "OK never-loaded bids feed and no bidDetail: 503 no_available_provider, no open; recovers once the feed loads"
+
 echo "== admin 2FA: revoke-all and logout force a fresh second factor =="
 # totp SECRET [STEP_OFFSET] -> 6-digit code (RFC 6238, SHA-1, 30 s).
 totp() {
@@ -546,6 +620,8 @@ for s in "$COOKIE_SECRET" "$ADMIN_PASSWORD" "$API_KEY_SEED" "${WALLET_PRIVATE_KE
   if printf '%s' "$logs" | grep -qF -- "$s"; then fail "a secret appears in the compose logs"; fi
 done
 [ "$(stats | jq -r .direct_payment_requests)" = 0 ] || fail "a direct-payment request reached the router"
-echo "OK no secrets in logs, no direct-payment request"
+mockctl GET /e2e/opens | jq -e '(.opens | length) > 0 and ([.opens[] | select(.bid == "")] | length) == 0' >/dev/null \
+  || fail "an open by model reached the router: $(mockctl GET /e2e/opens | jq -c '[.opens[] | select(.bid == "")]')"
+echo "OK no secrets in logs, no direct-payment request, every open by bid"
 
 echo "OK: mock-router e2e (boot, session reconcile, graceful stop)"

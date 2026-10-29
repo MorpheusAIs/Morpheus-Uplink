@@ -7,11 +7,18 @@ must match the router cookie (COOKIE_CONTENT). Anything else gets 401
 Test controls (no auth, test-only): GET /e2e/stats, POST /e2e/fund?mor=N,
 POST /e2e/fail?path=P&code=N (inject errors), POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
 previous process), GET /e2e/sessions (every session with its open/close
-times and prompt count), GET /e2e/catalog (gateway model catalog),
-POST /e2e/catalog-mode?m=normal|empty|braces, POST /e2e/slow-close?sec=N,
+times and prompt count), GET /e2e/catalog (gateway model catalog, real
+shape: last_updated and a healthy bidDetail row per provider),
+POST /e2e/catalog-mode?m=normal|empty|braces|nodetail (nodetail: every
+bidDetail empty), GET /e2e/bids (gateway bids file, real shape: CATALOG x
+PROVIDERS), POST /e2e/bids-mode?m=normal|unhealthy:<provider>|empty|braces|
+stale|redirect|500 (stale: the last file served again, last_updated
+frozen; redirect: a 302 Uplink must not follow), POST /e2e/slow-close?sec=N,
 POST /e2e/provider-fail?provider=P&code=N&msg=M (that provider answers
 prompts with a provider model error; code=0 clears), GET /e2e/opens (every
-open request: model, bid, body field names, failover, provider picked).
+open request: model, bid ("" for an open by model), body field names,
+failover, provider picked). Rated rows carry the provider in mixed case,
+like the router. Listens on 127.0.0.1 (MOCK_BIND) by default.
 Every model has two providers (PROVIDERS, best rated first). Sessions:
 list (/blockchain/sessions/user), open by model (best rated provider),
 open by bid, rated bids, close, detail, and POST /v1/chat/completions with
@@ -45,6 +52,8 @@ S = {
     "opens": [],
     "sessions": {},
     "catalog_mode": "normal",
+    "bids_mode": "normal",
+    "bids_last": None,  # last bids file served (stale mode repeats it)
     "slow_close": 0,
 }
 
@@ -62,6 +71,60 @@ PROVIDERS = ["0x" + "a0" * 20, "0x" + "b0" * 20]
 
 def bid_id(model, provider):
     return "0x" + hashlib.sha256((model.lower() + provider).encode()).hexdigest()
+
+
+def mixed(addr):
+    """Mixed-case address, as the router writes providers (case is not data)."""
+    return "0x" + "".join(c.upper() if i % 2 == 0 else c for i, c in enumerate(addr[2:]))
+
+
+def utc(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def catalog_file():
+    """Gateway models file (real shape)."""
+    mode = S["catalog_mode"]
+    if mode == "braces":
+        return {}
+    now = int(time.time())
+    models = []
+    if mode != "empty":
+        for c in CATALOG:
+            m = dict(c)
+            m["bidDetail"] = [] if mode == "nodetail" else [
+                {"bidId": bid_id(c["Id"], p), "providerId": p, "pricePerSecond": "1000",
+                 "priceMorPerHour": 0.0036, "status": "healthy"} for p in PROVIDERS]
+            models.append(m)
+    return {"last_updated": now, "last_updated_utc": utc(now), "models": models}
+
+
+def bids_file():
+    """Gateway bids file (real shape): one row per CATALOG model x provider."""
+    mode = S["bids_mode"]
+    if mode == "braces":
+        return {}
+    if mode == "stale" and S["bids_last"] is not None:
+        return S["bids_last"]
+    stamp = int(time.time())
+    bad = mode.split(":", 1)[1].lower() if mode.startswith("unhealthy:") else ""
+    rows = []
+    if mode != "empty":
+        for c in CATALOG:
+            for p in PROVIDERS:
+                ok = p != bad
+                rows.append({"Id": bid_id(c["Id"], p), "Provider": p, "ModelAgentId": c["Id"],
+                             "PricePerSecond": "1000", "Nonce": "0", "CreatedAt": "1700000000",
+                             "DeletedAt": "0", "ModelName": c["Name"],
+                             "health": {"status": "healthy" if ok else "degraded",
+                                        "errorKind": "" if ok else "timeout", "httpStatus": 200 if ok else 0,
+                                        "latencyMs": 100, "promptCorrect": ok, "providerVersion": "mock",
+                                        "providerPingMs": 5, "lastHealthy": stamp, "lastHealthyUTC": utc(stamp),
+                                        "lastChecked": stamp, "lastCheckedUTC": utc(stamp)}})
+    out = {"last_updated": stamp, "last_updated_utc": utc(stamp), "bids": rows}
+    if rows:
+        S["bids_last"] = out
+    return out
 
 
 def new_session(model, ends_at, opened_by, provider=PROVIDERS[0]):
@@ -163,7 +226,9 @@ class H(BaseHTTPRequestHandler):
             if path.startswith("/blockchain/models/") and path.endswith("/bids/rated") and method == "GET":
                 model = path[len("/blockchain/models/"):-len("/bids/rated")]
                 return self._json(200, {"bids": [
-                    {"ID": "0x" + "0" * 64, "Bid": {"Id": bid_id(model, p), "Provider": p, "ModelAgentId": model},
+                    {"ID": "0x" + "0" * 64, "Bid": {"Id": bid_id(model, p), "Provider": mixed(p), "ModelAgentId": model,
+                                                    "PricePerSecond": "1000", "Nonce": "0",
+                                                    "CreatedAt": "1700000000", "DeletedAt": "0"},
                      "Score": 10 - i} for i, p in enumerate(PROVIDERS)]})
             if method == "POST" and path.endswith("/session") and (
                     path.startswith("/blockchain/models/") or path.startswith("/blockchain/bids/")):
@@ -227,18 +292,31 @@ class H(BaseHTTPRequestHandler):
         if path == "/e2e/sessions":
             return self._json(200, {"now": time.time(), "sessions": list(S["sessions"].values())})
         if path == "/e2e/catalog":
-            mode = S["catalog_mode"]
-            return self._json(200, {} if mode == "braces" else {"models": [] if mode == "empty" else CATALOG})
+            return self._json(200, catalog_file())
         if path == "/e2e/opens":
             return self._json(200, {"opens": S["opens"]})
         if path == "/e2e/bids":
-            return self._json(200, {})
+            S["stats"]["bids_fetches"] = S["stats"].get("bids_fetches", 0) + 1
+            if S["bids_mode"] == "500":
+                return self._json(500, {"error": "injected"})
+            if S["bids_mode"] == "redirect":
+                self.send_response(302)
+                self.send_header("Location", "/e2e/bids-moved")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            return self._json(200, bids_file())
+        if path == "/e2e/bids-moved":  # redirect target: Uplink must not follow
+            S["stats"]["bids_redirect_followed"] = S["stats"].get("bids_redirect_followed", 0) + 1
+            return self._json(200, bids_file())
         self._body()
         if path == "/e2e/seed-session":
             sid = new_session(q.get("model", [""])[0], time.time() + int(q.get("ends_in", ["3600"])[0]), "seed")
             return self._json(200, {"id": sid})
         if path == "/e2e/catalog-mode":
             S["catalog_mode"] = q.get("m", ["normal"])[0]
+        elif path == "/e2e/bids-mode":
+            S["bids_mode"] = q.get("m", ["normal"])[0]
         elif path == "/e2e/slow-close":
             S["slow_close"] = int(q.get("sec", ["0"])[0])
         elif path == "/e2e/provider-fail":
@@ -271,4 +349,4 @@ class H(BaseHTTPRequestHandler):
         self._route("DELETE")
 
 
-ThreadingHTTPServer((os.environ.get("MOCK_BIND", "0.0.0.0"), int(sys.argv[1])), H).serve_forever()
+ThreadingHTTPServer((os.environ.get("MOCK_BIND", "127.0.0.1"), int(sys.argv[1])), H).serve_forever()
