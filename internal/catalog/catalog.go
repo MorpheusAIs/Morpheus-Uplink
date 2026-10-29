@@ -26,30 +26,48 @@ type BidDetail struct {
 	Status          string  `json:"status"`
 }
 
-// UnmarshalJSON decodes status as raw JSON, like the bids feed: a
-// non-string status leaves Status empty (not healthy) instead of failing
-// the whole models file. The health parse (parseBidDetail) skips and
-// counts such a row as unusable.
-func (b *BidDetail) UnmarshalJSON(data []byte) error {
-	type plain BidDetail
-	var row struct {
-		plain
-		Status json.RawMessage `json:"status"`
-	}
-	if err := json.Unmarshal(data, &row); err != nil {
-		return err
-	}
-	*b = BidDetail(row.plain)
-	b.Status, _ = jsonString(row.Status)
-	return nil
-}
-
 type Model struct {
 	Name      string      `json:"Name"`
 	ID        string      `json:"Id"`
 	Tags      []string    `json:"Tags"`
 	ModelType string      `json:"ModelType"`
 	BidDetail []BidDetail `json:"bidDetail"`
+}
+
+// UnmarshalJSON drops, at decode, every bidDetail row whose status is not a
+// JSON string (number, bool, null, object, array, or missing), using the
+// same jsonString helper as the health parse. Such a row is unusable: it
+// never reaches List pricing (LowestBid) or shared-name Resolve
+// (preferModel), and the rest of the models file still loads. The health
+// parse (parseBidDetail) reads the raw file and skips and counts it there.
+func (m *Model) UnmarshalJSON(data []byte) error {
+	type plain Model
+	var raw struct {
+		plain
+		BidDetail []json.RawMessage `json:"bidDetail"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*m = Model(raw.plain)
+	m.BidDetail = nil
+	for _, r := range raw.BidDetail {
+		var st struct {
+			Status json.RawMessage `json:"status"`
+		}
+		if json.Unmarshal(r, &st) != nil {
+			continue
+		}
+		if _, ok := jsonString(st.Status); !ok {
+			continue
+		}
+		var b BidDetail
+		if err := json.Unmarshal(r, &b); err != nil {
+			return err
+		}
+		m.BidDetail = append(m.BidDetail, b)
+	}
+	return nil
 }
 
 // LowestBid returns the cheapest healthy bid (by pricePerSecond), or any

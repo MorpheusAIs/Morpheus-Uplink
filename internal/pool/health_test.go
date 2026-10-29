@@ -143,13 +143,18 @@ func TestHealthUnknownRefuses(t *testing.T) {
 	}
 }
 
-// TestNoHealthSourceRefuses: no health source wired refuses (health_unknown).
+// TestNoHealthSourceRefuses: no health source wired refuses (health_unknown)
+// with zero opens: none by model, none by bid.
 func TestNoHealthSourceRefuses(t *testing.T) {
-	_, p := newLeaseRouter(t, newFakeClock())
+	lr, p := newLeaseRouter(t, newFakeClock())
 	p.SetHealthyBids(nil)
 	_, _, err := p.openAvoidingCooling(modelB, 600)
 	if !errors.Is(err, ErrNoAvailableProvider) {
 		t.Fatalf("err = %v, want ErrNoAvailableProvider", err)
+	}
+	byModel, byBid := lr.paths()
+	if byModel != 0 || len(byBid) != 0 {
+		t.Fatalf("opens: byModel=%d byBid=%v, want 0 and empty", byModel, byBid)
 	}
 }
 

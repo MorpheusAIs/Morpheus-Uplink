@@ -21,6 +21,7 @@ import (
 var (
 	mdlM = "0x" + strings.Repeat("c1", 32)
 	mdlN = "0x" + strings.Repeat("c2", 32)
+	mdlS = "0x" + strings.Repeat("c3", 32)
 	bid1 = "0x" + strings.Repeat("d1", 32)
 	bid2 = "0x" + strings.Repeat("d2", 32)
 	bid3 = "0x" + strings.Repeat("d3", 32)
@@ -349,77 +350,100 @@ func TestBidDetailFallbackValidation(t *testing.T) {
 
 }
 
+// detailRowP is detailRow with a pricePerSecond.
+func detailRowP(bidID, status, pps string) string {
+	return fmt.Sprintf(`{"bidId":%q,"providerId":%q,"pricePerSecond":%q,"priceMorPerHour":1,"status":%s}`, bidID, prv, pps, status)
+}
+
+// sharedModels is a models file where M and N share a name: M's cheapest
+// healthy bid (1000) beats N's (2000), so the name resolves to M. bad, when
+// set, adds to N a row with that raw status that is CHEAPER (1) than every
+// good row: if it were kept it would become N's List price and flip the
+// shared name to N.
+func sharedModels(bad string) string {
+	n := []string{detailRowP(bid1, healthy, "2000")}
+	if bad != "" {
+		n = append(n, detailRowP(bid3, bad, "1"))
+	}
+	return modelsFile(unix(t0),
+		modelRow(mdlM, "example-shared", detailRowP(bid4, healthy, "1000"), detailRowP(bid2, degraded, "500")),
+		modelRow(mdlN, "example-shared", n...),
+		modelRow(mdlS, "example-embed", detailRowP(bid2, healthy, "3000")))
+}
+
+// catalogView is the full List (every row and price) plus the shared-name
+// and single-name Resolve results.
+func catalogView(t *testing.T, c *Catalog) string {
+	t.Helper()
+	l, err := c.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	shared, err := c.Resolve("example-shared")
+	if err != nil {
+		t.Fatalf("Resolve(example-shared): %v", err)
+	}
+	embed, err := c.Resolve("example-embed")
+	if err != nil {
+		t.Fatalf("Resolve(example-embed): %v", err)
+	}
+	if shared != mdlM || embed != mdlS {
+		t.Fatalf("Resolve: shared=%s embed=%s, want %s %s", shared, embed, mdlM, mdlS)
+	}
+	return fmt.Sprintf("%+v shared=%s embed=%s", l, shared, embed)
+}
+
 // TestBidDetailNonStringStatusSkipped: a bidDetail row whose status is not
-// a JSON string ("status": 1, true, null, {}) is skipped and counted; for
-// each value the models file still loads (no failure, no rollback), the
-// other rows stay usable and their healthy set is served, and List /
-// Resolve return the same models as without the bad row.
+// a JSON string ("status": 1, true, null, {}) is unusable: skipped and
+// counted by the health parse and dropped from the list at decode. For each
+// value, with the bad row cheaper than every good row on a shared-name
+// model: the models file still loads (no failure, no rollback), the other
+// rows stay usable and their healthy set is served, List returns exactly
+// the rows and prices of the same file without the bad row, and the shared
+// name resolves as it does without it.
 func TestBidDetailNonStringStatusSkipped(t *testing.T) {
-	type view struct {
-		names, ids []string
-		rows       []int
-	}
-	snapshot := func(t *testing.T, c *Catalog) view {
-		t.Helper()
-		l, err := c.List()
-		if err != nil {
-			t.Fatalf("List: %v", err)
-		}
-		var v view
-		for _, m := range l {
-			id, err := c.Resolve(m.Name)
-			if err != nil {
-				t.Fatalf("Resolve(%q): %v", m.Name, err)
-			}
-			v.names, v.ids = append(v.names, m.Name), append(v.ids, id)
-			usable := 0
-			for _, d := range m.BidDetail {
-				if d.Status != "" {
-					usable++
-				}
-			}
-			v.rows = append(v.rows, usable)
-		}
-		return v
-	}
-	file := func(bad string) string {
-		details := []string{detailRow(bid4, healthy), detailRow(bid2, degraded)}
-		if bad != "" {
-			details = append(details[:1], append([]string{detailRow(bid3, bad)}, details[1:]...)...)
-		}
-		return modelsFile(unix(t0),
-			modelRow(mdlM, "example-model", details...),
-			modelRow(mdlN, "example-embed", detailRow(bid1, healthy)))
-	}
 	base := newHarness(t)
 	base.bids.fail(http.StatusInternalServerError)
-	base.models.set(file(""))
-	base.wantSet(t, mdlM, bid4)
-	want := snapshot(t, base.c)
+	base.models.set(sharedModels(""))
+	base.wantSet(t, mdlN, bid1)
+	want := catalogView(t, base.c)
 	for _, bad := range []string{`1`, `true`, `null`, `{}`} {
 		t.Run(bad, func(t *testing.T) {
 			lb := captureLogs(t)
 			h := newHarness(t)
 			h.bids.fail(http.StatusInternalServerError)
-			h.models.set(file(bad))
+			h.models.set(sharedModels(bad))
 			// Other rows usable, their healthy set served.
 			h.wantSet(t, mdlM, bid4)
 			h.wantSet(t, mdlN, bid1)
-			// The file loaded: copy in use, no models failure or rollback logged,
-			// the bad row skipped and counted.
+			h.wantSet(t, mdlS, bid2)
+			// The file loaded: copy in use, no models failure or rollback
+			// logged, the bad row skipped and counted.
 			if m, _, src := h.status(t); !m.Loaded || m.LastGoodFetchAt == nil || *m.FeedLastUpdated != rfc(t0) || src != "bid_detail" {
 				t.Fatalf("models feed not loaded: %+v %s", m, src)
 			}
-			if lb.count(`msg="catalog feed refreshed"`, "feed=models", "rows=4", "usable=3", "healthy=2", "skipped=1") != 1 {
+			if lb.count(`msg="catalog feed refreshed"`, "feed=models", "rows=5", "usable=4", "healthy=3", "skipped=1") != 1 {
 				t.Fatalf("models counts not logged:\n%s", lb)
 			}
 			if lb.count("rollback") != 0 || lb.count("malformed") != 0 || lb.count("feed failed", "feed=models") != 0 {
 				t.Fatalf("failure logged:\n%s", lb)
 			}
-			// List / Resolve: the same models as without the bad row.
-			got := snapshot(t, h.c)
-			if fmt.Sprint(got) != fmt.Sprint(want) {
-				t.Fatalf("List/Resolve = %+v, want %+v", got, want)
+			// List rows and prices, and Resolve, exactly as without the bad row.
+			if got := catalogView(t, h.c); got != want {
+				t.Fatalf("List/Resolve changed by the bad row:\n got %s\nwant %s", got, want)
+			}
+			l, _ := h.c.List()
+			for _, m := range l {
+				for _, d := range m.BidDetail {
+					if d.BidID == bid3 || d.Status == "" {
+						t.Fatalf("bad row listed: %+v", m)
+					}
+				}
+				if m.ID == mdlN {
+					if lb, ok := m.LowestBid(); !ok || lb.PricePerSecond != "2000" {
+						t.Fatalf("N lowest bid = %+v %v, want 2000", lb, ok)
+					}
+				}
 			}
 		})
 	}
@@ -818,23 +842,6 @@ func TestHealthyBidsRowValidation(t *testing.T) {
 // Resolve return the same models as without the bad row. A file with only
 // non-string statuses has no usable row and is a failed file.
 func TestHealthyBidsNonStringStatusSkipped(t *testing.T) {
-	type view struct{ names, ids []string }
-	snapshot := func(t *testing.T, c *Catalog) view {
-		t.Helper()
-		l, err := c.List()
-		if err != nil {
-			t.Fatalf("List: %v", err)
-		}
-		var v view
-		for _, m := range l {
-			id, err := c.Resolve(m.Name)
-			if err != nil {
-				t.Fatalf("Resolve(%q): %v", m.Name, err)
-			}
-			v.names, v.ids = append(v.names, m.Name), append(v.ids, id)
-		}
-		return v
-	}
 	file := func(bad string) string {
 		rows := []string{bidRow(bid1, mdlM, healthy), bidRow(bid4, mdlN, healthy), bidRow(bid3, mdlN, degraded)}
 		if bad != "" {
@@ -843,13 +850,15 @@ func TestHealthyBidsNonStringStatusSkipped(t *testing.T) {
 		return bidsFile(unix(t0), rows...)
 	}
 	base := newHarness(t)
+	base.models.set(sharedModels(""))
 	base.bids.set(file(""))
 	base.wantSet(t, mdlM, bid1)
-	want := snapshot(t, base.c)
+	want := catalogView(t, base.c)
 	for _, bad := range []string{`1`, `true`, `null`, `{}`} {
 		t.Run(bad, func(t *testing.T) {
 			lb := captureLogs(t)
 			h := newHarness(t)
+			h.models.set(sharedModels(""))
 			h.bids.set(file(bad))
 			// Other rows usable, their healthy set served.
 			h.wantSet(t, mdlM, bid1)
@@ -865,9 +874,10 @@ func TestHealthyBidsNonStringStatusSkipped(t *testing.T) {
 			if lb.count("rollback") != 0 || lb.count("malformed") != 0 || lb.count("feed failed", "feed=bids") != 0 {
 				t.Fatalf("failure logged:\n%s", lb)
 			}
-			// List / Resolve: the same models as without the bad row.
-			if got := snapshot(t, h.c); fmt.Sprint(got) != fmt.Sprint(want) {
-				t.Fatalf("List/Resolve = %+v, want %+v", got, want)
+			// List rows and prices, and shared-name Resolve, exactly as
+			// without the bad row.
+			if got := catalogView(t, h.c); got != want {
+				t.Fatalf("List/Resolve changed by the bad row:\n got %s\nwant %s", got, want)
 			}
 		})
 	}
