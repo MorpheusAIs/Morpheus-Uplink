@@ -286,10 +286,11 @@ for id in "$SA" "$SB" "$SX"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "
 echo "OK list failure: no closes, no opens while failing; recovery closed expired only"
 
 echo "== sessions: slow closes delay an open by at most one close =="
-# Boot closes run in the wallet slot one close per hold, so a waiting open
-# goes next after the close in progress, ahead of the remaining closes.
-SE3=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)
-SE4=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)
+# Boot closes run in the wallet slot one close per hold. When an open is
+# waiting, it goes next after the close in progress, and the boot closes
+# left are handed to the background sweep (summary "partial", deferred).
+SE3=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30&age=300" | jq -r .id)
+SE4=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30&age=300" | jq -r .id)
 slow() { mockctl POST "/e2e/slow-close?sec=12" >/dev/null; }
 n0=$(nsum)
 kill_restart --before-start slow
@@ -300,12 +301,13 @@ o2=$(opens); t0=$(date +%s)
 t1=$(date +%s)
 [ "$(opens)" = $((o2 + 1)) ] || fail "expected exactly one new open for e2e-gamma"
 [ $((t1 - t0)) -lt 18 ] || fail "open waited $((t1 - t0))s, more than one slow close"
-closing || fail "closes finished before the open; the open did not go between closes"
+left=0; for id in "$SE3" "$SE4"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] && left=$((left + 1)); done
+[ "$left" -ge 1 ] || fail "both closes finished before the open; the open did not go between closes"
 mockctl POST "/e2e/slow-close?sec=0" >/dev/null
-wait_for "slow close done" 60 recovered
-for id in "$SE3" "$SE4"; do [ "$(sess_field "$id" ClosedAt)" != 0 ] || fail "slow close ${id:0:10} did not complete"; done
+both_closed() { [ "$(sess_field "$SE3" ClosedAt)" != 0 ] && [ "$(sess_field "$SE4" ClosedAt)" != 0 ]; }
+wait_for "remaining close by the background sweep" 200 both_closed
 echo "TIMING open during slow closes: $((t1 - t0))s"
-echo "OK slow close: an open waits for at most the close in progress"
+echo "OK slow close: an open waits for at most the close in progress; the sweep closes the rest"
 
 echo "== sessions: model id differs only by case (adopted, reused, never closed) =="
 SD=$(mockctl POST "/e2e/seed-session?model=0x$(printf 'D4%.0s' $(seq 1 32))&ends_in=3600" | jq -r .id)
