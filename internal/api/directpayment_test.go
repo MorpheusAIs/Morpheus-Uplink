@@ -8,10 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -30,6 +28,11 @@ func TestUplinkNeverSendsDirectPayment(t *testing.T) {
 		bodies = append(bodies, r.Method+" "+r.URL.Path+" "+string(b))
 		mu.Unlock()
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/bids/rated"):
+			_, _ = w.Write(ratedRows(testRow))
+		case strings.HasPrefix(r.URL.Path, "/blockchain/models/") && strings.HasSuffix(r.URL.Path, "/session"):
+			t.Errorf("by-model open: %s", r.URL.Path)
+			http.Error(w, "by-model open not expected", http.StatusInternalServerError)
 		case strings.HasSuffix(r.URL.Path, "/session") || r.URL.Path == "/blockchain/sessions":
 			mu.Lock()
 			opens = append(opens, string(b))
@@ -63,8 +66,8 @@ func TestUplinkNeverSendsDirectPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	pl := pool.New(rc, 600)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pl, rc, nil)
+	srv := wiredServer(cfg, st, rc, 600)
+	pl := srv.pool
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	for i := 0; i < 2; i++ {

@@ -206,6 +206,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status["routerAuth"] = s.routerAuthStatus()
 	status["sessionReconcile"] = s.sessionReconcileStatus()
+	if s.catalog != nil {
+		// Gateway feed freshness (read only: never fetches).
+		status["feeds"] = s.catalog.FeedStatus()
+	}
 
 	activeWei := s.pool.ActiveStakeWei()
 	mor := map[string]any{

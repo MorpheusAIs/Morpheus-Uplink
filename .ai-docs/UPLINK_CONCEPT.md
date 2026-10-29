@@ -40,7 +40,8 @@ your own wallet and your own C-Node.
 
 | Capability | Where |
 |---|---|
-| Open session **by modelId** with rated provider selection + failover | `POST /blockchain/models/{id}/session` (`blockchainapi/service.go`) |
+| Rated bids for a model (router Score order) | `GET /blockchain/models/{id}/bids/rated` |
+| Open session **by bid** (Uplink pins `failover:false`, `directPayment:false`) | `POST /blockchain/bids/{id}/session` (`blockchainapi/service.go`). The by-model open (`POST /blockchain/models/{id}/session`) exists in the C-Node, but Uplink never calls it and its node proxy denies it. |
 | Close session, list user sessions | `/blockchain/sessions/*` |
 | Chat completions (streaming) via `session_id` header | `POST /v1/chat/completions` (`proxyapi`) |
 | On-chain model catalog | `GET /blockchain/models` |
@@ -87,7 +88,7 @@ One compose file, three containers, deployable on SecretVM (or any Docker VPS):
   (OpenAI SDK) ──HTTPS──┼─▶│ Traefik │──┬──▶│  Uplink          │──────▶│  proxy-router (C-Node)    │  │
   Bearer sk-…    :443   │  │ TLS     │  │   │  - sk-… keys     │ :8082 │  - wallet (in enclave)    │  │
                         │  │ sidecar │  │   │  - model mapping │ basic │  - sessions: open/close,  │  │
-  browser (GUI) ──HTTPS─┼──┘         │  │   │  - session pool  │ auth  │    rating, failover       │  │
+  browser (GUI) ──HTTPS─┼──┘         │  │   │  - session pool  │ auth  │    rated bids, by-bid open│  │
                         │            │  │   │  - usage metering│       │  - /v1/chat/completions   │  │
                         │            │  │   │  - embedded GUI  │       │  - balances, chats        │  │
                         │            │  │   └──────────────────┘       └────────────┬──────────────┘  │
@@ -111,8 +112,14 @@ One compose file, three containers, deployable on SecretVM (or any Docker VPS):
 1. `POST /v1/chat/completions`, `Authorization: Bearer sk-…`, `model: "llama-3.3-70b"`.
 2. Uplink verifies key (SHA-256 lookup), resolves model name → blockchain id
    (catalog from `active.mor.org/gateway_models.json`, cached).
-3. Session pool: reuse an OPEN session for that model; else
-   `POST /blockchain/models/{id}/session` (rating + failover live in the C-Node).
+3. Session pool: reuse an OPEN session for that model; else open **by bid**,
+   always: the router's rated bids (Score order) → only bids a gateway health
+   feed marks healthy (`active.mor.org/gateway_bids.json`; the models file's
+   `bidDetail` until that has loaded once; the last good copy keeps serving)
+   → minus configured exclusions → minus cooling / stream-cut providers →
+   `POST /blockchain/bids/{id}/session`, walking at most 3 providers, one try
+   each. Nothing usable → 503 `no_available_provider` (Retry-After only when
+   a cool-down is known), never a by-model open.
 4. Forward to C-Node `/v1/chat/completions` with `session_id`, stream back.
 5. Meter: tokens, request count, per-key/per-model. Broken sessions invalidated and
    retried once; pooled sessions closed on shutdown to recover stake.

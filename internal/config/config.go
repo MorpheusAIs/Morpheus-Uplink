@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -182,7 +183,41 @@ func FromEnv() (*Config, error) {
 			return nil, fmt.Errorf("UPLINK_DEV_HTTP=true requires WEB_PUBLIC_URL http://localhost or http://127.0.0.1")
 		}
 	}
+	if err := validateFeedURL("ACTIVE_MODELS_URL", c.ActiveModelsURL); err != nil {
+		return nil, err
+	}
+	if err := validateFeedURL("GATEWAY_BIDS_URL", c.GatewayBidsURL); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// feedLoopbackHosts are the only hosts a feed URL may reach over plain
+// http (a loopback test server). Exact match on the parsed host name.
+var feedLoopbackHosts = map[string]bool{"127.0.0.1": true, "::1": true, "localhost": true}
+
+// validateFeedURL checks a gateway feed URL: https, or http only to an
+// exact loopback host; never userinfo. The error names the variable, not
+// its value.
+func validateFeedURL(name, raw string) error {
+	bad := fmt.Errorf("%s must be an https URL without credentials (http only for 127.0.0.1, ::1 or localhost)", name)
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.User != nil {
+		return bad
+	}
+	h := strings.ToLower(u.Hostname())
+	if h == "" {
+		return bad
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if feedLoopbackHosts[h] {
+			return nil
+		}
+	}
+	return bad
 }
 
 func splitCSV(s string) []string {

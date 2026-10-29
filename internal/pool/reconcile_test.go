@@ -143,13 +143,29 @@ func (f *fakeRouter) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	})
-	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) {
+	// One healthy rated bid per model (provider leaseProv1); every open is
+	// by bid.
+	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
+		m := r.PathValue("id")
+		_ = json.NewEncoder(w).Encode(map[string]any{"bids": []map[string]any{ratedRow(m, bidID(m, leaseProv1), leaseProv1, 1)}})
+	})
+	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
 		f.opened.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": "0xnew"})
 	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
+}
+
+// fakePool is a pool on a fakeRouter whose rated bid for each model is
+// healthy.
+func fakePool(url string) *Pool {
+	p := New(router.New(url, "u", "p"), 600)
+	p.SetHealthyBids(func(m string) (map[string]struct{}, error) {
+		return map[string]struct{}{bidID(m, leaseProv1): {}}, nil
+	})
+	return p
 }
 
 func row(id, model string, ends time.Time) map[string]any {
@@ -167,7 +183,7 @@ func TestStartupReconcileAdoptsAndClosesThenNoDoubleOpen(t *testing.T) {
 		row("0xx-live", modelX, now.Add(time.Hour)),
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{OnReconcile: func(r ReconcileResult) { got = r }})
@@ -201,7 +217,7 @@ func TestGateBlocksOpenUntilReconcileDone(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{row("0xa-long", modelA, now.Add(2*time.Hour))}}
 	f.listFail.Store(2)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	done := make(chan AcquireResult, 1)
 	go func() {
@@ -224,7 +240,7 @@ func TestListFailureRefusesOpenUntilStateKnown(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}}
 	f.listFail.Store(1 << 20)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	var gaveUp atomic.Bool
 	ctx, cancel := context.WithCancel(context.Background())
@@ -299,7 +315,7 @@ func liveRows(now time.Time, models ...string) []map[string]any {
 func runReconcile(t *testing.T, f *fakeRouter, configured ConfiguredModels) (ReconcileResult, *Pool) {
 	t.Helper()
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configured, ReconcileConfig{OnReconcile: func(r ReconcileResult) { got = r }})
@@ -354,7 +370,7 @@ func TestRescanKeysByLowercaseModel(t *testing.T) {
 	upper := "0xAAAA000000000000000000000000000000000000000000000000000000000000"
 	f := &fakeRouter{closed: map[string]int{}, sessions: liveRows(time.Now(), upper)}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +387,7 @@ func TestRescanKeysByLowercaseModel(t *testing.T) {
 func TestRescanAuditsExpiredClose(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}, sessions: []map[string]any{row("0xexp-rescan-0000", modelA, time.Now().Add(-time.Minute))}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	var evs []ReconcileEvent
 	p.SetOnRescanEvent(func(ev ReconcileEvent) { evs = append(evs, ev) })
 	if err := p.RehydrateForce(); err != nil {
@@ -417,7 +433,7 @@ func TestShutdownCloseAllWithinTimesOut(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	t.Cleanup(func() { close(hang) }) // runs before ts.Close
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +474,7 @@ func TestReconcileCloseCapDefersExcess(t *testing.T) {
 	}
 	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	var got ReconcileResult
 	var caps []ReconcileEvent
@@ -511,7 +527,7 @@ func TestReconcilePartialListFailureClosesNothing(t *testing.T) {
 	f := &fakeRouter{closed: map[string]int{}, sessions: rows}
 	f.failPage.Store(100)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -540,7 +556,7 @@ func TestReconcileUnverifiableRowClosesNothing(t *testing.T) {
 		{"Id": "", "ModelAgentId": modelA, "Stake": "1", "EndsAt": now.Add(time.Hour).Unix(), "ClosedAt": 0},
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	if _, err := p.reconcileOnce(configuredAB); err == nil {
 		t.Fatal("want error for a row without an id")
 	}
@@ -569,7 +585,7 @@ func TestReconcileGateReleasedBeforeSlowCloses(t *testing.T) {
 			close(release)
 		}
 	})
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	done := make(chan struct{})
 	go func() {
@@ -604,7 +620,7 @@ func TestLateRecoveryClosesExpiredOnly(t *testing.T) {
 	}}
 	f.listFail.Store(3)
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	var got ReconcileResult
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{
@@ -624,7 +640,7 @@ func TestReconcileAuditsEveryAdoptAndClose(t *testing.T) {
 		row("0xb-past-session-id-0000", modelB, now.Add(-time.Minute)),
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.Gate()
 	var evs []ReconcileEvent
 	p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{OnEvent: func(ev ReconcileEvent) { evs = append(evs, ev) }})
@@ -731,7 +747,7 @@ func TestReconcileExcludedProviderClosed(t *testing.T) {
 		provRow("0xb-ex", modelB, recProvEx, now.Add(2*time.Hour)),
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.SetProviderExclude([]string{recProvEx})
 	p.Gate()
 	var got ReconcileResult
@@ -789,7 +805,7 @@ func TestReconcileExcludedUnconfiguredModelClosed(t *testing.T) {
 		provRow("0xa-ok", modelA, recProvOK, now.Add(time.Hour)),
 	}}
 	ts := f.server(t)
-	p := New(router.New(ts.URL, "u", "p"), 600)
+	p := fakePool(ts.URL)
 	p.SetProviderExclude([]string{recProvEx})
 	p.Gate()
 	configuredA := func() (map[string]bool, bool) { return map[string]bool{modelA: true}, true }

@@ -1654,8 +1654,8 @@ keys its compose reads; `scripts/deploy-assets.sh` enforces that (see
 
 | Var | Default | Purpose |
 |---|---|---|
-| `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (bidDetail primary for list/open) |
-| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Companion bids feed (stored, not fetched today; not merged into LowestBid) |
+| `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` | Gateway model catalog (model list, prices; its bidDetail status is the health fallback until the bids feed loads). https; http only for a loopback test server |
+| `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` | Gateway bids health feed: Uplink opens only bids this feed marks healthy. https; http only for a loopback test server |
 | `UPLINK_LISTEN` | `:8080` | Listen address |
 | `ROUTER_URL` | `http://proxy-router:8082` | C-Node admin API |
 | `DATA_DIR` | `./data` | JSON state |
@@ -1871,16 +1871,16 @@ the pool stays in charge of which session is open. Turning the
   only to the server log.
 - *Not a provider fault:* Uplink cannot reach its own router (502), or the
   router rejects the session id (the existing reopen on a dead session).
-- *Guardrail:* before closing anything, Uplink lists the model's rated
-  bids and counts distinct providers outside the failed one and those in
-  cool-down. With none, it keeps the session (stakes lock while a session
-  is open, so a close and reopen onto no other provider only ties up
+- *Guardrail:* before closing anything, Uplink builds the model's
+  candidate list (below) without the failed provider. When that fails or
+  is empty (no other healthy, non-excluded provider outside cool-down, or
+  health unknown), it keeps the session (stakes lock while a session is
+  open, so a close and reopen onto no other provider only ties up
   liquidity) and relays the original error (`no_alternate`).
 - *Order:* under the model's open lock, Uplink closes the failed session
   first (synchronously, up to 30 s) and then opens on another provider by
-  bid over the rated bids (best score first, at most 3 tries, one per
-  provider), or by model when no avoided provider bids (the rule under
-  *Fail fast*). A failed close is logged and the session is
+  bid over that same filtered list (best score first, at most 3 tries,
+  one per provider). A failed close is logged and the session is
   retired: Rehydrate never adopts it back.
 - *Once:* one failover and one retry per request. A provider failure on the
   retry puts that provider in cool-down too and is relayed. Concurrent
@@ -1891,32 +1891,94 @@ the pool stays in charge of which session is open. Turning the
   avoid cooling providers. `0` keeps no memory across requests; the
   immediate retry still avoids the provider that just failed; at most
   86400.
-- *Fail fast:* a new open never drops an avoidance to get a session. When
-  every eligible provider is cooling or just cut a stream, when each
-  provider the bid walk tried failed to open, or when the rated bids
-  cannot be read, or have a row without a valid bid id or provider next
-  to usable ones, while any provider is avoided (cooling, cut or
-  configured), nothing is opened and the request gets `503`
+- *Always by bid, healthy bids only:* every open, new or failover, goes
+  by bid (`POST /blockchain/bids/{id}/session`, body `sessionDuration`,
+  `failover:false`, `directPayment:false`); Uplink never opens by model.
+  The candidate list is built in this order on the router's rated bids
+  (`/blockchain/models/{id}/bids/rated`, router order kept, the bid id
+  from `Bid.Id`, the provider from `Bid.Provider`, case ignored):
+  1. Read the rated bids. Router unreachable or timing out → refuse (log
+     reason `router_unreachable`); an answer with unusable rows next to
+     usable ones → warn and go on with the usable rows; any other error
+     or no usable row → refuse (`rated_unreadable`).
+  2. Every rated provider configured-excluded → `no_eligible_provider`
+     (`all_excluded`), whatever the health.
+  3. Keep the bids the health feeds mark healthy (*Health feeds*,
+     below). Health unknown → refuse (`health_unknown`); none healthy →
+     refuse (`none_healthy`).
+  4. Drop configured-excluded providers. None left → refuse
+     (`healthy_all_excluded`).
+  5. Drop providers in cool-down, providers that just cut a stream and,
+     in a failover, the failed provider. None left → refuse
+     (`all_cooling`).
+
+  The walk then tries at most 3 bids, one per provider; when every try
+  fails to open, the request is refused (`walk_exhausted`).
+- *Refusals:* nothing is opened and the request gets `503`
   `no_available_provider` ("no provider is available for this model right
-  now; retry later", no ids). `Retry-After` is the shortest remaining
-  cool-down of a provider that is in the bids and not configured-excluded,
-  capped at 600 s and rounded up to whole seconds (at least 1); it is left
-  off when no cool-down is known (for example only a stream cut, or a
-  cool-down of `0`). A refusal consumes a pending stream cut. Refusals are
-  audited on the ops stream as `provider_unavailable`, one line per model
-  per minute with a count. In a failover, the retired-session reopen that
-  finds nothing available relays the original error (audit
-  `no_available`). With no rated bid the pool can use (none, or every
-  row lacks a valid bid id or provider) while any provider is avoided,
-  nothing is opened either: `no_eligible_provider` when providers are
-  configured-excluded, else `no_available_provider`. With nothing
-  avoided, or when the rated bids are all usable and none is from an
-  avoided provider, the normal open by model is unchanged (the router
-  rates and walks the providers); a failover reopen follows the same
-  rule, and one whose rated bids have an unusable row keeps the session
-  (`no_alternate`). The rated bids are read just before that open; a
-  provider that starts bidding in between is not seen, and the opened
-  session's provider is not checked afterwards.
+  now; retry later", no ids), except `all_excluded`, which is `503`
+  `no_eligible_provider` (no ids, no `Retry-After`). The reasons above go
+  to the pool log only (with counts and short ids); audit reasons stay
+  `no_available` / `no_alternate`. `Retry-After` is sent only for
+  `all_cooling` and `walk_exhausted`: the shortest remaining cool-down of
+  a healthy, non-excluded provider, capped at 600 s and rounded up to
+  whole seconds (at least 1); it is left off when no cool-down is known
+  (for example only a stream cut, or a cool-down of `0`), and never sent
+  as `0`. A refusal
+  consumes a pending stream cut. Refusals are audited on the ops stream
+  as `provider_unavailable`, one line per model per minute with a count.
+  In a failover, the retired-session reopen that finds nothing available
+  relays the original error (audit `no_available`). The rated bids are
+  read just before the open; a provider that starts bidding in between is
+  not seen.
+- *Health feeds:* the bids feed (`GATEWAY_BIDS_URL`) gives each bid's
+  health; a bid is healthy when its `health.status` is `healthy` (case
+  and surrounding spaces ignored). Until the bids feed has loaded once,
+  the `bidDetail` status in the model catalog (`ACTIVE_MODELS_URL`) is
+  used instead; once the bids feed has loaded, it alone decides, even
+  when it has no healthy bid for a model. With neither loaded since
+  start, health is unknown and opens are refused. A row whose status is
+  not a JSON string (a number, bool, null, object, or no status at all) is
+  unusable: the health parse skips and counts it, and a `bidDetail` row
+  like that is dropped from the model list too, so it never sets a listed
+  price or changes which model a shared name resolves to. *Listed price
+  and shared names:* a model's listed price is its cheapest `bidDetail`
+  bid whose status is `healthy` (case and surrounding spaces ignored); an
+  empty or any other status does not count. A model with no healthy bid
+  still lists, at its cheapest positive bid. Models sharing a name resolve
+  to the one with the cheapest healthy bid; one with no healthy bid never
+  wins over one that has one. The model list is not filtered by health.
+  Each feed is refetched
+  after 5 minutes. A failed fetch (non-200, any redirect, more than 8 MiB
+  decoded, malformed, no usable row, a `last_updated` that is missing,
+  not an integer, more than 5 minutes in the future, or older than the
+  copy held) keeps the last good copy and pauses that feed's fetches for
+  10 seconds. The last good copy keeps serving however old it gets (no
+  cutoff); past 30 minutes the feed shows stale on the Status page and is
+  logged (`catalog feed stale`, at most once per 10 minutes). Sessions
+  already open are not closed when their provider turns unhealthy; the
+  boot reconcile and Rehydrate do not look at health.
+- *Feed client:* both feeds are fetched with Go's default transport
+  (proxy from the environment, transparent gzip, system roots from the
+  image's `ca-certificates`), a 15 s timeout and no redirects. Both URLs
+  must be `https`, or `http` only to exactly `127.0.0.1`, `::1` or
+  `localhost` (a loopback test server); credentials in the URL are
+  refused. Uplink does not start otherwise, and the error names the
+  variable, not its value.
+- *Status page:* the Status header line ends with one more item after
+  the router version, `active.mor.org (last updated 12 min ago)`: the age
+  of the staler of the models and bids feeds ("just now" under a minute,
+  then minutes, then hours), from `feeds` in `/admin/status` (admin only:
+  per feed `last_good_fetch_at`, `feed_last_updated`, `age_seconds`,
+  `stale`, `loaded`, plus `health_source`: `bids`, `bid_detail` or
+  `none`). It reads `active.mor.org (not loaded yet)` before any good
+  copy, and `active.mor.org (age unknown)` when a feed is loaded but no
+  valid age is reported. The item turns red, and the health bullet yellow (red when health
+  is already bad), past 30 minutes, when a feed reports `stale`, or when
+  either feed is not loaded or has no valid age. The word "Healthy",
+  `/healthcheck` and inference are unaffected: requests continue on the
+  last good copy. The item links to https://active.mor.org (new tab) and
+  its tooltip explains it. Reading the status never fetches a feed.
 - *Streaming:* an error before the first chunk arrives as a non-2xx and
   fails over like any other request. After part of the answer was sent,
   the answer cannot be restarted. Two upstream events count as a
@@ -1944,14 +2006,14 @@ the pool stays in charge of which session is open. Turning the
   open sessions on them (reason `provider_excluded`) so the unused stake
   is returned, including sessions for a model this node does not serve.
   If the wallet is shared with another client, that client's sessions on
-  excluded providers are closed too. When an excluded provider bids on the
-  model, the open goes by bid over the providers left (router's rated
-  order, the bid id from `Bid.Id`); when the rated bids are all usable
-  and none is from an excluded provider, it is the normal open by model.
-  When only excluded providers serve the model, or no rated bid is usable,
-  the request gets `503` `no_eligible_provider` (no ids in the body, no
-  `Retry-After`) and nothing is opened. When the rated bids cannot be read, nothing is opened
-  (`503` `no_available_provider`, above). The model catalog leaves the
+  excluded providers are closed too. Exclusions apply on top of health:
+  the open goes by bid over the healthy providers left (router's rated
+  order). When only excluded providers bid on the model, the request
+  gets `503` `no_eligible_provider` (no ids in the body, no
+  `Retry-After`) and nothing is opened; when the only healthy ones are
+  excluded, or the rated bids cannot be read, it is `503`
+  `no_available_provider` (above). Provider identity comes only from the
+  router's rated bids, never from the health feed. The model catalog leaves the
   excluded providers' bids out (one filter, in `catalog.List` and the
   name lookup), so listed prices, stake estimates and the choice between
   models sharing a name use only the other bids; a model offered only by
@@ -2059,8 +2121,8 @@ enrolment gate applies as on other admin routes.
 | `sessionRelease` | — | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
 | `auditRetentionDays` | — | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
 | `housekeeping` | — | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
-| `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | https URL | `https://active.mor.org/gateway_models.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.New |
-| `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | https URL | `https://active.mor.org/gateway_bids.json` | .env (read-only; no effect today) | cmd/uplink catalog.WithBidsURL (stored, not fetched) |
+| `activeModelsUrl` | `ACTIVE_MODELS_URL` | string | https URL (http only for a loopback test server) | `https://active.mor.org/gateway_models.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.New |
+| `gatewayBidsUrl` | `GATEWAY_BIDS_URL` | string | https URL (http only for a loopback test server) | `https://active.mor.org/gateway_bids.json` | .env + Uplink restart (read-only) | cmd/uplink catalog.WithBidsURL → pool health filter |
 | `webPublicUrl` | `WEB_PUBLIC_URL` | string | https://host[:port] | (empty) | .env + Uplink restart (read-only) | api CSRF, settings origin and console host checks (Config.WebPublicURL) |
 | `masterKeyAdmin` | `MASTER_KEY_ADMIN` | bool | `true` `false` | `false` | .env + Uplink restart (read-only) | api requireAdmin (Config.MasterKeyAdmin) |
 | `proxyStoreChatContext` | `PROXY_STORE_CHAT_CONTEXT` | bool | `true` `false` | `false` | router .env + router restart (read-only) | proxy-router |
@@ -2091,8 +2153,8 @@ enrolment gate applies as on other admin routes.
   `.env`-only rows are read-only and show the running value:
   `MASTER_KEY_ADMIN` (a security switch), `WEB_PUBLIC_URL` (the origin the
   admin CSRF check is anchored to), `ACTIVE_MODELS_URL` (the catalog feed,
-  which decides the model-id mapping) and `GATEWAY_BIDS_URL` (stored but
-  not fetched today, so it has no effect). The tab shows only the "at
+  which decides the model-id mapping) and `GATEWAY_BIDS_URL` (the bids
+  health feed; Uplink opens only bids it marks healthy). The tab shows only the "at
   once" and "Uplink restart" rows; router and `.env`-only rows stay in the
   `GET` answer but are not shown, and the tab links to the
   [environment variables](#environment-variables) instead.

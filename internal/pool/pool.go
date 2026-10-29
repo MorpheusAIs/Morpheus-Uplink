@@ -57,6 +57,10 @@ type Pool struct {
 	// exclude: the providerExclude setting, lowercase provider addresses
 	// never opened for any model.
 	exclude map[string]bool
+	// healthy: the healthy-bid source (catalog.HealthyBidIDs): lowercase
+	// bid ids of the model a gateway health feed marks healthy. nil:
+	// health unknown, every open is refused.
+	healthy func(modelID string) (map[string]struct{}, error)
 
 	// Leases (lease.go), under mu.
 	sess          map[string]*sessState // session id -> lease state

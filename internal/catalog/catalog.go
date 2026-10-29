@@ -1,8 +1,14 @@
 // Package catalog maps human model names to blockchain model IDs using the
 // active.mor.org gateway catalog JSON (gateway_models.json by default).
-// List/open pricing uses each model's bidDetail from that file (primary).
-// GATEWAY_BIDS_URL (gateway_bids.json) is the companion bid feed for
-// mirrors/ops; it is not merged into LowestBid (different schema).
+// List pricing uses each model's bidDetail from that file: the cheapest bid
+// whose status is "healthy", else the cheapest positive bid (a model is
+// never hidden by health); a shared name resolves to the model with the
+// cheapest healthy bid. It is also the
+// pool's provider health source: HealthyBidIDs returns the bids the gateway
+// bids feed (GATEWAY_BIDS_URL, gateway_bids.json) marks healthy, or, only
+// until that file has loaded once, the models file's bidDetail status. The
+// last good copy of each feed keeps serving however old it gets; FeedStatus
+// reports how old.
 package catalog
 
 import (
@@ -31,15 +37,54 @@ type Model struct {
 	BidDetail []BidDetail `json:"bidDetail"`
 }
 
-// LowestBid returns the cheapest healthy bid (by pricePerSecond), or any
-// positive bid if none are marked healthy. ok=false when no usable bid.
+// UnmarshalJSON drops, at decode, every bidDetail row whose status is not a
+// JSON string (number, bool, null, object, array, or missing), using the
+// same jsonString helper as the health parse. Such a row is unusable: it
+// never reaches List pricing (LowestBid) or shared-name Resolve
+// (preferModel), and the rest of the models file still loads. The health
+// parse (parseBidDetail) reads the raw file and skips and counts it there.
+func (m *Model) UnmarshalJSON(data []byte) error {
+	type plain Model
+	var raw struct {
+		plain
+		BidDetail []json.RawMessage `json:"bidDetail"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*m = Model(raw.plain)
+	m.BidDetail = nil
+	for _, r := range raw.BidDetail {
+		var st struct {
+			Status json.RawMessage `json:"status"`
+		}
+		if json.Unmarshal(r, &st) != nil {
+			continue
+		}
+		if _, ok := jsonString(st.Status); !ok {
+			continue
+		}
+		var b BidDetail
+		if err := json.Unmarshal(r, &b); err != nil {
+			return err
+		}
+		m.BidDetail = append(m.BidDetail, b)
+	}
+	return nil
+}
+
+// LowestBid returns the cheapest healthy bid (by pricePerSecond), or, when
+// the model has no healthy bid, its cheapest positive bid, so the model
+// still lists with a price. A bid is healthy only when its status is
+// "healthy" (trim + case-fold, as in the health parse); an empty or any
+// other status is not. ok=false when no usable bid.
 func (m Model) LowestBid() (BidDetail, bool) {
 	var best BidDetail
 	var bestPPS *big.Int
 	pick := func(onlyHealthy bool) {
 		for _, b := range m.BidDetail {
 			if onlyHealthy {
-				if b.Status != "" && !strings.EqualFold(b.Status, "healthy") {
+				if !isHealthy(b.Status) {
 					continue
 				}
 			}
@@ -87,15 +132,16 @@ type activeModelsFile struct {
 }
 
 type Catalog struct {
-	url     string // ACTIVE_MODELS_URL / gateway_models (bidDetail primary for list/open)
-	bidsURL string // GATEWAY_BIDS_URL companion feed; not merged into LowestBid
+	url     string // ACTIVE_MODELS_URL / gateway_models (list, prices, bidDetail health fallback)
+	bidsURL string // GATEWAY_BIDS_URL: bid health (see HealthyBidIDs)
 	client  *http.Client
+	now     func() time.Time
 
 	// fetchMu serializes feed fetches; it is never held with mu, and mu is
 	// never held during a fetch.
 	fetchMu sync.Mutex
 
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	models    []Model
 	byName    map[string]string // lowercase name -> id
 	byID      map[string]string // lowercase id -> display name
@@ -112,6 +158,10 @@ type Catalog struct {
 	// bids are dropped from List and from the shared-name choice; a model
 	// left with no bid is hidden (see withoutExcluded).
 	excluded map[string]bool
+
+	health healthState
+	// bidsFetchMu serializes bids feed fetches, like fetchMu.
+	bidsFetchMu sync.Mutex
 }
 
 // DefaultRetryAfter is the pause after a failed catalog fetch.
@@ -120,7 +170,8 @@ const DefaultRetryAfter = 10 * time.Second
 func New(url string) *Catalog {
 	return &Catalog{
 		url:        url,
-		client:     &http.Client{Timeout: 15 * time.Second},
+		client:     &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirect},
+		now:        time.Now,
 		ttl:        5 * time.Minute,
 		retryAfter: DefaultRetryAfter,
 	}
@@ -200,43 +251,48 @@ func (c *Catalog) indexLocked(models []Model) (byName, byID map[string]string) {
 	return byName, byID
 }
 
-// WithBidsURL records the companion gateway_bids feed URL (GATEWAY_BIDS_URL).
-// Catalog refresh still uses model bidDetail only; see package comment.
+// WithBidsURL sets the gateway bids feed URL (GATEWAY_BIDS_URL), the
+// health source of HealthyBidIDs.
 func (c *Catalog) WithBidsURL(bidsURL string) *Catalog {
 	c.bidsURL = bidsURL
 	return c
 }
 
-// GatewayBidsURL returns the companion bids feed URL, if set.
+// SetClock replaces the catalog clock (feed ages, staleness, TTLs and the
+// last_updated skew check). For tests; call before the catalog is used.
+func (c *Catalog) SetClock(now func() time.Time) {
+	c.mu.Lock()
+	c.now = now
+	c.mu.Unlock()
+}
+
+// GatewayBidsURL returns the bids feed URL, if set.
 func (c *Catalog) GatewayBidsURL() string { return c.bidsURL }
 
-// fetch reads the feed. It touches no Catalog state, so it runs without
-// mu.
-func (c *Catalog) fetch() ([]Model, error) {
-	resp, err := c.client.Get(c.url)
+// fetch reads the models feed. It touches no Catalog state, so it runs
+// without mu. The raw body is returned for the bidDetail health parse.
+func (c *Catalog) fetch() ([]Model, []byte, error) {
+	raw, err := c.fetchFeed(c.url)
 	if err != nil {
-		return nil, fmt.Errorf("fetch model catalog: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch model catalog: status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("fetch model catalog: %w", err)
 	}
 	var file activeModelsFile
-	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
-		return nil, fmt.Errorf("parse model catalog: %w", err)
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, nil, fmt.Errorf("parse model catalog: %w", &feedError{class: "malformed", err: err})
 	}
-	return file.Models, nil
+	return file.Models, raw, nil
 }
 
 // state reports, under mu, whether the data is fresh and, when a fetch
 // should not start now (pause after a failure), the error to return.
 func (c *Catalog) state() (fresh bool, wait bool, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.models != nil && time.Since(c.fetchedAt) < c.ttl {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	now := c.now()
+	if c.models != nil && now.Sub(c.fetchedAt) < c.ttl {
 		return true, false, nil
 	}
-	if c.lastErr != nil && time.Since(c.lastErrAt) < c.retryAfter {
+	if c.lastErr != nil && now.Sub(c.lastErrAt) < c.retryAfter {
 		if c.models != nil {
 			return false, true, nil // serve stale
 		}
@@ -245,11 +301,21 @@ func (c *Catalog) state() (fresh bool, wait bool, err error) {
 	return false, false, nil
 }
 
-// ensureFresh refreshes stale data. It must be called WITHOUT mu: the
-// network fetch never runs under mu. Fetches are serialized (fetchMu);
+// ensureFresh refreshes each feed whose copy is older than the TTL and
+// whose failure pause has passed; one feed's failure does not block the
+// other. It returns the models feed's error (the model list's view).
+func (c *Catalog) ensureFresh() error {
+	err := c.refreshModels()
+	c.refreshBids()
+	c.checkStale()
+	return err
+}
+
+// refreshModels refreshes stale model data. It must be called WITHOUT mu:
+// the network fetch never runs under mu. Fetches are serialized (fetchMu);
 // while one runs, callers with stale data get it at once and callers with
 // no data wait for its result instead of starting their own.
-func (c *Catalog) ensureFresh() error {
+func (c *Catalog) refreshModels() error {
 	if fresh, wait, err := c.state(); fresh || wait {
 		return err
 	}
@@ -264,11 +330,17 @@ func (c *Catalog) ensureFresh() error {
 	if fresh, wait, err := c.state(); fresh || wait {
 		return err
 	}
-	models, err := c.fetch()
+	models, raw, err := c.fetch()
+	var detail *detailParse
+	if err == nil {
+		detail = parseBidDetail(raw, c.now())
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.now()
 	if err != nil {
-		c.lastErr, c.lastErrAt = err, time.Now()
+		c.lastErr, c.lastErrAt = err, now
+		c.detailFailedLocked(feedErrorClass(err), now)
 		// Serve stale data over failing hard if we have any.
 		if c.models != nil {
 			return nil
@@ -277,15 +349,21 @@ func (c *Catalog) ensureFresh() error {
 	}
 	c.models = models
 	c.byName, c.byID = c.indexLocked(models)
-	c.fetchedAt = time.Now()
+	c.fetchedAt = now
 	c.lastErr = nil
+	if derr := c.applyDetailLocked(detail, now); derr != nil {
+		// The bidDetail health copy failed: the shared models fetch takes
+		// the failure pause; the model list above still updated.
+		c.lastErr, c.lastErrAt = derr, now
+	}
 	return nil
 }
 
 // Resolve maps a model name (or an already-resolved 0x id) to a blockchain
 // model ID. When several catalog rows share a name, the winner is the
-// cheapest row that has a healthy bid. Rows with no healthy bid lose to
-// rows that have one. Equal prices break ties by lowercase model ID.
+// cheapest row that has a healthy bid (status "healthy" after trim and
+// case-fold; an empty or other status does not count). Rows with no healthy
+// bid lose to rows that have one. Equal prices break ties by lowercase model ID.
 // Bids of excluded providers are not considered (see indexLocked).
 func (c *Catalog) Resolve(nameOrID string) (string, error) {
 	if strings.HasPrefix(nameOrID, "0x") {
@@ -294,8 +372,8 @@ func (c *Catalog) Resolve(nameOrID string) (string, error) {
 	if err := c.ensureFresh(); err != nil {
 		return "", err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if id, ok := c.byName[strings.ToLower(nameOrID)]; ok {
 		return id, nil
 	}
@@ -309,8 +387,8 @@ func (c *Catalog) List() ([]Model, error) {
 	if err := c.ensureFresh(); err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return withoutExcluded(c.models, c.excluded), nil
 }
 
@@ -320,8 +398,8 @@ func (c *Catalog) NameByID(id string) string {
 	if err := c.ensureFresh(); err != nil {
 		return ""
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.byID[strings.ToLower(id)]
 }
 
@@ -383,11 +461,12 @@ func preferModel(cand, cur Model) bool {
 	return strings.ToLower(cand.ID) < strings.ToLower(cur.ID)
 }
 
-// healthyBidWei is the cheapest bid whose status is healthy or unset.
+// healthyBidWei is the cheapest bid whose status is "healthy" (trim +
+// case-fold); an empty or any other status does not count.
 func (m Model) healthyBidWei() (*big.Int, bool) {
 	var best *big.Int
 	for _, b := range m.BidDetail {
-		if b.Status != "" && !strings.EqualFold(b.Status, "healthy") {
+		if !isHealthy(b.Status) {
 			continue
 		}
 		n, ok := bidWei(b)

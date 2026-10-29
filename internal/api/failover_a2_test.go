@@ -45,7 +45,7 @@ func TestA2RetryAfterShortestEligible(t *testing.T) {
 
 // A2 (DETAIL §14.4 #2): the one provider of a model just cut a stream: 503
 // with no Retry-After (no cool-down with cool-down 0), nothing opened, and
-// the refusal consumed the cut, so the next request opens normally.
+// the refusal consumed the cut, so the next request opens normally (by bid).
 func TestA2CutOnlyRefusedAndCleared(t *testing.T) {
 	a40 := "0x" + strings.Repeat("a", 40)
 	m := newFakeMarket(t, a40)
@@ -61,8 +61,8 @@ func TestA2CutOnlyRefusedAndCleared(t *testing.T) {
 	if code, body := e.chat(t, false); code != 200 {
 		t.Fatalf("after the cut was consumed: %d %s", code, body)
 	}
-	if opens, _ := m.snapshot(); len(opens) != 1 || opens[0].bid != "" {
-		t.Fatalf("want one normal open, got %+v", opens)
+	if opens, _ := m.snapshot(); len(opens) != 1 || opens[0].bid != bidOf(a40) {
+		t.Fatalf("want one by-bid open, got %+v", opens)
 	}
 }
 

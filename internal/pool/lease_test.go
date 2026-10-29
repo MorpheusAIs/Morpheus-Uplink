@@ -44,8 +44,9 @@ type leaseSess struct {
 	durationOpened int
 }
 
-// leaseRouter is a proxy-router for lease tests: opens by model on the
-// fake clock, lists, details and closes sessions; closes can fail.
+// leaseRouter is a proxy-router for lease tests: rates bids, opens by bid
+// on the fake clock, lists, details and closes sessions; closes can fail.
+// Its by-model open only counts (Uplink never uses it).
 type leaseRouter struct {
 	mu        sync.Mutex
 	clock     *fakeClock
@@ -56,12 +57,67 @@ type leaseRouter struct {
 	closeFail atomic.Bool
 	n         int
 	// bidders overrides the providers bidding on a model (default: both
-	// lease providers); an open by model lands on the first of them.
+	// lease providers), in rated order.
 	bidders map[string][]string
 	// rows, when set for a model, is its rated-bids answer verbatim.
 	rows    map[string][]map[string]any
-	byModel int      // opens by model
+	byModel int      // opens by model (must stay 0: every open is by bid)
 	byBid   []string // bid ids opened by bid
+	// Health source (Pool.SetHealthyBids): by default every mock bid of a
+	// model is healthy; unhealthy drops bid ids, health overrides a
+	// model's set verbatim, healthErr makes the source fail.
+	unhealthy map[string]bool
+	health    map[string][]string
+	healthErr error
+}
+
+// healthy is the mock's healthy-bid source.
+func (lr *leaseRouter) healthy(model string) (map[string]struct{}, error) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if lr.healthErr != nil {
+		return nil, lr.healthErr
+	}
+	out := map[string]struct{}{}
+	if ids, ok := lr.health[model]; ok {
+		for _, id := range ids {
+			out[strings.ToLower(id)] = struct{}{}
+		}
+		return out, nil
+	}
+	for _, pv := range lr.providersOf(model) {
+		if id := bidID(model, pv); !lr.unhealthy[id] {
+			out[id] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+// setUnhealthy marks a provider's bid on a model not healthy.
+func (lr *leaseRouter) setUnhealthy(model, prov string) {
+	lr.mu.Lock()
+	lr.unhealthy[bidID(model, prov)] = true
+	lr.mu.Unlock()
+}
+
+// mixedCase writes an address the way the router does (EIP-55 style
+// mixed case): the pool must match it case-insensitively.
+func mixedCase(addr string) string {
+	b := []byte(addr)
+	for i := 2; i < len(b); i++ {
+		if i%2 == 0 && b[i] >= 'a' && b[i] <= 'f' {
+			b[i] -= 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// ratedRow is one router rated-bids row in the real shape.
+func ratedRow(model, bid, prov string, score float64) map[string]any {
+	return map[string]any{"ID": zeroHash, "Bid": map[string]any{
+		"Id": bid, "Provider": mixedCase(prov), "ModelAgentId": model,
+		"PricePerSecond": "1000", "Nonce": "0", "CreatedAt": "1700000000", "DeletedAt": "0",
+	}, "Score": score}
 }
 
 // zeroHash is the outer ID of every rated-bid row: the router leaves it
@@ -94,7 +150,8 @@ func (lr *leaseRouter) providersOf(model string) []string {
 }
 
 func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
-	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}, rows: map[string][]map[string]any{}}
+	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}, rows: map[string][]map[string]any{},
+		unhealthy: map[string]bool{}, health: map[string][]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"address": "0x1111111111111111111111111111111111111111"})
@@ -156,7 +213,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 			return
 		}
 		for i, pv := range provs {
-			bids = append(bids, map[string]any{"ID": zeroHash, "Bid": map[string]any{"Id": bidID(m, pv), "Provider": pv}, "Score": float64(10 - i)})
+			bids = append(bids, ratedRow(m, bidID(m, pv), pv, float64(10-i)))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
 	})
@@ -202,6 +259,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	t.Cleanup(ts.Close)
 	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.SetClock(c.Now)
+	p.SetHealthyBids(lr.healthy)
 	return lr, p
 }
 

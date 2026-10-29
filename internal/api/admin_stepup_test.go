@@ -15,10 +15,8 @@ import (
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 	"github.com/pquerna/otp/totp"
@@ -64,7 +62,7 @@ func s1Server(t *testing.T, edit func(*config.Config)) (*httptest.Server, *Serve
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
+	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	clk := &s1Clock{t: time.Now()}
 	srv.sessions.SetClock(clk.Now)
 	ts := httptest.NewServer(srv.Handler())

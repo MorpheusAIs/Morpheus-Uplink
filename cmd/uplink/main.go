@@ -61,6 +61,8 @@ func main() {
 	// or priced (catalog).
 	pl.SetProviderExclude(cfg.ProviderExclude)
 	cat.SetProviderExclude(cfg.ProviderExclude)
+	// Opens use only rated bids the gateway health feeds mark healthy.
+	pl.SetHealthyBids(cat.HealthyBidIDs)
 	pl.SetDurationMax(cfg.SessionDurationMax)
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
