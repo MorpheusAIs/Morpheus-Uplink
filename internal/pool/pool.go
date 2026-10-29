@@ -96,23 +96,24 @@ type Pool struct {
 	slot    walletSlot
 	sleepFn func(ctx context.Context, d time.Duration) error // SetSleep (tests)
 	// Under mu:
-	pending     []*attempt           // unresolved open attempts (maybe sent)
-	knownDup    map[string]bool      // lowercase id: an extra session from our own open (the sweep closes it)
-	closingIDs  map[string]time.Time // lowercase id -> mark expiry; zero: a close is in progress
-	closeDueAt  map[string]time.Time // lowercase id -> when the sweep first saw it close-due
-	busyUntil   time.Time            // router-busy window (a cut open), pool clock
-	busyAttempt *attempt             // the attempt that set it
-	opened      map[string]bool      // lowercase ids this process opened or matched to its own attempt
-	closedByUs  map[string]bool      // lowercase ids this process closed
-	foreignAt   []time.Time          // adoptions of sessions this process never opened (last hour)
-	sweepSkips  int
-	started     time.Time // pool clock at New or SetClock (uptime)
-	warnAt      map[string]time.Time
-	warnSkipped map[string]int
-	walletAddr  string
-	scanKick    chan struct{} // buffered 1: run the sweep now
-	rpcURLs     atomic.Int64  // router RPC URL count (GET /config); 0: unknown
-	retiredBusy atomic.Bool   // a retired close found the wallet slot busy
+	pending      []*attempt           // unresolved open attempts (maybe sent)
+	knownDup     map[string]bool      // lowercase id: an extra session from our own open (the sweep closes it)
+	closingIDs   map[string]time.Time // lowercase id -> mark expiry; zero: a close is in progress
+	closeDueAt   map[string]time.Time // lowercase id -> when the sweep first saw it close-due
+	busyUntil    time.Time            // router-busy window (a cut open), pool clock
+	busyAttempt  *attempt             // the attempt that set it
+	opened       map[string]bool      // lowercase ids this process opened or matched to its own attempt
+	closedByUs   map[string]bool      // lowercase ids this process closed
+	foreignAt    []time.Time          // adoptions of sessions this process never opened (last hour)
+	sweepSkips   int                  // busy ScanOrphans ticks since one held the slot
+	retiredSkips int                  // busy retired-close tries since one held the slot
+	started      time.Time            // pool clock at New or SetClock (uptime)
+	warnAt       map[string]time.Time
+	warnSkipped  map[string]int
+	walletAddr   string
+	scanKick     chan struct{} // buffered 1: run the sweep now
+	rpcURLs      atomic.Int64  // router RPC URL count (GET /config); 0: unknown
+	retiredBusy  atomic.Bool   // a retired close found the wallet slot busy
 }
 
 // scanCounts is what the "rehydrated" log line reports.

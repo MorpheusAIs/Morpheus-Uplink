@@ -619,6 +619,25 @@ func (p *Pool) warnShared(session, bid, trigger string) {
 		"session", short(session), "bid", short(bid), "trigger", trigger)
 }
 
+// localDueLocked counts close-due sessions known without the slot: those
+// the last held scan saw close-due, plus retired sessions with nothing in
+// flight (unheld). oldest is the longest any of them has been due.
+func (p *Pool) localDueLocked(now time.Time) (int, time.Duration) {
+	n, oldest := len(p.closeDueAt), p.oldestDueLocked(now)
+	for id, st := range p.sess {
+		if !st.retired || st.closing || st.inflight > 0 || p.closingMarkedLocked(id) {
+			continue
+		}
+		if _, seen := p.closeDueAt[strings.ToLower(id)]; !seen {
+			n++
+		}
+		if d := now.Sub(st.unheldSince()); d > oldest {
+			oldest = d
+		}
+	}
+	return n, oldest
+}
+
 func (p *Pool) oldestDueLocked(now time.Time) time.Duration {
 	var oldest time.Duration
 	for _, t := range p.closeDueAt {
@@ -720,8 +739,9 @@ func (p *Pool) closeWithToken(ctx context.Context, tok *slotToken, id, reason, s
 // and resolving attempts) and closes at most one close-due session per
 // hold, releasing between closes so a queued open goes first. When opens
 // keep the slot busy for sweepMaxSkips ticks (whether or not a close is
-// known to be due), or a close-due session is orphanAlertAge old, it
-// queues for one hold and closes at most one session.
+// known to be due), or a close-due session (seen by the last scan, or
+// retired with nothing in flight) is orphanAlertAge old, it queues for
+// one hold and closes at most one session.
 func (p *Pool) ScanOrphans(ctx context.Context) {
 	if p.gateClosed() {
 		return
@@ -731,13 +751,15 @@ func (p *Pool) ScanOrphans(ctx context.Context) {
 	if tok == nil {
 		p.mu.Lock()
 		p.sweepSkips++
-		skips, due, oldest := p.sweepSkips, len(p.closeDueAt), p.oldestDueLocked(p.now())
+		skips := p.sweepSkips
+		due, oldest := p.localDueLocked(p.now())
 		p.mu.Unlock()
 		p.alertStarved(due, oldest)
-		// After sweepMaxSkips busy ticks, queue for one hold whether or not
-		// anything is known to be due: closeDueAt is only filled by a scan
-		// that held the slot, so a session that became close-due while the
-		// slot stayed busy is found by the queued scan (under p.mu).
+		// Skips and the close-due age are counted without the slot. After
+		// sweepMaxSkips busy ticks, or once a close-due session is
+		// orphanAlertAge old, queue for one hold whether or not anything is
+		// known to be due: an on-chain orphan is only seen by a scan, and
+		// the queued scan recomputes everything under p.mu.
 		if skips < sweepMaxSkips && (due == 0 || oldest < orphanAlertAge) {
 			return
 		}

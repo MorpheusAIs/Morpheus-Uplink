@@ -37,6 +37,7 @@ type sessState struct {
 	endsAt     time.Time // on-chain end
 	opener     string    // key id that opened it ("" adopted or failover)
 	retired    bool      // not handed out any more; closed when inflight reaches 0
+	retiredAt  time.Time // pool clock when first retired (close-due age with lastUse)
 	closing    bool
 	closeFails int
 }
@@ -413,7 +414,7 @@ func (p *Pool) Release(modelID, keyID string) ReleaseOutcome {
 		p.mu.Unlock()
 		return ReleaseOutcome{Released: true, Reason: "in_flight"}
 	}
-	st.retired = true
+	st.markRetired(p.now())
 	if e, ok := p.entries[key]; ok && e.sessionID == id {
 		delete(p.entries, key)
 	}
@@ -426,9 +427,11 @@ func (p *Pool) Release(modelID, keyID string) ReleaseOutcome {
 
 // SweepIdle closes sessions with nothing in flight and no use for grace,
 // and retired sessions (released, failed over, or a close that failed). It
-// returns the number closed. Each close takes the wallet slot only when it
-// is free (a queued open goes first) and closes one session per hold; the
-// rest wait for the next tick.
+// returns the number closed. Each close takes the wallet slot when it is
+// free and closes one session per hold; the rest wait for the next try.
+// After sweepMaxSkips busy tries, or once a close-due session is
+// orphanAlertAge old, it queues for one hold (FIFO, behind opens already
+// waiting) and closes one session.
 func (p *Pool) SweepIdle(grace time.Duration) int {
 	return p.sweepRetired(context.Background(), grace, true)
 }
@@ -469,11 +472,30 @@ func (p *Pool) sweepRetired(ctx context.Context, grace time.Duration, idle bool)
 			return n
 		}
 		tok := p.slot.tryAcquire("")
+		forced := false
 		if tok == nil {
-			p.retiredBusy.Store(true) // RunSweep tries again soon
-			return n
+			// Count the busy try without the slot; after sweepMaxSkips of
+			// them, or once a close-due session is orphanAlertAge old,
+			// queue for one hold (FIFO behind the opens already waiting)
+			// and close one session.
+			p.mu.Lock()
+			p.retiredSkips++
+			skips := p.retiredSkips
+			due, oldest := p.localDueLocked(p.now())
+			p.mu.Unlock()
+			p.alertStarved(due, oldest)
+			if skips < sweepMaxSkips && oldest < orphanAlertAge {
+				p.retiredBusy.Store(true) // RunSweep tries again soon
+				return n
+			}
+			t, err := p.slot.acquire(ctx, "")
+			if err != nil {
+				return n
+			}
+			tok, forced = t, true
 		}
 		p.mu.Lock()
+		p.retiredSkips = 0 // this try holds the slot
 		if pick() != id {
 			p.mu.Unlock()
 			p.slot.release(tok)
@@ -492,11 +514,15 @@ func (p *Pool) sweepRetired(ctx context.Context, grace time.Duration, idle bool)
 		if out == closeOK || out == closeAlready {
 			n++
 			log.Printf("pool: idle sweep closed session %s", short(id))
+			if forced {
+				return n // one close per queued hold
+			}
 			continue
 		}
 		p.mu.Lock()
 		if st := p.sess[id]; st != nil {
-			st.closing, st.retired = false, true
+			st.closing = false
+			st.markRetired(p.now())
 			st.closeFails++
 		}
 		p.mu.Unlock()
@@ -519,7 +545,7 @@ func (p *Pool) retireForFailover(key, sessionID string) bool {
 	if st == nil {
 		return true
 	}
-	st.retired = true
+	st.markRetired(p.now())
 	if st.inflight > 0 || st.closing {
 		return false
 	}
@@ -556,4 +582,19 @@ func (p *Pool) TotalInFlight() int {
 		n += st.inflight
 	}
 	return n
+}
+
+func (st *sessState) markRetired(now time.Time) {
+	if !st.retired {
+		st.retired, st.retiredAt = true, now
+	}
+}
+
+// unheldSince is when a retired session with nothing in flight became
+// close-due: the later of its retirement and its last use.
+func (st *sessState) unheldSince() time.Time {
+	if st.lastUse.After(st.retiredAt) {
+		return st.lastUse
+	}
+	return st.retiredAt
 }

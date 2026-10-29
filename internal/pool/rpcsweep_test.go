@@ -467,3 +467,45 @@ func TestReleaseUnderSteadyOpensClosedWithinThreeTicks(t *testing.T) {
 		t.Fatalf("released session not closed within %d ticks under steady opens (closes %v)", sweepMaxSkips, lr.closesSent())
 	}
 }
+
+// The retired close is not try-only: under continuous slot use it queues
+// after sweepMaxSkips busy tries and closes the released session.
+func TestSweepRetiredQueuesAfterBusyTries(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	ctx := context.Background()
+	l, res := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	ageAll(c)
+	if out := p.Release(modelB, "k1"); out.Reason != "closing" {
+		t.Fatalf("release %+v, want closing", out)
+	}
+	tick := func() { p.sweepRetired(ctx, 0, false) }
+	got := busyTicks(t, p, sweepMaxSkips, tick, func() bool { return lr.closedCount(res.SessionID) == 1 })
+	if got != sweepMaxSkips {
+		t.Fatalf("closed on try %d (closes %v), want try %d", got, lr.closesSent(), sweepMaxSkips)
+	}
+}
+
+// Continuous slot use with a close-due session already orphanAlertAge old
+// (counted without the slot): orphan_close_starved fires and the session
+// is closed on that tick, before sweepMaxSkips.
+func TestStarvedCloseAlertsAndClosesWithinBound(t *testing.T) {
+	logs := captureLogs(t)
+	c, lr, p, _ := rpcEnv(t)
+	ctx := context.Background()
+	l, res := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	ageAll(c)
+	if out := p.Release(modelB, "k1"); out.Reason != "closing" {
+		t.Fatalf("release %+v, want closing", out)
+	}
+	c.Advance(orphanAlertAge + time.Second) // e.g. the host slept through the ticks
+	tick := func() { p.sweepRetired(ctx, 0, false); p.ScanOrphans(ctx) }
+	got := busyTicks(t, p, sweepMaxSkips, tick, func() bool { return lr.closedCount(res.SessionID) == 1 })
+	if got != 1 {
+		t.Fatalf("closed on tick %d (closes %v), want tick 1", got, lr.closesSent())
+	}
+	if logs.count("orphan_close_starved") == 0 {
+		t.Fatalf("orphan_close_starved not logged:\n%s", logs.String())
+	}
+}
