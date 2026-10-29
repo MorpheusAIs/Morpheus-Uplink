@@ -480,13 +480,12 @@ func chatFull(t *testing.T, e *failoverEnv, model string) (int, http.Header, str
 	return resp.StatusCode, resp.Header, string(raw)
 }
 
-// MUST-1 (DETAIL §14.4 #8): rated bids unreadable while any provider is
-// avoided (cooling, cut, one or two configured exclusions) → 503
-// no_available_provider, no ids, and ZERO open attempts of any kind
-// (counted by model and by bid on a router stub whose open by model
-// ignores any avoidance),
-// again on a second request; Retry-After only when a cool-down is known.
-// With nothing avoided, one normal open.
+// Rated bids unreadable → 503 no_available_provider (reason
+// rated_unreadable), no ids, no Retry-After, and ZERO open attempts of any
+// kind, whatever is avoided and also with nothing avoided (every open is by
+// bid from the rated list; there is no by-model fallback). A refusal
+// consumes a pending stream cut; the next request is refused again while
+// the list stays unreadable.
 func TestS4BidsUnreadableFallback(t *testing.T) {
 	a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
 	for _, c := range []struct {
@@ -494,13 +493,13 @@ func TestS4BidsUnreadableFallback(t *testing.T) {
 		exclude []string
 		cooling []string
 		cut     string
-		retry   bool
 	}{
-		{name: "cooling", cooling: []string{a40}, retry: true},
+		{name: "nothing avoided"},
+		{name: "cooling", cooling: []string{a40}},
 		{name: "cut", cut: a40},
 		{name: "one configured exclusion", exclude: []string{a40}},
 		{name: "two configured exclusions", exclude: []string{a40, b40}},
-		{name: "configured + cooling", exclude: []string{a40}, cooling: []string{b40}, retry: true},
+		{name: "configured + cooling", exclude: []string{a40}, cooling: []string{b40}},
 	} {
 		m := newFakeMarket(t, a40, b40, c40)
 		m.bidsFail = true
@@ -514,38 +513,34 @@ func TestS4BidsUnreadableFallback(t *testing.T) {
 		if c.cut != "" {
 			e.srv.pool.MarkStreamCut(testModelID, c.cut)
 		}
-		code, hdr, body := chatFull(t, e, "test-model")
-		if code != 503 || !strings.Contains(body, `"type":"no_available_provider"`) || strings.Contains(body, "0x") {
-			t.Errorf("%s: %d %s", c.name, code, body)
-		}
-		if ra := hdr.Get("Retry-After"); c.retry != (ra != "") || ra != "" && !retryAfterOK(ra, 600) {
-			t.Errorf("%s: Retry-After %q", c.name, ra)
-		}
-		if opens, _ := m.snapshot(); len(opens) != 0 {
-			t.Errorf("%s: %d open attempts, want 0: %+v", c.name, len(opens), opens)
-		}
-		code, _, _ = chatFull(t, e, "test-model")
-		opens, _ := m.snapshot()
-		if c.cut != "" {
-			// The refusal consumed the cut: nothing is avoided any more.
-			if code != 200 || len(opens) != 1 || opens[0].bid != "" {
-				t.Errorf("%s: after the cut was consumed: %d opens %+v", c.name, code, opens)
+		for i := 0; i < 2; i++ {
+			code, hdr, body := chatFull(t, e, "test-model")
+			if code != 503 || !strings.Contains(body, `"type":"no_available_provider"`) || strings.Contains(body, "0x") {
+				t.Errorf("%s #%d: %d %s", c.name, i, code, body)
 			}
-			continue
-		}
-		if code != 503 || len(opens) != 0 {
-			t.Errorf("%s: second request %d, %d open attempts", c.name, code, len(opens))
+			if ra := hdr.Get("Retry-After"); ra != "" {
+				t.Errorf("%s #%d: Retry-After %q", c.name, i, ra)
+			}
+			if opens, _ := m.snapshot(); len(opens) != 0 {
+				t.Errorf("%s #%d: %d open attempts, want 0: %+v", c.name, i, len(opens), opens)
+			}
 		}
 	}
-	// Nothing avoided: one normal open by model.
+	// Once the list reads again, the open is by bid.
 	m := newFakeMarket(t, a40, b40)
 	m.bidsFail = true
 	e := newFailoverEnv(t, m, nil)
-	if code, body := e.chat(t, false); code != 200 {
-		t.Fatalf("nothing avoided: %d %s", code, body)
+	if code, _ := e.chat(t, false); code != 503 {
+		t.Fatalf("unreadable: %d", code)
 	}
-	if opens, _ := m.snapshot(); len(opens) != 1 || opens[0].bid != "" {
-		t.Fatalf("nothing avoided: opens %+v", opens)
+	m.mu.Lock()
+	m.bidsFail = false
+	m.mu.Unlock()
+	if code, body := e.chat(t, false); code != 200 {
+		t.Fatalf("readable again: %d %s", code, body)
+	}
+	if opens, _ := m.snapshot(); len(opens) != 1 || opens[0].bid != bidOf(a40) {
+		t.Fatalf("readable again: opens %+v", opens)
 	}
 }
 

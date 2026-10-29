@@ -12,10 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -127,8 +125,10 @@ type fakeSess struct {
 }
 
 // fakeMarket is a stateful proxy-router with several providers for one
-// model: opens by model (router picks the first listed provider),
-// opens by bid, closes, session detail, rated bids and prompts.
+// model: rated bids (real shape), opens by bid, closes, session detail and
+// prompts. It also serves the gateway bids feed (/gateway_bids.json): every
+// provider's bid is healthy unless listed in unhealthy. Its by-model open
+// only counts (Uplink never uses it; asserted 0 at cleanup).
 type fakeMarket struct {
 	t           *testing.T
 	mu          sync.Mutex
@@ -143,6 +143,8 @@ type fakeMarket struct {
 	closeBody   string // router error text on a failed close
 	next        int
 	bidsFail    bool            // rated bids answer 500
+	unhealthy   map[string]bool // provider whose bid the bids feed marks degraded
+	byModel     int             // by-model opens (must stay 0)
 	openFail    map[string]bool // provider whose opens answer 500
 	// sessionLookup: "" normal; "fail" session detail answers 500;
 	// "empty" session detail has no provider.
@@ -151,7 +153,8 @@ type fakeMarket struct {
 
 func newFakeMarket(t *testing.T, providers ...string) *fakeMarket {
 	return &fakeMarket{t: t, providers: providers, behave: map[string]fakeProvider{},
-		behaveReq: map[string]func(int, http.ResponseWriter, *http.Request){}, prompts: map[string]int{}, sessions: map[string]*fakeSess{}}
+		behaveReq: map[string]func(int, http.ResponseWriter, *http.Request){}, prompts: map[string]int{}, sessions: map[string]*fakeSess{},
+		unhealthy: map[string]bool{}}
 }
 
 // bidOf is the fake bid id of a provider (0x + 64 hex, like the router's).
@@ -198,7 +201,22 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 
 func (m *fakeMarket) server() *httptest.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) { m.open(w, r, "") })
+	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.byModel++
+		m.mu.Unlock()
+		http.Error(w, `{"error":"by-model open not expected"}`, http.StatusInternalServerError)
+	})
+	m.t.Cleanup(func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.byModel != 0 {
+			m.t.Errorf("by-model opens = %d, want 0", m.byModel)
+		}
+	})
+	mux.HandleFunc("GET /gateway_bids.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bidsFeed(time.Now().Unix(), m.feedRows()...))
+	})
 	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) { m.open(w, r, r.PathValue("id")) })
 	mux.HandleFunc("POST /blockchain/sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
@@ -264,12 +282,8 @@ func (m *fakeMarket) server() *httptest.Server {
 			http.Error(w, `{"error":"bids unavailable"}`, http.StatusInternalServerError)
 			return
 		}
-		bids := []map[string]any{}
-		for i, p := range m.providers {
-			// Router shape: the outer ID is left unset (zero hash); the bid id is Bid.Id.
-			bids = append(bids, map[string]any{"ID": "0x" + strings.Repeat("0", 64), "Bid": map[string]any{"Id": bidOf(p), "Provider": p}, "Score": float64(10 - i)})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"bids": bids})
+		// Router shape: the outer ID is left unset (zero hash); the bid id is Bid.Id.
+		_, _ = w.Write(ratedRows(m.feedRowsLocked()...))
 	})
 	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
@@ -303,6 +317,25 @@ func (m *fakeMarket) server() *httptest.Server {
 	return ts
 }
 
+// feedRows is the market's bids, in rated order, with their health.
+func (m *fakeMarket) feedRows() []feedRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.feedRowsLocked()
+}
+
+func (m *fakeMarket) feedRowsLocked() []feedRow {
+	var out []feedRow
+	for _, p := range m.providers {
+		st := "healthy"
+		if m.unhealthy[p] {
+			st = "degraded"
+		}
+		out = append(out, feedRow{model: testModelID, bid: bidOf(p), prov: p, status: st})
+	}
+	return out
+}
+
 func (m *fakeMarket) snapshot() (opens []openRec, closes []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -324,7 +357,7 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	cat := mockCatalog(t)
 	t.Cleanup(cat.Close)
 	cfg := &config.Config{RouterURL: rt.URL, RouterUser: "admin", RouterPass: "routerpass", AdminPassword: "adminpass",
-		APIKeySeed: "failover-seed", DataDir: t.TempDir(), ActiveModelsURL: cat.URL,
+		APIKeySeed: "failover-seed", DataDir: t.TempDir(), ActiveModelsURL: cat.URL, GatewayBidsURL: rt.URL + "/gateway_bids.json",
 		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600, SessionRelease: true}
 	if edit != nil {
 		edit(cfg)
@@ -334,9 +367,8 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	pl := pool.New(rc, cfg.SessionDurationSec)
-	pl.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pl, rc, nil)
+	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
+	srv.pool.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	if cfg.WebPublicURL == "" {
 		cfg.WebPublicURL = "http://" + ts.Listener.Addr().String() // for the console's CSRF check

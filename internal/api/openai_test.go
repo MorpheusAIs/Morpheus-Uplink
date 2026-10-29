@@ -9,10 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -92,10 +90,14 @@ func TestChatRejectsBeforeSessionOpen(t *testing.T) {
 func newRouterWithChat(t *testing.T, opened *atomic.Int32, chat http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(ratedRows(testRow))
+	})
+	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
 		opened.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": "0xsession1"})
 	})
+	countByModel(t, mux)
 	mux.HandleFunc("POST /v1/chat/completions", chat)
 	mux.HandleFunc("GET /healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
@@ -132,7 +134,7 @@ func newServerAgainstRouter(t *testing.T, rt *httptest.Server, seed string) (*ht
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
+	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, cfg

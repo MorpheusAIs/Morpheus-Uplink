@@ -917,6 +917,7 @@
       <section id="statusOverview" aria-label="Status">
         <div class="sys-line" id="stats" role="status"></div>
         <div class="callout warn hidden" id="routerAuthBanner" role="status"></div>
+        <div class="sys-line hidden" id="feedStatus" role="status"></div>
         <div class="callout warn hidden" id="originWarn" role="alert"></div>
         <div class="tiles-head">
           <span data-copy="tilesHead"></span>
@@ -1381,6 +1382,12 @@ const UI_COPY = {
   // Admin changes are accepted only from WEB_PUBLIC_URL.
   originMismatch: (here, want) => 'This page is open at ' + here + ', but WEB_PUBLIC_URL is ' + want
     + '. Admin changes (keys, 2FA, sessions) are refused until they match: set WEB_PUBLIC_URL to the address you open (scheme and host) and redeploy.',
+  // Data feeds line (Status): gateway feed ages from /admin/status feeds.
+  feedsLabel: 'Data feeds',
+  feedModels: 'Models',
+  feedBids: 'Bids',
+  feedNotLoaded: 'not loaded yet',
+  feedStaleTip: 'This data feed has not updated for over 30 minutes. Uplink keeps using the last good copy, so requests continue, but provider health may be out of date.',
   // Status line
   healthy: 'Healthy',
   routerAuthFail: 'Router rejected Uplink\'s credential',
@@ -2820,6 +2827,7 @@ async function doRefresh() {
     renderSysLine(st.version || 'dev', rv, statusHealth(st), (st.sessions || []).filter(sessionIsReal).length);
     renderMasterKeyBanner(st);
     renderDiskStatus(st.disk || null);
+    renderFeedStatus(st.feeds || null);
 
     lastClaimableWei = mor.onHoldClaimableWei != null ? String(mor.onHoldClaimableWei) : '0';
     const hk = st.housekeep || {};
@@ -2904,6 +2912,50 @@ function diskMeterHTML(p) {
       <span>${fmtBytes(free)} free (${pctLabel})</span>
     </div>
   </div>`;
+}
+
+/** "4m ago" style age for a whole number of seconds. */
+function fmtFeedAge(sec) {
+  const n = Math.max(0, Math.floor(Number(sec) || 0));
+  if (n < 60) return n + 's ago';
+  if (n < 3600) return Math.floor(n / 60) + 'm ago';
+  if (n < 86400) return Math.floor(n / 3600) + 'h ago';
+  return Math.floor(n / 86400) + 'd ago';
+}
+
+/** Data feeds line: createElement + textContent only (never innerHTML). */
+function renderFeedStatus(feeds) {
+  const el = document.getElementById('feedStatus');
+  if (!el) return;
+  el.replaceChildren();
+  if (!feeds || typeof feeds !== 'object') { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const add = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    el.appendChild(n);
+    return n;
+  };
+  add('span', '', UI_COPY.feedsLabel);
+  for (const [key, label] of [['models', UI_COPY.feedModels], ['bids', UI_COPY.feedBids]]) {
+    const f = (feeds[key] && typeof feeds[key] === 'object') ? feeds[key] : {};
+    add('span', 'sep', '·').setAttribute('aria-hidden', 'true');
+    add('span', '', label + ' ');
+    if (f.loaded !== true || f.age_seconds == null) {
+      add('span', '', UI_COPY.feedNotLoaded);
+      continue;
+    }
+    const stale = f.stale === true;
+    add('span', stale ? 'bad' : '', 'updated ' + fmtFeedAge(Number(f.age_seconds)));
+    if (stale) {
+      const tip = add('span', 'tip', '\u24D8');
+      tip.tabIndex = 0;
+      tip.setAttribute('data-tip-key', 'feedStaleTip');
+      tip.style.marginLeft = '6px';
+      setTip(tip, UI_COPY.feedStaleTip);
+    }
+  }
 }
 
 function renderDiskStatus(disk) {

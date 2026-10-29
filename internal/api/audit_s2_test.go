@@ -14,10 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -161,7 +159,7 @@ func TestS2BootLoadsBothStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv2 := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
+	srv2 := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	evs := srv2.audit.Recent(500)
 	if !hasKind(evs, "key_reveal", "ok") || !hasKind(evs, "login", "fail") || !hasKind(evs, "login", "ok") {
 		t.Fatalf("boot ring missing events: %+v", evs)

@@ -10,11 +10,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -24,19 +23,27 @@ const testModelID = "0xabc123abc123abc123abc123abc123abc123abc123abc123abc123abc
 // mockRouter fakes the proxy-router endpoints the gateway uses.
 func mockRouter(t *testing.T, sessionsOpened *atomic.Int32) *httptest.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /blockchain/models/{id}/session", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != testModelID {
+			_, _ = w.Write(ratedRows())
+			return
+		}
+		_, _ = w.Write(ratedRows(testRow))
+	})
+	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
 		user, pass, _ := r.BasicAuth()
 		if user != "admin" || pass != "routerpass" {
 			http.Error(w, "bad auth", http.StatusUnauthorized)
 			return
 		}
-		if r.PathValue("id") != testModelID {
-			http.Error(w, "unknown model", http.StatusNotFound)
+		if r.PathValue("id") != testBid {
+			http.Error(w, "unknown bid", http.StatusNotFound)
 			return
 		}
 		sessionsOpened.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": "0xsession1"})
 	})
+	countByModel(t, mux)
 	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("session_id") != "0xsession1" {
 			http.Error(w, "missing session", http.StatusBadRequest)
@@ -66,7 +73,9 @@ func mockRouter(t *testing.T, sessionsOpened *atomic.Int32) *httptest.Server {
 
 func mockCatalog(t *testing.T) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"models":[{"Name":"test-model","Id":"` + testModelID + `","Tags":["chat"]}]}`))
+		// Real shape; testBid is healthy in bidDetail (the health fallback
+		// while no bids feed is set).
+		_, _ = w.Write(modelsFeed(time.Now().Unix(), "test-model", testRow))
 	}))
 }
 
@@ -104,7 +113,7 @@ func newTestServerWith(t *testing.T, edit func(*config.Config)) (*httptest.Serve
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
+	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	u, err := url.Parse(ts.URL)

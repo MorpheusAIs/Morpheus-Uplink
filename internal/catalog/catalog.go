@@ -216,6 +216,14 @@ func (c *Catalog) WithBidsURL(bidsURL string) *Catalog {
 	return c
 }
 
+// SetClock replaces the catalog clock (feed ages, staleness, TTLs and the
+// last_updated skew check). For tests; call before the catalog is used.
+func (c *Catalog) SetClock(now func() time.Time) {
+	c.mu.Lock()
+	c.now = now
+	c.mu.Unlock()
+}
+
 // GatewayBidsURL returns the bids feed URL, if set.
 func (c *Catalog) GatewayBidsURL() string { return c.bidsURL }
 

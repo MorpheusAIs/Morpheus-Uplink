@@ -253,7 +253,7 @@ func parseBidDetail(raw []byte, now time.Time) *detailParse {
 	var file struct {
 		LastUpdated json.RawMessage `json:"last_updated"`
 		Models      []struct {
-			ID        string `json:"Id"`
+			ID        string            `json:"Id"`
 			BidDetail []json.RawMessage `json:"bidDetail"`
 		} `json:"models"`
 	}

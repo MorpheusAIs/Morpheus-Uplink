@@ -8,9 +8,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -47,7 +45,7 @@ func newServerWithRouter(t *testing.T, rt *httptest.Server) (*httptest.Server, *
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, 600), rc, nil)
+	srv := wiredServer(cfg, st, rc, 600)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	u, _ := url.Parse(ts.URL)

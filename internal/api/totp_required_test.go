@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/adminauth"
-	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/config"
-	"github.com/absgrafx/morpheus-uplink/internal/pool"
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 	"github.com/absgrafx/morpheus-uplink/internal/store"
 )
@@ -89,7 +87,7 @@ func TestRequireSessionPollDoesNotExtendIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
-	srv := NewServer(cfg, st, catalog.New(cfg.ActiveModelsURL), pool.New(rc, cfg.SessionDurationSec), rc, nil)
+	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	u, err := url.Parse(ts.URL)
