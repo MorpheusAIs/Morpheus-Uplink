@@ -13,7 +13,7 @@
 #                /admin/status and the status file; a second SIGKILL is
 #                idempotent; an empty or {} catalog closes nothing live; a
 #                failing list holds opens and closes nothing, then recovers
-#                closing expired only; a slow close does not block opens;
+#                closing expired only; a slow close delays an open by at most one close;
 #                a model id that differs only by case is reused, never closed;
 #                then docker stop closes the sessions before exit, timed.
 #  failover      a client 400 is relayed (no close, no open); a 402 on
@@ -285,9 +285,12 @@ for id in "$SA" "$SB" "$SX"; do [ "$(sess_field "$id" ClosedAt)" = 0 ] || fail "
 [ "$(chat e2e-alpha)" = 200 ] && [ "$(opens)" = "$o1" ] || fail "inference after recovery"
 echo "OK list failure: no closes, no opens while failing; recovery closed expired only"
 
-echo "== sessions: slow close does not block opens =="
+echo "== sessions: slow closes delay an open by at most one close =="
+# Boot closes run in the wallet slot one close per hold, so a waiting open
+# goes next after the close in progress, ahead of the remaining closes.
 SE3=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)
-slow() { mockctl POST "/e2e/slow-close?sec=20" >/dev/null; }
+SE4=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)
+slow() { mockctl POST "/e2e/slow-close?sec=12" >/dev/null; }
 n0=$(nsum)
 kill_restart --before-start slow
 closing() { status_json | jq -e '.sessionReconcile.state == "closing"' >/dev/null; }
@@ -296,13 +299,13 @@ o2=$(opens); t0=$(date +%s)
 [ "$(chat e2e-gamma)" = 200 ] || fail "open during slow close"
 t1=$(date +%s)
 [ "$(opens)" = $((o2 + 1)) ] || fail "expected exactly one new open for e2e-gamma"
-[ $((t1 - t0)) -lt 10 ] || fail "open waited $((t1 - t0))s behind a slow close"
-closing || fail "close finished early; slow-close not exercised"
+[ $((t1 - t0)) -lt 18 ] || fail "open waited $((t1 - t0))s, more than one slow close"
+closing || fail "closes finished before the open; the open did not go between closes"
 mockctl POST "/e2e/slow-close?sec=0" >/dev/null
-wait_for "slow close done" 40 recovered
-[ "$(sess_field "$SE3" ClosedAt)" != 0 ] || fail "slow close did not complete"
-echo "TIMING open during slow close: $((t1 - t0))s"
-echo "OK slow close: opens proceed while closes run in the background"
+wait_for "slow close done" 60 recovered
+for id in "$SE3" "$SE4"; do [ "$(sess_field "$id" ClosedAt)" != 0 ] || fail "slow close ${id:0:10} did not complete"; done
+echo "TIMING open during slow closes: $((t1 - t0))s"
+echo "OK slow close: an open waits for at most the close in progress"
 
 echo "== sessions: model id differs only by case (adopted, reused, never closed) =="
 SD=$(mockctl POST "/e2e/seed-session?model=0x$(printf 'D4%.0s' $(seq 1 32))&ends_in=3600" | jq -r .id)
