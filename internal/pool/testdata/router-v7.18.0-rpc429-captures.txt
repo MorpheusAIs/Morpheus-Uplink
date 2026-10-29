@@ -1,0 +1,27 @@
+# Router v7.18.0 open-error texts captured from the router's own code
+# (open by bid and its open-transaction path, single RPC URL, escalator
+# included) with a local JSON-RPC stub answering HTTP 429 for one method
+# per step. Format: step<TAB>class<TAB>text. The class is for one router
+# RPC URL, the window retry unused and a 1s open POST. The transaction
+# hash in the receipt-wait text is replaced with zeros.
+#
+# step                       stub method answering 429
+# bid_read                   every method (supply and budget cached)
+# transact_opts              eth_chainId
+# gas_price                  eth_gasPrice (legacy transactions)
+# gas_tip                    eth_maxPriorityFeePerGas
+# nonce                      eth_getTransactionCount
+# build_estimate             eth_estimateGas
+# send                       eth_sendRawTransaction
+# receipt_wait               eth_getTransactionReceipt
+# *_empty_body               as above, 429 with an empty body
+bid_read	transient_presend	failed to get bid: 429 Too Many Requests: Too Many Requests
+bid_read_empty_body	transient_presend	failed to get bid: 429 Too Many Requests
+transact_opts	transient_window	failed to get transactOpts: 429 Too Many Requests: Too Many Requests
+gas_price	transient_window	failed to get transactOpts: 429 Too Many Requests: Too Many Requests
+gas_tip	transient_window	failed to send transaction: open session failed: failed to get initial gas prices: 429 Too Many Requests: Too Many Requests
+nonce	transient_window	failed to send transaction: open session failed: failed to get nonce: 429 Too Many Requests: Too Many Requests
+build_estimate	transient_window	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests: Too Many Requests
+build_estimate_empty_body	transient_window	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests
+send	maybe_sent	failed to send transaction: open session failed: failed to send transaction: 429 Too Many Requests: Too Many Requests
+receipt_wait	maybe_sent	failed to send transaction: open session failed: transaction could not be confirmed on-chain — the network may be congested, try again shortly. Original: transaction not mined after all escalation attempts: last tx 0x0000000000000000000000000000000000000000000000000000000000000000
