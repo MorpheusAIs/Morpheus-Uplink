@@ -81,7 +81,7 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Presence only: whether the router's RPC is set (the value is not used).
+      # Presence only: whether the router's RPC is set (the value is never logged).
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
@@ -115,8 +115,6 @@ services:
       - MOR_TOKEN_ADDRESS=${MOR_TOKEN_ADDRESS:-0x7431ada8a591c955a994a21710752ef9b882b8e3}
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to admin:password}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Presence only: whether the router's RPC is set (the value is not used).
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - AUTH_CONFIG_FILE_PATH=/app/data/proxy.conf
       - COOKIE_FILE_PATH=/app/data/.cookie
       - ENVIRONMENT=production

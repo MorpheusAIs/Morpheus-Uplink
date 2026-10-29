@@ -89,7 +89,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_KEY_SEED=${API_KEY_SEED}
       - WEB_PUBLIC_URL=http://localhost:8080
-      # Presence only: whether the router's RPC is set (the value is not used).
+      # Presence only: whether the router's RPC is set (the value is never logged).
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - UPLINK_DEV_HTTP=true
       - TRUSTED_PROXY_CIDR=172.28.0.0/16

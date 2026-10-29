@@ -48,7 +48,7 @@ services:
       # Same cookie as the router; uplink accepts COOKIE_CONTENT as auth.
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Presence only: whether the router's RPC is set (the value is not used).
+      # Presence only: whether the router's RPC is set (the value is never logged).
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
     configs:
       - source: uplink_bake_env
@@ -77,8 +77,6 @@ services:
       - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
-      # Presence only: whether the router's RPC is set (the value is not used).
-      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
     configs:
       - source: router_network_env
         target: /app/.env
