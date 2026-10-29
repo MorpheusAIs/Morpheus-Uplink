@@ -219,7 +219,7 @@ no_full_ids_in_audit() {
 SA=$(sessions | jq -r --arg m "$MA" '[.sessions[] | select(.ModelAgentId == $m and .OpenedBy == "uplink")][0].Id')
 [ -n "$SA" ] && [ "$SA" != null ] || fail "uplink opened no session for e2e-alpha"
 SB=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=3600" | jq -r .id)       # adoptable
-SDUP=$(mockctl POST "/e2e/seed-session?model=$MA&ends_in=300" | jq -r .id)      # duplicate of SA
+SDUP=$(mockctl POST "/e2e/seed-session?model=$MA&ends_in=300&age=300" | jq -r .id)  # duplicate of SA, left by an earlier process (a young one is skipped)
 SEXP=$(mockctl POST "/e2e/seed-session?model=$MB&ends_in=30" | jq -r .id)       # inside expiry buffer
 SX=$(mockctl POST "/e2e/seed-session?model=$MX&ends_in=3600" | jq -r .id)       # model not in catalog
 open0=$(opens)
