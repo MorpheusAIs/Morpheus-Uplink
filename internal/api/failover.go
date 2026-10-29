@@ -117,8 +117,9 @@ func relayRouterError(w http.ResponseWriter, err error) {
 		return
 	}
 	// The full router text goes to the ops log only; the client gets it
-	// scrubbed (scrubRouterText) and capped.
-	warnf("api: router error %d on %s %s: %s", se.Code, se.Method, se.Path, se.Body)
+	// scrubbed (scrubRouterText) and capped. This line keeps the raw text
+	// on purpose (warnf would redact it).
+	slog.Warn(fmt.Sprintf("api: router error %d on %s %s: %s", se.Code, se.Method, se.Path, se.Body))
 	code := se.Code
 	if code < 400 || code > 599 {
 		code = http.StatusBadGateway

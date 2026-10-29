@@ -98,8 +98,10 @@ type StatusError struct {
 	Body   string
 }
 
+// Error is the redacted form (see Redact); Body keeps the raw router text
+// for classification.
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("%s %s: status %d: %s", e.Method, e.Path, e.Code, e.Body)
+	return Redact(fmt.Sprintf("%s %s: status %d: %s", e.Method, e.Path, e.Code, e.Body))
 }
 
 // Error kinds for operator-facing messages.

@@ -11,6 +11,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
 // /node/* is an admin-gated passthrough to the proxy-router API (Swagger,
@@ -275,7 +277,7 @@ func (s *Server) nodeProxy() http.Handler {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "router passthrough: " + err.Error()})
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "router passthrough: " + router.SafeError(err)})
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

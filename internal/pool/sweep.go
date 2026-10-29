@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -313,7 +314,7 @@ func (p *Pool) scan(ctx context.Context, tok *slotToken, mode int) (scanOut, err
 	}
 	open, addr, err := p.readOpen(mk)
 	if err != nil {
-		p.setRehydrateErr(err.Error())
+		p.setRehydrateErr(router.SafeError(err))
 		return scanOut{}, err
 	}
 	out := p.applyScan(open, scanStart, mode)
@@ -692,7 +693,7 @@ func (p *Pool) closeWithToken(ctx context.Context, tok *slotToken, id, reason, s
 		p.closingIDs[lid] = p.now().Add(routerCloseMaxLife)
 		p.closedByUs[lid] = true
 		p.mu.Unlock()
-		slog.Warn("pool: close cut; the session stays marked closing until it is seen closed", "session", short(id), "err", err)
+		slog.Warn("pool: close cut; the session stays marked closing until it is seen closed", "session", short(id), "kind", cutKind(err))
 		emit("failed")
 		return closeCut, err
 	}
@@ -808,4 +809,19 @@ func (p *Pool) RunSweep(ctx context.Context) {
 			again = time.After(sweepRetryEvery)
 		}
 	}
+}
+
+// cutKind names a cut close call for the log without its text (which
+// names the router path and the full session id).
+func cutKind(err error) string {
+	var se *router.StatusError
+	switch {
+	case errors.As(err, &se):
+		return fmt.Sprintf("status_%d", se.Code)
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case router.IsUplinkTimeout(context.Background(), err):
+		return "timeout"
+	}
+	return "transport"
 }

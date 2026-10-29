@@ -505,7 +505,7 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 			windowOK := p.windowRetryOK() && op.windowRetries < maxWindowRetries
 			class := classifyOpenErr(err, elapsed, windowOK)
 			slog.Warn("pool: open failed", "model", op.model, "bid", short(b.ID), "provider", short(b.Provider),
-				"class", class.String(), "after", elapsed.Round(time.Millisecond), "err", err)
+				"class", class.String(), "after", elapsed.Round(time.Millisecond), "err", router.SafeError(err))
 			switch class {
 			case providerFault:
 				p.dropAttempt(att)
@@ -797,7 +797,7 @@ func (p *Pool) FailoverCtx(ctx context.Context, modelID, failedID string, o Fail
 		return openResult{}, cerr
 	})
 	if err != nil || len(cands) == 0 {
-		slog.Warn("pool: failover: no healthy alternate; keeping session", "model", modelID, "session", short(failedID), "err", err)
+		slog.Warn("pool: failover: no healthy alternate; keeping session", "model", modelID, "session", short(failedID), "err", router.SafeError(err))
 		if err == nil {
 			return res, ErrNoAlternate
 		}
@@ -812,7 +812,7 @@ func (p *Pool) FailoverCtx(ctx context.Context, modelID, failedID string, o Fail
 		if err := p.closeBounded(failedID); err != nil {
 			res.CloseFailed = true
 			p.failoverCloseFailed(failedID)
-			slog.Warn("pool: failover: close failed (retired; not re-adopted)", "model", modelID, "session", short(failedID), "err", err)
+			slog.Warn("pool: failover: close failed (retired; not re-adopted)", "model", modelID, "session", short(failedID), "err", router.SafeError(err))
 		}
 	} else {
 		res.CloseDeferred = true

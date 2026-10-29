@@ -210,7 +210,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 
 	if err := r.pool.RehydrateForce(); err != nil {
 		warnf("housekeep: rehydrate/close scan: %v", err)
-		res.Message = "close scan: " + err.Error()
+		res.Message = "close scan: " + router.SafeError(err)
 	} else {
 		res.ClosedViaScan = true
 	}
@@ -240,7 +240,7 @@ func (r *Runner) Run(ctx context.Context) Result {
 	hold, err := r.cfg.Router.UserStakesOnHold(1)
 	if err != nil {
 		res.Status = "error"
-		res.Message = "stakes/onhold: " + err.Error()
+		res.Message = "stakes/onhold: " + router.SafeError(err)
 		log.Printf("housekeep: %s", res.Message)
 		return res
 	}
@@ -285,11 +285,11 @@ func (r *Runner) Run(ctx context.Context) Result {
 				break
 			}
 			if len(hashes) > 0 && strings.Contains(strings.ToLower(err.Error()), "execution reverted") {
-				res.Message = "withdraw stopped after revert (likely drained): " + err.Error()
+				res.Message = "withdraw stopped after revert (likely drained): " + router.SafeError(err)
 				break
 			}
 			res.Status = "error"
-			res.Message = err.Error()
+			res.Message = router.SafeError(err)
 			res.TxHashes = hashes
 			moved := new(big.Int).Sub(startClaimable, hold.Claimable)
 			if moved.Sign() < 0 {

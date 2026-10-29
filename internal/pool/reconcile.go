@@ -505,7 +505,7 @@ func (p *Pool) StartupReconcile(ctx context.Context, configured ConfiguredModels
 				state = "retrying"
 			}
 		}
-		msg := err.Error()
+		msg := router.SafeError(err)
 		p.setState(func(s *ReconcileState) { s.State, s.Attempts, s.LastError = state, attempts, msg })
 		select {
 		case <-ctx.Done():
