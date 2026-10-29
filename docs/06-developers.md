@@ -616,7 +616,14 @@ the pool stays in charge of which session is open. Turning the
   not a JSON string (a number, bool, null, object, or no status at all) is
   unusable: the health parse skips and counts it, and a `bidDetail` row
   like that is dropped from the model list too, so it never sets a listed
-  price or changes which model a shared name resolves to. Each feed is refetched
+  price or changes which model a shared name resolves to. *Listed price
+  and shared names:* a model's listed price is its cheapest `bidDetail`
+  bid whose status is `healthy` (case and surrounding spaces ignored); an
+  empty or any other status does not count. A model with no healthy bid
+  still lists, at its cheapest positive bid. Models sharing a name resolve
+  to the one with the cheapest healthy bid; one with no healthy bid never
+  wins over one that has one. The model list is not filtered by health.
+  Each feed is refetched
   after 5 minutes. A failed fetch (non-200, any redirect, more than 8 MiB
   decoded, malformed, no usable row, a `last_updated` that is missing,
   not an integer, more than 5 minutes in the future, or older than the

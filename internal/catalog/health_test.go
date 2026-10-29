@@ -357,12 +357,17 @@ func detailRowP(bidID, status, pps string) string {
 
 // sharedModels is a models file where M and N share a name: M's cheapest
 // healthy bid (1000) beats N's (2000), so the name resolves to M. bad, when
-// set, adds to N a row with that raw status that is CHEAPER (1) than every
+// set, adds to N a row with that raw status ("absent": no status) that is
+// CHEAPER (1) than every
 // good row: if it were kept it would become N's List price and flip the
 // shared name to N.
 func sharedModels(bad string) string {
 	n := []string{detailRowP(bid1, healthy, "2000")}
-	if bad != "" {
+	switch bad {
+	case "":
+	case "absent":
+		n = append(n, fmt.Sprintf(`{"bidId":%q,"providerId":%q,"pricePerSecond":"1","priceMorPerHour":1}`, bid3, prv))
+	default:
 		n = append(n, detailRowP(bid3, bad, "1"))
 	}
 	return modelsFile(unix(t0),
@@ -462,8 +467,107 @@ func TestCheapNonStringStatusRowNoListOrResolveEffect(t *testing.T) {
 	}
 }
 
+// TestNonHealthyStatusRowNoListPriceOrResolveEffect: a row with a string
+// status other than "healthy" ("", "degraded", "unhealthy", blank), or with
+// no status, that is cheaper than every healthy row of a shared-name model
+// never undercuts that model's listed price and never changes which model
+// the name resolves to: every model's lowest bid and prices, and Resolve,
+// equal the same file without the row. A string-status row stays listed
+// (List rows are not filtered by health).
+func TestNonHealthyStatusRowNoListPriceOrResolveEffect(t *testing.T) {
+	lowest := func(t *testing.T, c *Catalog) map[string]string {
+		t.Helper()
+		l, err := c.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		out := map[string]string{}
+		for _, m := range l {
+			b, ok := m.LowestBid()
+			out[m.ID] = fmt.Sprintf("%+v %v mph=%v wei=%v", b, ok, m.LowestMorPerHour(), m.LowestPricePerSecondWei())
+		}
+		return out
+	}
+	base := newHarness(t)
+	base.bids.fail(http.StatusInternalServerError)
+	base.models.set(sharedModels(""))
+	want := fmt.Sprint(lowest(t, base.c))
+	for _, bad := range []string{`""`, `"degraded"`, `"unhealthy"`, `" "`, "absent"} {
+		t.Run(bad, func(t *testing.T) {
+			h := newHarness(t)
+			h.bids.fail(http.StatusInternalServerError)
+			h.models.set(sharedModels(bad))
+			if id, err := h.c.Resolve("example-shared"); err != nil || id != mdlM {
+				t.Fatalf("Resolve(example-shared) = %s %v, want %s", id, err, mdlM)
+			}
+			if got := fmt.Sprint(lowest(t, h.c)); got != want {
+				t.Fatalf("prices changed by the non-healthy row:\n got %s\nwant %s", got, want)
+			}
+			l, _ := h.c.List()
+			listed := false
+			for _, m := range l {
+				for _, d := range m.BidDetail {
+					listed = listed || d.BidID == bid3
+				}
+				if m.ID != mdlN {
+					continue
+				}
+				if b, ok := m.LowestBid(); !ok || b.PricePerSecond != "2000" || m.LowestPricePerSecondWei().String() != "2000" {
+					t.Fatalf("N lowest bid = %+v %v, want the healthy 2000", b, ok)
+				}
+			}
+			if listed != (bad != "absent") {
+				t.Fatalf("bad row listed = %v for %s", listed, bad)
+			}
+			if set, err := h.c.HealthyBidIDs(mdlN); err != nil {
+				t.Fatalf("HealthyBidIDs: %v", err)
+			} else if _, in := set[bid3]; in {
+				t.Fatalf("non-healthy row in health set: %v", set)
+			}
+		})
+	}
+}
+
+// TestNoHealthyRowsModelNeverWinsSharedName: a model whose rows are all
+// non-healthy ("", "degraded", no status) but cheaper never wins a shared
+// name over a model with a healthy bid, and still lists, priced through the
+// fallback at its cheapest positive bid.
+func TestNoHealthyRowsModelNeverWinsSharedName(t *testing.T) {
+	h := newHarness(t)
+	h.bids.fail(http.StatusInternalServerError)
+	h.models.set(modelsFile(unix(t0),
+		modelRow(mdlM, "example-shared", detailRowP(bid1, `""`, "5"), detailRowP(bid2, degraded, "3"),
+			fmt.Sprintf(`{"bidId":%q,"providerId":%q,"pricePerSecond":"1","priceMorPerHour":1}`, bid3, prv)),
+		modelRow(mdlN, "example-shared", detailRowP(bid4, healthy, "1000"))))
+	if id, err := h.c.Resolve("example-shared"); err != nil || id != mdlN {
+		t.Fatalf("Resolve(example-shared) = %s %v, want the healthy model %s", id, err, mdlN)
+	}
+	l, err := h.c.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(l) != 2 {
+		t.Fatalf("List = %+v, want both models", l)
+	}
+	for _, m := range l {
+		b, ok := m.LowestBid()
+		switch m.ID {
+		case mdlM:
+			// No healthy row: listed through the fallback at its cheapest
+			// positive bid (the no-status row was dropped at decode).
+			if !ok || b.BidID != bid2 || m.LowestPricePerSecondWei().String() != "3" || len(m.BidDetail) != 2 {
+				t.Fatalf("no-healthy model = %+v, lowest %+v %v", m, b, ok)
+			}
+		case mdlN:
+			if !ok || b.BidID != bid4 || m.LowestPricePerSecondWei().String() != "1000" {
+				t.Fatalf("healthy model lowest = %+v %v", b, ok)
+			}
+		}
+	}
+}
+
 // TestBidDetailNonStringStatusSkipped: a bidDetail row whose status is not
-// a JSON string ("status": 1, true, null, {}) is unusable: skipped and
+// a JSON string ("status": 1, true, null, {}, or no status) is unusable: skipped and
 // counted by the health parse and dropped from the list at decode. For each
 // value, with the bad row cheaper than every good row on a shared-name
 // model: the models file still loads (no failure, no rollback), the other
@@ -476,7 +580,7 @@ func TestBidDetailNonStringStatusSkipped(t *testing.T) {
 	base.models.set(sharedModels(""))
 	base.wantSet(t, mdlN, bid1)
 	want := catalogView(t, base.c)
-	for _, bad := range []string{`1`, `true`, `null`, `{}`} {
+	for _, bad := range []string{`1`, `true`, `null`, `{}`, "absent"} {
 		t.Run(bad, func(t *testing.T) {
 			lb := captureLogs(t)
 			h := newHarness(t)

@@ -13,12 +13,14 @@ import (
 
 // TestModelsPriceIgnoresNonStringStatusRow: a bidDetail row whose status is
 // not a JSON string (1, true, null, {}, or absent) is dropped from the
-// catalog, so a cheaper row like that never becomes the price /v1/models
-// shows: the listed price is the one the file gives without it.
+// catalog, and a row whose status is a string other than "healthy" ("",
+// "degraded") does not count while a healthy bid exists, so a cheaper row
+// like that never becomes the price /v1/models shows: the listed price is
+// the one the file gives without it.
 func TestModelsPriceIgnoresNonStringStatusRow(t *testing.T) {
 	prov := "0x" + strings.Repeat("a", 40)
 	good := `{"bidId":"0x` + strings.Repeat("b1", 32) + `","providerId":"` + prov + `","status":"healthy","pricePerSecond":"100","priceMorPerHour":1}`
-	for _, bad := range []string{`1`, `true`, `null`, `{}`, "absent"} {
+	for _, bad := range []string{`1`, `true`, `null`, `{}`, "absent", `""`, `"degraded"`} {
 		t.Run(bad, func(t *testing.T) {
 			st := `,"status":` + bad
 			if bad == "absent" {
