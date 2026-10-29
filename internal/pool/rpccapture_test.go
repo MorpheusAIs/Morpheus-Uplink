@@ -23,7 +23,7 @@ var ipv4 = regexp.MustCompile(`[0-9]{1,3}(\.[0-9]{1,3}){3}`)
 
 // TestClassifyCapturedOpenBody classifies a body captured by the
 // real-router e2e (unknown-bid open) with the same classifier the pool
-// uses, as an open error from a single-URL router with the window retry
+// uses, as an open error with the operator RPC set and the window retry
 // unused. Skipped without -open-body.
 func TestClassifyCapturedOpenBody(t *testing.T) {
 	if *openBodyFile == "" {

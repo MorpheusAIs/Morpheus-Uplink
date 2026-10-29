@@ -419,29 +419,6 @@ func (c *Client) CloseSessionCtx(ctx context.Context, sessionID string) error {
 	return c.doJSONCtx(ctx, http.MethodPost, path, map[string]any{}, nil)
 }
 
-// RPCURLCount asks the router how many chain RPC URLs it uses (GET
-// /config, DerivedConfig.EthNodeURLs). Only the count is decoded: the
-// URLs can embed RPC keys, so they are never read out, logged, stored or
-// put in an error.
-func (c *Client) RPCURLCount(ctx context.Context) (int, error) {
-	var res struct {
-		DerivedConfig struct {
-			EthNodeURLs []json.RawMessage `json:"EthNodeURLs"`
-		} `json:"DerivedConfig"`
-	}
-	status, raw, err := c.roundTrip(ctx, http.MethodGet, "/config", nil)
-	if err != nil {
-		return 0, errors.New("GET /config: request failed")
-	}
-	if status < 200 || status >= 300 {
-		return 0, fmt.Errorf("GET /config: status %d", status)
-	}
-	if json.Unmarshal(raw, &res) != nil {
-		return 0, errors.New("GET /config: unreadable answer")
-	}
-	return len(res.DerivedConfig.EthNodeURLs), nil
-}
-
 // Balance returns the router wallet's ETH and MOR balances (wei-scale ints).
 func (c *Client) Balance() (json.RawMessage, error) {
 	var raw json.RawMessage

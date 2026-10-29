@@ -1,9 +1,10 @@
 package pool
 
 // Open-error classification and what each class does on the
-// open path: provider fault → cool and walk; proven pre-send rate
-// limit → back off on the same bid; anything else → maybe sent: one open
-// POST, reconcile, never re-opened.
+// open path: provider fault → cool and walk; proven pre-send chain-stage
+// error → same bid (backoff with the operator's RPC set, one attempt
+// without); anything else → maybe sent: one open POST, reconcile, never
+// re-opened.
 
 import (
 	"bufio"
@@ -60,8 +61,8 @@ func status500(text string) error {
 	return &router.StatusError{Code: http.StatusInternalServerError, Body: routerErr(text)}
 }
 
-// Every fixture line classifies as stated (one RPC URL, window retry
-// unused).
+// Every fixture line classifies as stated (operator RPC set, window
+// retry unused).
 func TestClassifierRouterFixture(t *testing.T) {
 	cases := fixtureCases(t)
 	if len(cases) < 100 {
@@ -115,8 +116,7 @@ func TestClassifierFixtureCoversEveryPrefix(t *testing.T) {
 
 // TestRouterRateLimitMarkers: each router marker after each anchored
 // prefix is transient; the same words inside a provider-stage text are a
-// provider fault; -32005 alone is a provider fault; 429 with revert, or
-// 429 only inside a longer number or hex string, is not transient.
+// provider fault.
 func TestRouterRateLimitMarkers(t *testing.T) {
 	markers := []string{"429 Too Many Requests", "Too Many Requests", "rate limit", "usage limit", "quota exceeded",
 		"request limit", "daily limit", "monthly limit", "exceeded its compute units per second capacity"}
@@ -137,17 +137,43 @@ func TestRouterRateLimitMarkers(t *testing.T) {
 			}
 		}
 	}
-	for _, tc := range []struct{ text, why string }{
-		{stageBid + "-32005", "a numeric code alone"},
-		{stageApprove + "429 Too Many Requests: execution reverted", "revert"},
-		{stageBid + "nonce 14290 too high", "429 inside a number"},
-		{stageBid + "0xabc429def", "429 inside hex"},
-		{stageBuild + "execution reverted: 0x429a", "revert data"},
-	} {
-		if got := classifyOpenErr(status500(tc.text), time.Second, true); got != providerFault {
-			t.Errorf("%s (%s): %s, want provider_fault", tc.text, tc.why, got)
+}
+
+// TestChainStageErrorNeverProviderFault: any error after a pre-send
+// chain-stage prefix (no rate-limit words, a timeout, a revert, a bare
+// code) is transient on the same bid, never a provider fault; a proven
+// P* the same; a slow P*, or a P* without the operator's RPC, is maybe
+// sent.
+func TestChainStageErrorNeverProviderFault(t *testing.T) {
+	tails := []string{"-32005", "429 Too Many Requests: execution reverted", "nonce 14290 too high", "0xabc429def",
+		"execution reverted: 0x429a", "context deadline exceeded", "Post \"https://rpc\": dial tcp: i/o timeout", "502 Bad Gateway"}
+	for _, tail := range tails {
+		for _, p := range preSendPrefixes {
+			for _, windowOK := range []bool{true, false} {
+				if got := classifyOpenErr(status500(p+tail), 30*time.Second, windowOK); got != transientPreSend {
+					t.Errorf("%q (windowOK %v): %s, want transient_presend", p+tail, windowOK, got)
+				}
+			}
+		}
+		for _, p := range windowPrefixes {
+			if got := classifyOpenErr(status500(p+tail), 2*time.Second, true); got != transientWindow {
+				t.Errorf("%q fast: %s, want transient_window", p+tail, got)
+			}
+			if got := classifyOpenErr(status500(p+tail), 25*time.Second, true); got != maybeSent {
+				t.Errorf("%q slow: %s, want maybe_sent", p+tail, got)
+			}
+			if got := classifyOpenErr(status500(p+tail), 2*time.Second, false); got != maybeSent {
+				t.Errorf("%q without the operator RPC: %s, want maybe_sent", p+tail, got)
+			}
 		}
 	}
+}
+
+// TestChainStageTimeoutSameBid: a pre-send chain-stage timeout with the
+// operator's RPC set retries the same bid after one backoff step and
+// cools nothing.
+func TestChainStageTimeoutSameBid(t *testing.T) {
+	sameBidRetry(t, routerErr(stageBid+"context deadline exceeded"), time.Second)
 }
 
 // TestBareWordsNotTransient: unanchored rate-limit or timeout words in a
@@ -388,48 +414,61 @@ func TestWindowRetryAtMostOnce(t *testing.T) {
 	}
 }
 
-// TestMultiURLDisablesWindowRetry: with 7 RPC URLs, or /config failing,
-// a fast P* is maybe-sent (0 retries) and rpc_url_count is logged once;
-// with 1 URL, one retry. No URL text reaches logs, errors or status.
-func TestMultiURLDisablesWindowRetry(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		urls, status  int
-		wantPOSTs     int
-		wantCountWarn int
-	}{
-		{"seven urls", 7, 0, 1, 1},
-		{"config 500", 1, 500, 1, 1},
-		{"config 403", 1, 403, 1, 1},
-		{"one url", 1, 0, 2, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newFakeClock()
-			lr, p := newLeaseRouter(t, c)
-			installSleep(p, c)
-			logs := captureLogs(t)
-			lr.set(func(lr *leaseRouter) { lr.rpcURLs, lr.configStatus = tc.urls, tc.status })
-			p.RefreshRPCURLCount(context.Background())
-			p.RefreshRPCURLCount(context.Background()) // rate-limited: still one line
-			lr.setOpenFault(faultSeq(rl429(stageGas)))
+// TestBlankRPCOneAttempt: without the operator's RPC (the router uses its
+// own RPC list and retries), a pre-send chain-stage error of any kind is
+// one open POST on the top bid, no backoff, no cooling, no walk, and an
+// immediate router_transient with Retry-After 1..4 s. A fast P* is maybe
+// sent (one POST, reconcile). With the operator's RPC set, the same
+// pre-send error backs off on the same bid.
+func TestBlankRPCOneAttempt(t *testing.T) {
+	for _, body := range []string{rl429(stageBid), rl429(stageApprove), routerErr(stageBid + "context deadline exceeded")} {
+		t.Run(body, func(t *testing.T) {
+			_, lr, p, sl := rpcEnv(t)
+			p.SetProvidedRPC(false)
+			lr.setOpenFault(faultBurst(-1, body, false))
 			_, _, err := p.Acquire(modelB, AcquireOpts{})
-			if n := len(lr.bidsTried()); n != tc.wantPOSTs {
-				t.Fatalf("open POSTs = %d, want %d (err %v)", n, tc.wantPOSTs, err)
+			assertTransient(t, err, time.Second, 4*time.Second)
+			if n := len(lr.bidsTried()); n != 1 {
+				t.Fatalf("open POSTs = %d, want 1", n)
 			}
-			if n := logs.count("msg=rpc_url_count"); n != tc.wantCountWarn {
-				t.Fatalf("rpc_url_count lines = %d, want %d:\n%s", n, tc.wantCountWarn, logs)
-			}
-			out := logs.String()
-			if err != nil {
-				out += err.Error()
-			}
-			for _, s := range p.ChainOpen() {
-				out += s.SessionID + s.ModelID
-			}
-			out += p.RehydrateError()
-			if strings.Contains(out, rpcURLSecret) || strings.Contains(out, ".example/") {
-				t.Fatalf("an RPC URL leaked:\n%s", out)
+			assertOnlyBid(t, lr, bidID(modelB, leaseProv1))
+			assertNoCooling(t, p, modelB)
+			if s := sl.sleeps(); len(s) != 0 {
+				t.Fatalf("sleeps %v, want none", s)
 			}
 		})
+	}
+	t.Run("fast window stage", func(t *testing.T) {
+		_, lr, p, _ := rpcEnv(t)
+		p.SetProvidedRPC(false)
+		lr.setOpenFault(faultSeq(rl429(stageGas)))
+		_, _, err := p.Acquire(modelB, AcquireOpts{})
+		assertTransient(t, err, time.Second, 4*time.Second)
+		if n := len(lr.bidsTried()); n != 1 {
+			t.Fatalf("open POSTs = %d, want 1 (maybe sent)", n)
+		}
+		assertNoCooling(t, p, modelB)
+	})
+	t.Run("provided", func(t *testing.T) {
+		_, lr, p, _ := rpcEnv(t)
+		lr.setOpenFault(faultSeq(rl429(stageGas)))
+		if _, res := mustAcquire(t, p, modelB, AcquireOpts{}); !res.Opened {
+			t.Fatalf("result %+v, want opened", res)
+		}
+		if n := len(lr.bidsTried()); n != 2 {
+			t.Fatalf("open POSTs = %d, want 2 (one window retry)", n)
+		}
+	})
+}
+
+// TestProvidedRPCRead: only the presence is kept.
+func TestProvidedRPCRead(t *testing.T) {
+	p := New(nil, 600)
+	if p.ProvidedRPC() {
+		t.Fatal("default true, want false")
+	}
+	p.SetProvidedRPC(true)
+	if !p.ProvidedRPC() {
+		t.Fatal("not recorded")
 	}
 }

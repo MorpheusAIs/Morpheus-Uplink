@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/absgrafx/morpheus-uplink/internal/config"
 )
 
 // Router RPC rate limiting seen by a client. These pin the target
@@ -43,9 +45,9 @@ func noSleep(t *testing.T, e *failoverEnv) func() []time.Duration {
 // the RPC's 429.
 const rpc429Bid = `{"error":"failed to get bid: 429 Too Many Requests: {\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":429,\"message\":\"Your app has exceeded its compute units per second capacity.\"}}"}`
 
-// Items 1-2: every open hits the RPC's 429. A pre-send stage is retried on
+// Every open hits the RPC's 429. A pre-send stage is retried on
 // the same bid up to the retry cap (5 attempts); a build-transaction stage
-// (pre-send only inside the proof window, one RPC URL) is retried once.
+// (pre-send only inside the proof window, operator RPC set) is retried once.
 // Either way the client gets 503 no_available_provider with Retry-After
 // 1..4; no walk to other bids and no provider cooled.
 func TestRPC429RetryCapClean503(t *testing.T) {
@@ -61,12 +63,8 @@ func TestRPC429RetryCapClean503(t *testing.T) {
 			a40, b40, c40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40), "0x"+strings.Repeat("c", 40)
 			m := newFakeMarket(t, a40, b40, c40)
 			m.openErrBody = tc.body
-			m.rpcURLs = 1 // one RPC URL: a window-stage 429 may be pre-send
-			e := newFailoverEnv(t, m, nil)
+			e := newFailoverEnv(t, m, nil) // operator RPC set: a window-stage 429 may be pre-send
 			noSleep(t, e)
-			if n := e.srv.pool.RefreshRPCURLCount(context.Background()); n != 1 {
-				t.Fatalf("RPC URL count %d, want 1", n)
-			}
 			code, hdr, body := chatFull(t, e, "test-model")
 			if code != 503 || !strings.Contains(body, "no_available_provider") || !retryAfterOK(hdr.Get("Retry-After"), 4) || strings.Contains(body, "0x") {
 				t.Errorf("got %d Retry-After %q %s (want 503, Retry-After 1..4)", code, hdr.Get("Retry-After"), body)
@@ -88,7 +86,45 @@ func TestRPC429RetryCapClean503(t *testing.T) {
 	}
 }
 
-// Items 2 and 5, rated bids: when the rated-bids read keeps hitting the
+// Blank router RPC (ETH_NODE_ADDRESS unset): the router uses its own RPC
+// list, so a chain-stage 429 gets one attempt, no cool-down and no walk,
+// then a 503 with Retry-After 1..4. A pre-send stage answers at once (no
+// sleeps); a window stage is maybe-sent and only the wallet reconcile
+// polls run (no second POST).
+func TestBlankRPC429OneAttempt503(t *testing.T) {
+	for _, tc := range []struct {
+		body     string
+		maxSleep int
+	}{{rpc429Bid, 0}, {rpc429Open, 1 << 30}} {
+		body := tc.body
+		a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
+		m := newFakeMarket(t, a40, b40)
+		m.openErrBody = body
+		e := newFailoverEnv(t, m, func(c *config.Config) { c.EthRPCURL = "" })
+		if e.srv.pool.ProvidedRPC() {
+			t.Fatal("blank RPC reads as provided")
+		}
+		sleeps := noSleep(t, e)
+		code, hdr, out := chatFull(t, e, "test-model")
+		if code != 503 || !retryAfterOK(hdr.Get("Retry-After"), 4) {
+			t.Errorf("got %d Retry-After %q %s (want 503, Retry-After 1..4)", code, hdr.Get("Retry-After"), out)
+		}
+		opens, _ := m.snapshot()
+		if len(opens) != 1 {
+			t.Errorf("opens %d, want exactly 1 (no retry, no walk)", len(opens))
+		}
+		if s := sleeps(); len(s) > tc.maxSleep {
+			t.Errorf("backoff sleeps %v, want none", s)
+		}
+		for _, p := range []string{a40, b40} {
+			if e.srv.pool.IsCooling(testModelID, p) {
+				t.Errorf("provider %s cooling after RPC 429", p[:6])
+			}
+		}
+	}
+}
+
+// Rated bids: when the rated-bids read keeps hitting the
 // RPC's 429, the refusal is still a clean 503 with Retry-After 1..4
 // (today it is rated_unreadable with no Retry-After at all).
 func TestRated429Clean503RetryAfter(t *testing.T) {
@@ -163,7 +199,6 @@ func TestParallelLanesNever502(t *testing.T) {
 			a40, b40 := "0x"+strings.Repeat("a", 40), "0x"+strings.Repeat("b", 40)
 			m := newFakeMarket(t, a40, b40)
 			m.openErrBody, m.openErrN = rpc429Bid, 2
-			m.rpcURLs = 1
 			e := newFailoverEnv(t, m, nil)
 			noSleep(t, e)
 			var wg sync.WaitGroup

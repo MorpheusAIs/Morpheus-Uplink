@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -134,7 +133,6 @@ type fakeSess struct {
 type fakeMarket struct {
 	t           *testing.T
 	openErrN    int // when > 0, only the first openErrN opens fail with openErrBody
-	rpcURLs     int // GET /config DerivedConfig.EthNodeURLs count (0: no /config)
 	mu          sync.Mutex
 	providers   []string
 	behave      map[string]fakeProvider
@@ -348,20 +346,6 @@ func (m *fakeMarket) server() *httptest.Server {
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"address":"0x1111111111111111111111111111111111111111"}`))
 	})
-	mux.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
-		m.mu.Lock()
-		n := m.rpcURLs
-		m.mu.Unlock()
-		if n == 0 {
-			http.NotFound(w, r)
-			return
-		}
-		urls := make([]string, n)
-		for i := range urls {
-			urls[i] = "https://rpc.example/" + strconv.Itoa(i)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"DerivedConfig": map[string]any{"EthNodeURLs": urls}})
-	})
 	mux.HandleFunc("GET /healthcheck", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"status":"healthy"}`)) })
 	mux.HandleFunc("GET /blockchain/balance", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"eth":1,"mor":1}`)) })
 	ts := httptest.NewServer(mux)
@@ -410,7 +394,8 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	t.Cleanup(cat.Close)
 	cfg := &config.Config{RouterURL: rt.URL, RouterUser: "admin", RouterPass: "routerpass", AdminPassword: "adminpass",
 		APIKeySeed: "failover-seed", DataDir: t.TempDir(), ActiveModelsURL: cat.URL, GatewayBidsURL: rt.URL + "/gateway_bids.json",
-		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600, SessionRelease: true}
+		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600, SessionRelease: true,
+		EthRPCURL: "https://rpc.invalid"} // the operator set the router's RPC (blank-RPC tests clear it)
 	if edit != nil {
 		edit(cfg)
 	}
@@ -421,6 +406,7 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	srv.pool.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
+	srv.pool.SetProvidedRPC(cfg.EthRPCURL != "") // presence only, as cmd/uplink does
 	startSweep(t, srv)
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	if cfg.WebPublicURL == "" {

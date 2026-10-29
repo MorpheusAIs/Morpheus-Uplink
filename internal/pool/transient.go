@@ -19,11 +19,15 @@ import (
 // open may lock while its outcome is unknown.
 //
 // The router answers a failed open with HTTP 500 {"error": "<stage>: ..."}.
-// Only a router chain-stage prefix that ends before any open transaction
-// is broadcast, followed by the router's own rate-limit wording, is
-// retried (same bid, backoff). Provider-stage texts always cool the
-// provider. Anything else on the open may have been sent: it is
-// reconciled against the wallet's session list, never re-opened.
+// A router chain-stage prefix that ends before any open transaction is
+// broadcast is never a provider fault, whatever follows it (a rate limit,
+// a timeout or any other RPC error): it stays on the same bid. With the
+// router's RPC set by the operator (ETH_NODE_ADDRESS has a value) it is
+// retried with a capped backoff; without it, the router's own RPC list
+// and retries apply, so Uplink makes one attempt and answers
+// router_transient. Provider-stage texts always cool the provider.
+// Anything else on the open may have been sent: it is reconciled against
+// the wallet's session list, never re-opened.
 //
 // Every value is a constant: there is no setting for any of them.
 const (
@@ -58,10 +62,11 @@ const (
 	maybeSent openClass = iota
 	// providerFault: the provider (or the bid) failed: cool it and walk.
 	providerFault
-	// transientPreSend: a rate limit before any open transaction: back off, same bid.
+	// transientPreSend: a chain-stage error before any open transaction:
+	// same bid (backoff when the operator set the RPC).
 	transientPreSend
-	// transientWindow: a P* rate limit proven pre-send only by the 18 s
-	// rule: back off on the same bid at most maxWindowRetries times.
+	// transientWindow: a P* chain-stage error proven pre-send only by the
+	// 18 s rule: back off on the same bid at most maxWindowRetries times.
 	transientWindow
 )
 
@@ -102,7 +107,7 @@ var (
 		"failed to send transaction: approve mor allowance failed: ",
 	}
 	// windowPrefixes (P*) are pre-send only when the open POST failed in
-	// under preSendProofWindow, with one router RPC URL.
+	// under preSendProofWindow, with the operator's RPC set.
 	windowPrefixes = []string{
 		"failed to get transactopts: ",
 		"failed to send transaction: open session failed: failed to get initial gas prices: ",
@@ -172,9 +177,9 @@ func isTransportErr(err error) bool {
 
 // classifyOpenErr classifies an open-by-bid error. postElapsed is how long
 // the open POST ran; windowOK is false when the 18 s rule may not be used
-// (router RPC URL count not 1 or unknown, or the operation's one window
-// retry is spent). Order: transport first, then the provider-stage deny
-// list, then anchored pre-send prefixes plus a marker; everything else is
+// (the operator did not set the router's RPC, or the operation's one
+// window retry is spent). Order: transport first, then the provider-stage
+// deny list, then the anchored pre-send prefixes; everything else is
 // maybe-sent.
 func classifyOpenErr(err error, postElapsed time.Duration, windowOK bool) openClass {
 	if err == nil {
@@ -197,10 +202,7 @@ func classifyOpenErr(err error, postElapsed time.Duration, windowOK bool) openCl
 	}
 	for _, p := range preSendPrefixes {
 		if strings.HasPrefix(text, p) {
-			if hasRateLimitMarker(text[len(p):]) {
-				return transientPreSend
-			}
-			return providerFault
+			return transientPreSend
 		}
 	}
 	for _, p := range windowPrefixes {
@@ -208,10 +210,7 @@ func classifyOpenErr(err error, postElapsed time.Duration, windowOK bool) openCl
 			if !windowOK || postElapsed >= preSendProofWindow {
 				return maybeSent
 			}
-			if hasRateLimitMarker(text[len(p):]) {
-				return transientWindow
-			}
-			return providerFault
+			return transientWindow
 		}
 	}
 	return maybeSent

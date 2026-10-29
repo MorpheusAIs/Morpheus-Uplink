@@ -102,7 +102,7 @@ func installSleep(p *Pool, c *fakeClock) *sleepRec {
 
 // rpcEnv is a mock router and pool on an injected clock and sleep. The
 // pool has run longer than pruneGrace (shared-wallet checks are on) and
-// knows the router has one RPC URL.
+// has the operator's RPC set.
 func rpcEnv(t *testing.T) (*fakeClock, *leaseRouter, *Pool, *sleepRec) {
 	t.Helper()
 	c := newFakeClock()
@@ -110,9 +110,6 @@ func rpcEnv(t *testing.T) (*fakeClock, *leaseRouter, *Pool, *sleepRec) {
 	p.mu.Lock()
 	p.started = c.Now().Add(-time.Hour)
 	p.mu.Unlock()
-	if n := p.RefreshRPCURLCount(context.Background()); n != 1 {
-		t.Fatalf("rpc url count = %d, want 1", n)
-	}
 	return c, lr, p, installSleep(p, c)
 }
 

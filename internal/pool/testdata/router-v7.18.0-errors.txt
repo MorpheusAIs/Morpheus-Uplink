@@ -2,10 +2,11 @@
 # (internal/pool/transient.go classifyOpenErr). One case per line:
 #   <class><TAB><postElapsed><TAB><error text>
 # class: provider_fault | transient_presend | transient_window | maybe_sent.
-# postElapsed: how long the open POST ran. Every line assumes the router
-# uses one RPC URL and the operation's 18 s-rule retry is unused; the
-# other cases are in the tests. Texts follow the router's format strings
-# (proxy-router v7.18.0) and the incident log, ids and hosts redacted.
+# postElapsed: how long the open POST ran. Every line assumes the operator
+# set the router's RPC (ETH_NODE_ADDRESS) and the operation's 18 s-rule
+# retry is unused; the other cases are in the tests. Texts follow the
+# router's format strings (proxy-router v7.18.0) and the incident log,
+# ids and hosts redacted.
 
 # Incident texts.
 transient_window	2s	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests: {"jsonrpc":"2.0","id":7,"error":{"code":429,"message":"Your app has exceeded its compute units per second capacity. If you have retries enabled, you can safely ignore this message."}}
@@ -159,21 +160,20 @@ maybe_sent	25s	failed to send transaction: open session failed: failed to build 
 transient_window	2s	failed to send transaction: open session failed: failed to build transaction: Your app has exceeded its compute units per second capacity
 maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: Your app has exceeded its compute units per second capacity
 
-# A prefix with no marker: a deterministic pre-send failure (provider
-# fault); a P* one from 18 s is maybe-sent.
-provider_fault	1s	failed to get bid: bid not found
-provider_fault	1s	failed to send transaction: approve MOR allowance failed: insufficient ETH for gas — add ETH to your wallet to cover transaction fees. Original: insufficient funds for gas * price + value
-provider_fault	2s	failed to get transactOpts: chain id mismatch
+# A prefix with no marker: still a chain-stage error before the send,
+# never a provider fault (same bid); a P* one from 18 s is maybe-sent.
+transient_presend	1s	failed to get bid: bid not found
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: insufficient ETH for gas — add ETH to your wallet to cover transaction fees. Original: insufficient funds for gas * price + value
+transient_window	2s	failed to get transactOpts: chain id mismatch
 maybe_sent	25s	failed to get transactOpts: chain id mismatch
-provider_fault	1s	failed to get bid: -32005
+transient_presend	1s	failed to get bid: -32005
 
-# The router's rules: a revert is never transient; 429 counts only as a
-# whole token.
-provider_fault	1s	failed to send transaction: approve MOR allowance failed: 429 Too Many Requests: execution reverted
+# Reverts and 429 inside a number or hex: still chain-stage, same bid.
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: 429 Too Many Requests: execution reverted
 maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: execution reverted: 0x429a
-provider_fault	2s	failed to send transaction: open session failed: failed to build transaction: execution reverted: 0x429a
-provider_fault	1s	failed to get bid: nonce 14290 too high
-provider_fault	1s	failed to get provider: 0xabc429def
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: execution reverted: 0x429a
+transient_presend	1s	failed to get bid: nonce 14290 too high
+transient_presend	1s	failed to get provider: 0xabc429def
 
 # Provider stage: always the provider's fault, whatever the rest says.
 provider_fault	1s	provider healthcheck ping failed: provider request failed: code: 429, msg: rate limit exceeded

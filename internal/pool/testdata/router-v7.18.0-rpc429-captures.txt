@@ -1,8 +1,8 @@
 # Router v7.18.0 open-error texts captured from the router's own code
 # (open by bid and its open-transaction path, single RPC URL, escalator
 # included) with a local JSON-RPC stub answering HTTP 429 for one method
-# per step. Format: step<TAB>class<TAB>text. The class is for one router
-# RPC URL, the window retry unused and a 1s open POST. The transaction
+# per step. Format: step<TAB>class<TAB>text. The class is for the operator
+# RPC set, the window retry unused and a 1s open POST. The transaction
 # hash in the receipt-wait text is replaced with zeros.
 #
 # step                       stub method answering 429

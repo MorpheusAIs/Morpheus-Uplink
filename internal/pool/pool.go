@@ -112,7 +112,7 @@ type Pool struct {
 	warnSkipped  map[string]int
 	walletAddr   string
 	scanKick     chan struct{} // buffered 1: run the sweep now
-	rpcURLs      atomic.Int64  // router RPC URL count (GET /config); 0: unknown
+	providedRPC  atomic.Bool   // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
 	retiredBusy  atomic.Bool   // a retired close found the wallet slot busy
 }
 
@@ -296,7 +296,7 @@ func (p *Pool) ActiveStakeWei() *big.Int {
 // Rehydrate is the status poll's scan: it lists the wallet's open
 // sessions and adopts one usable unheld session per model (never a young
 // one that may be an open of ours still in flight). It never closes
-// anything; the sweep closes. It also refreshes the router's RPC URL count.
+// anything; the sweep closes.
 //
 // It skips work when a scan ran recently.
 func (p *Pool) Rehydrate() error {
@@ -324,7 +324,6 @@ func (p *Pool) rehydrate(force bool) error {
 		if fresh {
 			return nil
 		}
-		p.RefreshRPCURLCount(context.Background())
 	}
 	_, err := p.scan(context.Background(), nil, scanAdoptOnly)
 	return err

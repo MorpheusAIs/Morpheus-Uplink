@@ -105,9 +105,6 @@ type leaseRouter struct {
 	// counts those after a session landed through openFault.
 	lists, listsAfterLand int
 
-	// GET /config: rpcURLs fake RPC URLs (they carry a fake key the tests
-	// look for in logs), or configStatus when non-zero.
-	rpcURLs, configStatus, configCalls int
 	// The router keeps going after a disconnect. openHang: a by-bid open
 	// answers nothing until the client gives up, then the session mints
 	// mintDelay later on the fake clock. openTake advances the fake clock
@@ -132,8 +129,7 @@ type leaseRouter struct {
 	// hideLanded lists) and answers this status, like a proxy in front of
 	// the router that lost the router's answer (502/503/504).
 	openStatus int
-	// calls counts every request except GET /config (router calls per
-	// operation).
+	// calls counts every request (router calls per operation).
 	calls atomic.Int64
 	// closeHook, when set, runs as each close arrives (before closeTake).
 	closeHook func(id string)
@@ -153,10 +149,6 @@ func (e *endOnce) Write(b []byte) (int, error) {
 	e.once.Do(e.end)
 	return e.ResponseWriter.Write(b)
 }
-
-// rpcURLSecret is in every fake RPC URL the mock's /config lists; it must
-// never appear in a log, error or status answer.
-const rpcURLSecret = "k3y-must-not-leak"
 
 // visibleLocked: s is on chain at the mock's fake time (lr.mu held).
 func (lr *leaseRouter) visibleLocked(s *leaseSess) bool {
@@ -289,22 +281,8 @@ func (lr *leaseRouter) providersOf(model string) []string {
 
 func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}, rows: map[string][]map[string]any{},
-		unhealthy: map[string]bool{}, health: map[string][]string{}, landed: map[string]bool{}, rpcURLs: 1}
+		unhealthy: map[string]bool{}, health: map[string][]string{}, landed: map[string]bool{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
-		lr.mu.Lock()
-		defer lr.mu.Unlock()
-		lr.configCalls++
-		if lr.configStatus != 0 {
-			http.Error(w, `{"error":"config unavailable"}`, lr.configStatus)
-			return
-		}
-		urls := []string{}
-		for i := range lr.rpcURLs {
-			urls = append(urls, fmt.Sprintf("https://rpc%d.example/v2/%s", i, rpcURLSecret))
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"Version": "v7.18.0", "DerivedConfig": map[string]any{"EthNodeURLs": urls, "WalletAddress": "0x1111111111111111111111111111111111111111"}})
-	})
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"address": "0x1111111111111111111111111111111111111111"})
 	})
@@ -537,9 +515,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		open(w, r, m, pv)
 	})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/config" {
-			lr.calls.Add(1)
-		}
+		lr.calls.Add(1)
 		if r.Method == http.MethodPost && (strings.HasPrefix(r.URL.Path, "/blockchain/bids/") || strings.HasSuffix(r.URL.Path, "/close")) {
 			isClose := strings.HasSuffix(r.URL.Path, "/close")
 			lr.writeBegin(isClose)
@@ -551,6 +527,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	}))
 	t.Cleanup(ts.Close)
 	p := New(router.New(ts.URL, "u", "p"), 600)
+	p.SetProvidedRPC(true) // the operator set the router's RPC (blank-RPC tests turn it off)
 	p.SetClock(c.Now)
 	p.SetHealthyBids(lr.healthy)
 	return lr, p

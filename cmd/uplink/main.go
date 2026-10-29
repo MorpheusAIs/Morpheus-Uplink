@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -64,6 +65,9 @@ func main() {
 	// Opens use only rated bids the gateway health feeds mark healthy.
 	pl.SetHealthyBids(cat.HealthyBidIDs)
 	pl.SetDurationMax(cfg.SessionDurationMax)
+	// Presence only: whether the operator set the router's chain RPC.
+	pl.SetProvidedRPC(strings.TrimSpace(cfg.EthRPCURL) != "")
+	slog.Info("pool: router chain RPC", "provided", pl.ProvidedRPC())
 	// Attribute actual session wall-time when a close lands. Poll for ClosedAt
 	// (chain index lag is common); fall back to now−OpenedAt after a successful close.
 	pl.SetOnSessionClosed(func(sessionID string) {
@@ -146,8 +150,7 @@ func main() {
 
 	// Orphan sweep: every 2 min, and soon after a release, a cut open or
 	// an unresolved open, it scans the wallet's sessions, adopts or closes
-	// the unheld ones (one close per wallet-slot hold), and refreshes the
-	// router's RPC URL count.
+	// the unheld ones (one close per wallet-slot hold).
 	go pl.RunSweep(hkCtx)
 
 	go func() {

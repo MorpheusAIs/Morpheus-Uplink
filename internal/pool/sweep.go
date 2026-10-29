@@ -223,27 +223,16 @@ func (p *Pool) rateWarn(key, msg string, args ...any) {
 	slog.Warn(msg, args...)
 }
 
-// RefreshRPCURLCount reads how many RPC URLs the router is configured with
-// (the count only; the URLs are never read into Uplink). Fast retries
-// based on the router's error timing are used only when it is exactly 1.
-func (p *Pool) RefreshRPCURLCount(ctx context.Context) int {
-	ctx, cancel := context.WithTimeout(ctx, readCallTimeout)
-	defer cancel()
-	n, err := p.client.RPCURLCount(ctx)
-	if err != nil {
-		n = 0
-	}
-	p.rpcURLs.Store(int64(n))
-	if n != 1 {
-		p.rateWarn("rpc_url_count", "rpc_url_count", "n", n)
-	}
-	return n
-}
+// SetProvidedRPC records whether the operator set the router's chain RPC
+// (ETH_NODE_ADDRESS has a value). Only the presence is kept: the value is
+// never passed in, stored or logged. With it set, a chain-stage error
+// before the open is sent is retried on the same bid with a capped
+// backoff; without it, the router's own RPC list and retries apply, and
+// Uplink makes one attempt and answers router_transient.
+func (p *Pool) SetProvidedRPC(set bool) { p.providedRPC.Store(set) }
 
-// RPCURLCount is the last read count (0: unknown).
-func (p *Pool) RPCURLCount() int { return int(p.rpcURLs.Load()) }
-
-func (p *Pool) windowRetryOK() bool { return p.rpcURLs.Load() == 1 }
+// ProvidedRPC reports what SetProvidedRPC recorded.
+func (p *Pool) ProvidedRPC() bool { return p.providedRPC.Load() }
 
 // closeCand is one session the sweep closes.
 type closeCand struct {
@@ -805,19 +794,16 @@ func (p *Pool) alertStarved(due int, oldest time.Duration) {
 
 // RunSweep runs the sweep every orphanScanEvery, and soon after an open
 // was cut or a session was released for closing: it closes retired
-// sessions, then runs ScanOrphans. It also refreshes the router's RPC URL
-// count each tick. It returns when ctx ends.
+// sessions, then runs ScanOrphans. It returns when ctx ends.
 func (p *Pool) RunSweep(ctx context.Context) {
 	t := time.NewTicker(orphanScanEvery)
 	defer t.Stop()
-	p.RefreshRPCURLCount(ctx)
 	var again <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			p.RefreshRPCURLCount(ctx)
 		case <-p.scanKick:
 		case <-again:
 		}

@@ -405,10 +405,15 @@ type openResult struct {
 }
 
 // backoff waits before the next transient retry. It reports false (and
-// the step it would have waited) when the retry count, the operation
-// budget or the slot deadline does not allow another, or ctx ended.
+// the step it would have waited) when the operator did not set the
+// router's RPC (one attempt: the router's own RPC list and retries
+// apply), when the retry count, the operation budget or the slot
+// deadline does not allow another, or ctx ended.
 func (op *openOp) backoff(ctx context.Context) (time.Duration, bool) {
 	d := backoffStep(op.retries)
+	if !op.p.providedRPC.Load() {
+		return d, false
+	}
 	now := op.p.now()
 	if op.retries >= transientMaxRetries || now.Sub(op.start)+d > transientBudget ||
 		now.Add(d).After(op.tok.deadline) || ctx.Err() != nil {
@@ -454,7 +459,9 @@ func (op *openOp) candidates(ctx context.Context, extraAvoid string) (cands, poo
 // provider. Each open names its bid, so the pick is never left to the
 // router. Each error is classified (transient.go):
 //   - provider fault: that provider cools and the walk moves on;
-//   - transient before the send: the same bid again after a backoff;
+//   - a chain-stage error before the send: the same bid again after a
+//     backoff when the operator set the router's RPC; otherwise one
+//     attempt, then router_transient (never cooled, never walked);
 //   - maybe sent: never re-opened; the wallet's sessions are polled for
 //     it (reconcile). Found: it is the result. Not found: router_transient,
 //     and the attempt stays pending for later scans. A cut open (Uplink
@@ -502,7 +509,7 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 				p.dropAttempt(att)
 				return openResult{id: id, provider: b.Provider}, nil
 			}
-			windowOK := p.windowRetryOK() && op.windowRetries < maxWindowRetries
+			windowOK := p.providedRPC.Load() && op.windowRetries < maxWindowRetries
 			class := classifyOpenErr(err, elapsed, windowOK)
 			slog.Warn("pool: open failed", "model", op.model, "bid", short(b.ID), "provider", short(b.Provider),
 				"class", class.String(), "after", elapsed.Round(time.Millisecond), "err", router.SafeError(err))
