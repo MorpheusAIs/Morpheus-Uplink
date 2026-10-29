@@ -151,6 +151,13 @@ type fakeMarket struct {
 	openErrBody string
 	// ratedErrBody, when set, answers rated bids with status 500 and this body.
 	ratedErrBody string
+	// openLandBody, when set, opens the session on chain and still
+	// answers status 500 with this body (tx sent, receipt wait failed).
+	openLandBody string
+	// openArrived, when set, gets a signal when an open reaches the
+	// market; openGate, when set, then holds the open until it is closed.
+	openArrived chan struct{}
+	openGate    chan struct{}
 	// sessionLookup: "" normal; "fail" session detail answers 500;
 	// "empty" session detail has no provider.
 	sessionLookup string
@@ -183,6 +190,15 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 		}
 	}
 	m.mu.Lock()
+	arrived, gate := m.openArrived, m.openGate
+	m.mu.Unlock()
+	if arrived != nil {
+		arrived <- struct{}{}
+	}
+	if gate != nil {
+		<-gate
+	}
+	m.mu.Lock()
 	defer m.mu.Unlock()
 	prov := ""
 	for _, p := range m.providers {
@@ -205,6 +221,10 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 	m.next++
 	id := fmt.Sprintf("0xsess%02d%s", m.next, strings.TrimPrefix(prov, "0x"))
 	m.sessions[id] = &fakeSess{provider: prov, bid: bidOf(prov), ends: time.Now().Add(time.Hour).Unix() + int64(m.next)}
+	if m.openLandBody != "" {
+		http.Error(w, m.openLandBody, http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": id})
 }
 

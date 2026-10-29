@@ -76,11 +76,26 @@ type leaseRouter struct {
 	// ratedFault, when set, is asked before every rated-bids answer: a
 	// non-empty body answers status 500 with it.
 	ratedFault func(model string) string
-	// openHold delays every by-bid open while counting concurrent opens
-	// (inflight, maxInflight): the wallet-serialization probe.
-	openHold    time.Duration
+	// Wallet-serialization probes. Every by-bid open counts itself in
+	// inflight (peak: maxInflight) and, when arrivals is set, reports its
+	// bid there on arrival; when gate is set it then waits until gate is
+	// closed or the request is cancelled (gateCancels counts those).
+	arrivals    chan string
+	gate        chan struct{}
+	gateCancels int
 	inflight    int
 	maxInflight int
+	// closeOverlap counts closes that reached the router while an open
+	// was in flight.
+	closeOverlap int
+	// hideLanded: a session landed by openFault stays out of the next
+	// hideLanded session-list answers (the router's visibility lag).
+	hideLanded int
+	hideLeft   int
+	landed     map[string]bool
+	// lists counts session-list answers (offset 0); listsAfterLand
+	// counts those after a session landed through openFault.
+	lists, listsAfterLand int
 }
 
 // healthy is the mock's healthy-bid source.
@@ -163,7 +178,7 @@ func (lr *leaseRouter) providersOf(model string) []string {
 
 func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}, rows: map[string][]map[string]any{},
-		unhealthy: map[string]bool{}, health: map[string][]string{}}
+		unhealthy: map[string]bool{}, health: map[string][]string{}, landed: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"address": "0x1111111111111111111111111111111111111111"})
@@ -181,8 +196,16 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		defer lr.mu.Unlock()
 		rows := []map[string]any{}
 		if r.URL.Query().Get("offset") == "0" {
+			lr.lists++
+			if len(lr.landed) > 0 {
+				lr.listsAfterLand++
+			}
+			hide := lr.hideLeft > 0
+			if hide {
+				lr.hideLeft--
+			}
 			for _, id := range lr.order {
-				if s := lr.sessions[id]; !s.closed {
+				if s := lr.sessions[id]; !s.closed && !(hide && lr.landed[id]) {
 					rows = append(rows, row(id, s))
 				}
 			}
@@ -204,6 +227,9 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		defer lr.mu.Unlock()
 		id := r.PathValue("id")
 		lr.closes = append(lr.closes, id)
+		if lr.inflight > 0 {
+			lr.closeOverlap++
+		}
 		if lr.closeFail.Load() {
 			http.Error(w, `{"error":"close failed"}`, 500)
 			return
@@ -271,7 +297,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		lr.byBid = append(lr.byBid, r.PathValue("id"))
 		lr.mu.Unlock()
 		lr.mu.Lock()
-		fault, hold := lr.openFault, lr.openHold
+		fault, arrivals, gate := lr.openFault, lr.arrivals, lr.gate
 		lr.inflight++
 		lr.maxInflight = max(lr.maxInflight, lr.inflight)
 		lr.mu.Unlock()
@@ -280,8 +306,18 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 			lr.inflight--
 			lr.mu.Unlock()
 		}()
-		if hold > 0 {
-			time.Sleep(hold)
+		if arrivals != nil {
+			arrivals <- r.PathValue("id")
+		}
+		if gate != nil {
+			select {
+			case <-gate:
+			case <-r.Context().Done():
+				lr.mu.Lock()
+				lr.gateCancels++
+				lr.mu.Unlock()
+				return
+			}
 		}
 		m, pv, ok := lr.bidOwner(r.PathValue("id"))
 		if !ok {
@@ -291,7 +327,11 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		if fault != nil {
 			if body, landed := fault(r.PathValue("id")); body != "" {
 				if landed {
-					open(nil, r, m, pv)
+					id := open(nil, r, m, pv)
+					lr.mu.Lock()
+					lr.landed[id] = true
+					lr.hideLeft = lr.hideLanded
+					lr.mu.Unlock()
 				}
 				http.Error(w, body, 500)
 				return
@@ -309,9 +349,14 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 
 // addChain puts a session on chain that the pool did not open (boot adoption).
 func (lr *leaseRouter) addChain(id, model string, opened, ends time.Time) {
+	lr.addChainOn(id, model, leaseProv1, opened, ends)
+}
+
+// addChainOn is addChain on a given provider's bid.
+func (lr *leaseRouter) addChainOn(id, model, prov string, opened, ends time.Time) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
-	lr.sessions[id] = &leaseSess{model: model, prov: leaseProv1, opened: opened.Unix(), ends: ends.Unix()}
+	lr.sessions[id] = &leaseSess{model: model, prov: prov, opened: opened.Unix(), ends: ends.Unix()}
 	lr.order = append(lr.order, id)
 }
 
