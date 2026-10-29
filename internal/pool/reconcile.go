@@ -164,6 +164,8 @@ func PlanReconcile(open []router.Session, now time.Time, configured map[string]b
 			}
 		}
 	}
+	// The young rule covers duplicates only: boot still adopts each
+	// model's best session even when it is young.
 	young := now.Add(-pruneGrace).Unix()
 	for i, s := range open {
 		if out[i].Action == ActAdopt && best[normModel(s.ModelAgentID)] != i {
