@@ -285,35 +285,17 @@ func requestsDirectPayment(payload []byte) bool {
 	return walk(v)
 }
 
-// OpenSession opens a session by blockchain model ID; the router picks a
-// provider using its bid rating and handles approval + stake.
-func (c *Client) OpenSession(modelID string, req OpenSessionRequest) (string, error) {
-	var res struct {
-		SessionID string `json:"sessionID"`
-	}
-	err := c.doJSON(http.MethodPost, "/blockchain/models/"+modelID+"/session", req, &res)
-	if err != nil {
-		return "", err
-	}
-	if res.SessionID == "" {
-		return "", fmt.Errorf("open session for model %s: empty sessionID in response", modelID)
-	}
-	return res.SessionID, nil
-}
-
 // OpenSessionByBid opens a session on one specific bid (and so one specific
-// provider). Used whenever a provider has to be avoided: avoidance is never
-// left to the router's own selection. Same staking-only body.
+// provider). It is the only way Uplink opens a session: the pool picks the
+// bid (healthy, not excluded or avoided, in the router's rated order), so
+// the pick is never left to the router. The body is OpenSessionRequest
+// (staking only, router failover off).
 func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
 	bidID = strings.TrimSpace(bidID)
 	if bidID == "" {
 		return "", fmt.Errorf("empty bid id")
 	}
-	body := struct {
-		SessionDuration int  `json:"sessionDuration"`
-		DirectPayment   bool `json:"directPayment"`
-		Failover        bool `json:"failover"`
-	}{durationSec, false, false}
+	body := OpenSessionRequest{SessionDuration: durationSec}
 	var res struct {
 		SessionID string `json:"sessionID"`
 	}

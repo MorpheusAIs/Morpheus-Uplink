@@ -10,18 +10,27 @@ import (
 	"testing"
 )
 
-// The open-session body always carries "directPayment": false.
-func TestOpenSessionNeverDirectPayment(t *testing.T) {
-	var body map[string]any
+// The by-bid open (the only open) posts to /blockchain/bids/{id}/session
+// with exactly {sessionDuration, failover:false, directPayment:false}.
+func TestOpenSessionByBidBodyPinned(t *testing.T) {
+	const bid = "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+	var (
+		body       map[string]any
+		path, meth string
+	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, meth = r.URL.Path, r.Method
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &body)
 		_, _ = w.Write([]byte(`{"sessionID":"0xs"}`))
 	}))
 	defer ts.Close()
 	c := New(ts.URL, "u", "p")
-	if _, err := c.OpenSession("0xmodel", OpenSessionRequest{SessionDuration: 600}); err != nil {
+	if _, err := c.OpenSessionByBid(bid, 600); err != nil {
 		t.Fatal(err)
+	}
+	if meth != http.MethodPost || path != "/blockchain/bids/"+bid+"/session" {
+		t.Fatalf("open went to %s %s", meth, path)
 	}
 	if v, ok := body["directPayment"]; !ok || v != false {
 		t.Fatalf("directPayment must be present and false: %v", body)
@@ -30,11 +39,12 @@ func TestOpenSessionNeverDirectPayment(t *testing.T) {
 	if v, ok := body["failover"]; !ok || v != false {
 		t.Fatalf("failover must be present and false: %v", body)
 	}
+	if v, ok := body["sessionDuration"]; !ok || v != float64(600) {
+		t.Fatalf("sessionDuration: %v", body)
+	}
 	// Staking-only body: nothing beyond these fields is sent.
-	for k := range body {
-		if k != "sessionDuration" && k != "failover" && k != "directPayment" {
-			t.Fatalf("unexpected open body field %q: %v", k, body)
-		}
+	if len(body) != 3 {
+		t.Fatalf("unexpected open body fields: %v", body)
 	}
 }
 

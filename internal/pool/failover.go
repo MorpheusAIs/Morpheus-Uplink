@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,8 +27,8 @@ const (
 	// DefaultProviderCooldown is how long a provider that failed a prompt
 	// or an open is avoided for that model.
 	DefaultProviderCooldown = 600 * time.Second
-	// MaxBidAttempts bounds the by-bid walk when more than one provider is
-	// excluded.
+	// MaxBidAttempts bounds the by-bid walk: at most this many opens, one
+	// per provider.
 	MaxBidAttempts = 3
 	// FailoverCloseTimeout bounds the synchronous close of the failed
 	// session before the replacement opens.
@@ -38,19 +39,21 @@ const (
 // the pool could not tell), so the failed session was kept, not closed.
 var ErrNoAlternate = errors.New("no alternate provider for this model")
 
-// ErrNoEligibleProvider means only providers excluded by
-// the providerExclude setting serve the model: nothing is opened (a configured
-// exclusion is never overridden, unlike a cool-down).
+// ErrNoEligibleProvider means every provider the router rates for the
+// model is excluded by the providerExclude setting: nothing is opened (a
+// configured exclusion is never overridden, unlike a cool-down).
 var ErrNoEligibleProvider = errors.New("no eligible provider for this model")
 
-// ErrNoAvailableProvider means every eligible provider of the model is
-// avoided right now (cooling, or cut a stream just before): nothing is
-// opened. Unlike ErrNoEligibleProvider it clears on its own; the error
+// ErrNoAvailableProvider means no provider of the model can be opened
+// right now: the router or the health feeds cannot be read, no rated bid
+// is marked healthy (or every healthy one is excluded), or every healthy
+// eligible provider is avoided (cooling, or cut a stream just before) or
+// failed to open: nothing is opened. Unlike ErrNoEligibleProvider it clears on its own; the error
 // value (*NoAvailableError) carries when to retry.
 var ErrNoAvailableProvider = errors.New("no provider is available for this model right now")
 
 // NoAvailableError is the ErrNoAvailableProvider value. RetryAfter is the
-// shortest remaining cool-down of an eligible provider, rounded up to whole
+// shortest remaining cool-down of a healthy, not excluded provider, rounded up to whole
 // seconds within 1s..MaxRetryAfter; 0 when none is cooling.
 type NoAvailableError struct{ RetryAfter time.Duration }
 
@@ -160,6 +163,29 @@ func (p *Pool) excludedProviders() map[string]bool {
 	return out
 }
 
+// errNoHealthSource is the health error when no healthy-bid source is set.
+var errNoHealthSource = errors.New("no bid health source")
+
+// SetHealthyBids installs the healthy-bid source: for a model, the
+// lowercase bid ids a gateway health feed marks healthy (an error when no
+// health copy is known). Every open, failover reopen included, uses only
+// rated bids in that set. nil: every open is refused.
+func (p *Pool) SetHealthyBids(fn func(modelID string) (map[string]struct{}, error)) {
+	p.fmu.Lock()
+	p.healthy = fn
+	p.fmu.Unlock()
+}
+
+func (p *Pool) healthyBids(modelID string) (map[string]struct{}, error) {
+	p.fmu.Lock()
+	fn := p.healthy
+	p.fmu.Unlock()
+	if fn == nil {
+		return nil, errNoHealthSource
+	}
+	return fn(modelID)
+}
+
 // MarkStreamCut records that provider cut a stream for the model: the
 // model's next open walks the bids without it, even when the cool-down is
 // off or this is the only provider cooling.
@@ -184,14 +210,10 @@ func (p *Pool) clearCut(modelID string) {
 	p.fmu.Unlock()
 }
 
-// avoidSet is every provider a new open for the model avoids: cooling,
-// configured exclusions, and a pending stream cut. Only the ones that bid
-// on the model change how it opens (avoidedBidder).
-func (p *Pool) avoidSet(modelID string) map[string]bool {
+// avoidedProviders is every provider a new open for the model skips on
+// top of the configured exclusions: cooling, and a pending stream cut.
+func (p *Pool) avoidedProviders(modelID string) map[string]bool {
 	out := p.coolingProviders(modelID)
-	for pr := range p.excludedProviders() {
-		out[pr] = true
-	}
 	if c := p.pendingCut(modelID); c != "" {
 		out[c] = true
 	}
@@ -265,51 +287,92 @@ func (p *Pool) MarkSessionCooling(modelID, sessionID string) string {
 	return prov
 }
 
-// alternates returns the rated bids whose provider is not excluded, and the
-// number of distinct such providers.
-func alternates(bids []router.RatedBid, exclude map[string]bool) ([]router.RatedBid, int) {
-	var out []router.RatedBid
-	seen := map[string]bool{}
-	for _, b := range bids {
-		if exclude[b.Provider] {
-			continue
+// candidates is the one pipeline every open uses: the router's rated bids
+// for the model (router Score order), kept only when a health feed marks
+// the bid healthy, minus configured exclusions, minus cooling, pending-cut
+// and extraAvoid providers. Filters only remove rows; the order is the
+// router's. pool is the healthy, not excluded rows (for Retry-After).
+//
+// Errors: ErrNoEligibleProvider when every rated provider is excluded;
+// else ErrNoAvailableProvider (a *NoAvailableError) when the router or
+// the health source cannot be read, no rated bid is healthy, every
+// healthy one is excluded, or every remaining one is avoided. Each refusal
+// logs its reason with counts and short ids only.
+func (p *Pool) candidates(modelID, extraAvoid string) (cands, pool []router.RatedBid, err error) {
+	refuse := func(reason string, retry time.Duration, args ...any) ([]router.RatedBid, []router.RatedBid, error) {
+		slog.Warn("pool: not opening", append([]any{"model", modelID, "reason", reason}, args...)...)
+		return nil, nil, &NoAvailableError{RetryAfter: retry}
+	}
+	rows, rerr := p.client.RatedBids(modelID)
+	if rerr != nil {
+		var ue *url.Error
+		switch {
+		case errors.As(rerr, &ue):
+			return refuse("router_unreachable", 0)
+		case errors.Is(rerr, router.ErrRatedBidsIncomplete) && len(rows) > 0:
+			slog.Warn("pool: rated bids have unusable rows; using the valid ones", "model", modelID, "valid", len(rows))
+		default:
+			return refuse("rated_unreadable", 0)
 		}
-		out = append(out, b)
-		seen[b.Provider] = true
 	}
-	return out, len(seen)
-}
-
-// avoidedBidder reports whether an avoided provider has a bid in bids.
-// When none has (bids complete and not empty), the open is by model and
-// the router rates and walks the providers from the same rated list. The
-// list is read just before the open: a provider that starts bidding in
-// between is not seen, and the opened session's provider is not checked.
-func avoidedBidder(bids []router.RatedBid, avoid map[string]bool) bool {
-	for _, b := range bids {
-		if avoid[b.Provider] {
-			return true
+	if len(rows) == 0 {
+		return refuse("rated_unreadable", 0, "rated", 0)
+	}
+	excluded := p.excludedProviders()
+	allExcluded := true
+	for _, b := range rows {
+		if !excluded[normProv(b.Provider)] {
+			allExcluded = false
+			break
 		}
 	}
-	return false
-}
-
-// openByModel is the plain open by model: the router picks the provider.
-func (p *Pool) openByModel(modelID string, durationSec int) (string, string, error) {
-	id, err := p.client.OpenSession(modelID, router.OpenSessionRequest{SessionDuration: durationSec})
-	if err != nil {
-		return "", "", err
+	if allExcluded {
+		slog.Warn("pool: not opening", "model", modelID, "reason", "all_excluded", "rated", len(rows))
+		return nil, nil, ErrNoEligibleProvider
 	}
-	prov, _ := p.sessionProvider(modelID, id)
-	return id, prov, nil
+	h, herr := p.healthyBids(modelID)
+	if herr != nil {
+		return refuse("health_unknown", 0, "rated", len(rows))
+	}
+	var healthy []router.RatedBid
+	for _, b := range rows {
+		if _, ok := h[strings.ToLower(strings.TrimSpace(b.ID))]; ok {
+			healthy = append(healthy, b)
+		}
+	}
+	if len(healthy) == 0 {
+		return refuse("none_healthy", 0, "rated", len(rows))
+	}
+	for _, b := range healthy {
+		if !excluded[normProv(b.Provider)] {
+			pool = append(pool, b)
+		}
+	}
+	if len(pool) == 0 {
+		return refuse("healthy_all_excluded", 0, "rated", len(rows), "healthy", len(healthy))
+	}
+	avoid := p.avoidedProviders(modelID)
+	if x := normProv(extraAvoid); x != "" {
+		avoid[x] = true
+	}
+	for _, b := range pool {
+		if !avoid[normProv(b.Provider)] {
+			cands = append(cands, b)
+		}
+	}
+	if len(cands) == 0 {
+		return refuse("all_cooling", p.retryAfter(modelID, pool), "rated", len(rows), "healthy", len(healthy), "eligible", len(pool))
+	}
+	return cands, pool, nil
 }
 
-// openExcluding opens a session on a provider outside the avoided set by
-// walking alts (the rated bids already filtered of it) by bid: at most
-// MaxBidAttempts opens, one per provider. Each open names its bid, so the
-// walk never leaves the pick to the router. A failed open puts that provider in cool-down; a
-// walk where every open failed returns an error matching
-// errBidWalkExhausted.
+func normProv(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// openExcluding opens a session by walking alts (candidates' filtered
+// list, router order) by bid: at most MaxBidAttempts opens, one per
+// provider. Each open names its bid, so the pick is never left to the
+// router. A failed open puts that provider in cool-down; a walk where
+// every open failed returns an error matching errBidWalkExhausted.
 func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.RatedBid) (string, string, error) {
 	tried := map[string]bool{}
 	attempts := 0
@@ -318,10 +381,10 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 		if attempts >= MaxBidAttempts {
 			break
 		}
-		if tried[b.Provider] {
+		if tried[normProv(b.Provider)] {
 			continue
 		}
-		tried[b.Provider] = true
+		tried[normProv(b.Provider)] = true
 		attempts++
 		id, err := p.client.OpenSessionByBid(b.ID, durationSec)
 		if err != nil {
@@ -338,88 +401,44 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 	return "", "", &walkError{tried: attempts, last: lastErr}
 }
 
-// openAvoidingCooling is the normal open: a plain open by model when no
-// provider is avoided, or when the model's rated bids are complete, not
-// empty, and none is from an avoided provider; else a by-bid open outside
-// the avoided set (cooling, configured exclusions, a pending stream cut),
-// in the router's rated order. It never drops an avoidance to get a
-// session (fail fast):
-//   - only configured exclusions (the providerExclude setting) serve the model
-//     → ErrNoEligibleProvider;
-//   - every eligible provider is avoided (also with no usable rated bid and
-//     no configured exclusion), or each one the walk tried failed to open,
-//     or the rated bids cannot be read or have unusable rows next to usable
-//     ones → ErrNoAvailableProvider
-//     (with when to retry), and nothing is opened.
-//
-// A refusal consumes a pending stream cut.
+// openAvoidingCooling is the normal open: always by bid, on the first
+// candidates row (healthy, not excluded, not cooling or cut, router
+// order), walking on per openExcluding. It never drops a filter to get a
+// session (fail fast): candidates' refusals are returned as they are, and
+// a walk where every open failed → ErrNoAvailableProvider with when to
+// retry. A refusal consumes a pending stream cut; a success clears it.
 func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
-	exclude := p.avoidSet(modelID)
-	if len(exclude) == 0 {
-		return p.openByModel(modelID, durationSec)
-	}
-	configured := p.excludedProviders()
 	cut := p.pendingCut(modelID)
-	refuse := func(bids []router.RatedBid, bidsOK bool) (string, string, error) {
+	clear := func() {
 		if cut != "" {
 			p.clearCut(modelID)
 		}
-		return "", "", &NoAvailableError{RetryAfter: p.retryAfter(modelID, bids, bidsOK, configured)}
 	}
-	bids, err := p.client.RatedBids(modelID)
-	if err != nil && !(errors.Is(err, router.ErrRatedBidsIncomplete) && len(bids) == 0) {
-		// An open by model could land on an avoided provider, and an
-		// unusable row may be one: refuse.
-		slog.Warn("pool: rated bids unavailable and providers are avoided; not opening", "model", modelID, "err", err)
-		return refuse(nil, false)
+	cands, pool, err := p.candidates(modelID, "")
+	if err != nil {
+		clear()
+		return "", "", err
 	}
-	// No usable rated bid (none, or every row unusable) is handled below
-	// as before: refused, never an open by model.
-	if len(bids) > 0 && !avoidedBidder(bids, exclude) {
-		id, prov, err := p.openByModel(modelID, durationSec)
-		if err == nil && cut != "" {
-			p.clearCut(modelID)
-		}
-		return id, prov, err
-	}
-	if _, m := alternates(bids, configured); m == 0 && len(configured) > 0 {
-		slog.Warn("pool: only configured-excluded providers serve this model", "model", modelID)
-		if cut != "" {
-			p.clearCut(modelID)
-		}
-		return "", "", ErrNoEligibleProvider
-	}
-	alts, n := alternates(bids, exclude)
-	if n == 0 {
-		slog.Warn("pool: every eligible provider is avoided; not opening", "model", modelID)
-		return refuse(bids, true)
-	}
-	id, prov, err := p.openExcluding(modelID, durationSec, alts)
+	id, prov, err := p.openExcluding(modelID, durationSec, cands)
 	if errors.Is(err, errBidWalkExhausted) {
-		slog.Warn("pool: every provider tried failed to open; not opening on an avoided one", "model", modelID, "err", err)
-		return refuse(bids, true)
+		slog.Warn("pool: not opening", "model", modelID, "reason", "walk_exhausted", "tried", min(len(cands), MaxBidAttempts))
+		clear()
+		return "", "", &NoAvailableError{RetryAfter: p.retryAfter(modelID, pool)}
 	}
 	if err != nil {
 		return "", "", err
 	}
-	if cut != "" {
-		p.clearCut(modelID)
-	}
+	clear()
 	return id, prov, nil
 }
 
-// retryAfter is the shortest remaining cool-down among the model's eligible
-// providers (in the rated bids when they were read, never a configured
-// exclusion), capped at MaxRetryAfter and rounded up to whole seconds
-// (at least 1s). 0 when none is cooling.
-func (p *Pool) retryAfter(modelID string, bids []router.RatedBid, bidsOK bool, configured map[string]bool) time.Duration {
-	inBids := map[string]bool{}
-	for _, b := range bids {
-		inBids[strings.ToLower(strings.TrimSpace(b.Provider))] = true
-	}
-	excluded := map[string]bool{}
-	for pr := range configured {
-		excluded[strings.ToLower(strings.TrimSpace(pr))] = true
+// retryAfter is the shortest remaining cool-down among pool's providers
+// (the model's healthy, not excluded rated bids), capped at MaxRetryAfter
+// and rounded up to whole seconds (at least 1s). 0 when none is cooling.
+func (p *Pool) retryAfter(modelID string, pool []router.RatedBid) time.Duration {
+	inPool := map[string]bool{}
+	for _, b := range pool {
+		inPool[normProv(b.Provider)] = true
 	}
 	prefix := normModel(modelID) + "|"
 	now := time.Now()
@@ -429,8 +448,7 @@ func (p *Pool) retryAfter(modelID string, bids []router.RatedBid, bidsOK bool, c
 		if !strings.HasPrefix(k, prefix) || !now.Before(until) {
 			continue
 		}
-		pr := strings.TrimPrefix(k, prefix)
-		if excluded[pr] || bidsOK && !inBids[pr] {
+		if !inPool[strings.TrimPrefix(k, prefix)] {
 			continue
 		}
 		if d := until.Sub(now); best == 0 || d < best {
@@ -539,18 +557,15 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	}
 	p.MarkCooling(modelID, failedProv)
 
-	// 3. Guardrail: count distinct providers outside the exclusions before
-	// closing anything.
-	exclude := p.avoidSet(modelID)
-	exclude[failedProv] = true
-	bids, err := p.client.RatedBids(modelID)
-	if err != nil {
-		slog.Warn("pool: failover: rated bids unavailable; keeping session", "model", modelID, "err", err)
-		return res, fmt.Errorf("%w (bids unavailable: %v)", ErrNoAlternate, err)
-	}
-	alts, n := alternates(bids, exclude)
-	if n == 0 {
-		return res, ErrNoAlternate
+	// 3. Guardrail: the same filtered list as a normal open, without the
+	// failed provider, before closing anything.
+	cands, _, err := p.candidates(modelID, failedProv)
+	if err != nil || len(cands) == 0 {
+		slog.Warn("pool: failover: no healthy alternate; keeping session", "model", modelID, "session", short(failedID), "err", err)
+		if err == nil {
+			return res, ErrNoAlternate
+		}
+		return res, fmt.Errorf("%w (%v)", ErrNoAlternate, err)
 	}
 	// 4. Retire and close the failed session synchronously (bounded), so
 	// our own close and open never race on the wallet nonce.
@@ -574,14 +589,9 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		return res, nil
 	}
 
-	// 5. Open on another provider: by bid when an avoided provider bids
-	// on the model, else by model. 6. Pool it with its provider, leased.
-	var id, prov string
-	if avoidedBidder(bids, exclude) {
-		id, prov, err = p.openExcluding(modelID, durationSec, alts)
-	} else {
-		id, prov, err = p.openByModel(modelID, durationSec)
-	}
+	// 5. Open on another provider, by bid from the filtered list.
+	// 6. Pool it with its provider, leased.
+	id, prov, err := p.openExcluding(modelID, durationSec, cands)
 	p.finishFailoverOpen(key, ao, id, prov, durationSec, err, &res)
 	if err != nil {
 		return res, err

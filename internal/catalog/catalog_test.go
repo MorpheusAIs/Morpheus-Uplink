@@ -147,6 +147,13 @@ func TestFailedFetchPausesRefetch(t *testing.T) {
 	}
 }
 
+// lockTestModels is a well-formed models file (valid last_updated and a
+// healthy bidDetail), so the refresh below is not paused by a bidDetail
+// failure.
+const lockTestModels = `{"last_updated":1700000000,"models":[{"Name":"m","Id":"0xabc"},` +
+	`{"Name":"example-model","Id":"0xa000000000000000000000000000000000000000000000000000000000000001",` +
+	`"bidDetail":[{"bidId":"0xb000000000000000000000000000000000000000000000000000000000000001","status":"healthy"}]}]}`
+
 // Security gate SHOULD-2 (c): the catalog lock is not held during a
 // fetch, a caller with no data waits for the running fetch instead of
 // starting another, and stale data is served at once while a refresh runs.
@@ -160,7 +167,7 @@ func TestFetchRunsOutsideLock(t *testing.T) {
 		if g := gate.Load(); g != nil {
 			<-*g
 		}
-		_, _ = w.Write([]byte(`{"models":[{"Name":"m","Id":"0xabc"}]}`))
+		_, _ = w.Write([]byte(lockTestModels))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)

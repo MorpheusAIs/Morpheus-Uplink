@@ -111,3 +111,22 @@ func TestHexValue(t *testing.T) {
 		}
 	}
 }
+
+// A real rated row (EIP-55 mixed-case provider, the full Bid object, the
+// zero outer ID) yields the lowercase provider and the Bid.Id bid id.
+func TestRatedBidsChecksummedProvider(t *testing.T) {
+	const prov = "0xA0a0A0a0A0a0a0A0A0a0a0a0a0A0a0A0A0a0A0a0"
+	const bid = "0xB0b0000000000000000000000000000000000000000000000000000000000001"
+	full := `{"bids":[{"ID":"` + zeroHash + `","Bid":{"Id":"` + bid + `","Provider":"` + prov + `",` +
+		`"ModelAgentId":"0xa000000000000000000000000000000000000000000000000000000000000001",` +
+		`"PricePerSecond":"1000","Nonce":"0","CreatedAt":"1700000000","DeletedAt":"0"},"Score":0.5}]}`
+	var opened string
+	c := ratedServer(t, full, &opened)
+	bids, err := c.RatedBids("0xm")
+	if err != nil || len(bids) != 1 {
+		t.Fatalf("bids=%v err=%v", bids, err)
+	}
+	if bids[0].Provider != strings.ToLower(prov) || bids[0].ID != strings.ToLower(bid) {
+		t.Fatalf("row %+v", bids[0])
+	}
+}
