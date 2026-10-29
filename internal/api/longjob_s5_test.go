@@ -258,14 +258,13 @@ func TestS5ReleaseEndpoint(t *testing.T) {
 	if r := e.release(t, k1, body, nil); r.body != "{\"closed\":false,\"reason\":\"shared\",\"released\":true}\n" {
 		t.Fatalf("shared %q", r.body)
 	}
-	// Sole holder: closed.
+	// Sole holder: released for closing; the sweep closes it (never the
+	// request path).
 	r := e.release(t, k2, body, nil)
-	if r.body != "{\"closed\":true,\"released\":true}\n" {
+	if r.body != "{\"closed\":false,\"reason\":\"closing\",\"released\":true}\n" {
 		t.Fatalf("sole %q", r.body)
 	}
-	if _, closes := m.snapshot(); len(closes) != 1 {
-		t.Fatalf("closes %v", closes)
-	}
+	waitFor(t, "sweep close", func() bool { _, closes := m.snapshot(); return len(closes) == 1 })
 	// S5-21: no Bearer or a bad one, with a forged key id → 401, nothing released.
 	if r := e.call(t, k1, nil, false); r.code != 200 {
 		t.Fatal(r.body)

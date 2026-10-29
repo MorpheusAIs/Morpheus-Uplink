@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +133,8 @@ type fakeSess struct {
 // only counts (Uplink never uses it; asserted 0 at cleanup).
 type fakeMarket struct {
 	t           *testing.T
+	openErrN    int // when > 0, only the first openErrN opens fail with openErrBody
+	rpcURLs     int // GET /config DerivedConfig.EthNodeURLs count (0: no /config)
 	mu          sync.Mutex
 	providers   []string
 	behave      map[string]fakeProvider
@@ -210,12 +214,13 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 		}
 	}
 	m.opens = append(m.opens, openRec{bid: byBid, provider: prov, body: body})
-	if m.openErrBody != "" {
+	if m.openErrBody != "" && (m.openErrN == 0 || len(m.opens) <= m.openErrN) {
 		http.Error(w, m.openErrBody, http.StatusInternalServerError)
 		return
 	}
 	if prov == "" || m.openFail[prov] {
-		http.Error(w, `{"error":"no provider accepting session"}`, http.StatusInternalServerError)
+		// The router's provider-stage text: the provider is at fault.
+		http.Error(w, `{"error":"provider healthcheck ping failed: dial tcp: connect: connection refused"}`, http.StatusInternalServerError)
 		return
 	}
 	m.next++
@@ -343,6 +348,20 @@ func (m *fakeMarket) server() *httptest.Server {
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"address":"0x1111111111111111111111111111111111111111"}`))
 	})
+	mux.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		n := m.rpcURLs
+		m.mu.Unlock()
+		if n == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		urls := make([]string, n)
+		for i := range urls {
+			urls[i] = "https://rpc.example/" + strconv.Itoa(i)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"DerivedConfig": map[string]any{"EthNodeURLs": urls}})
+	})
 	mux.HandleFunc("GET /healthcheck", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"status":"healthy"}`)) })
 	mux.HandleFunc("GET /blockchain/balance", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"eth":1,"mor":1}`)) })
 	ts := httptest.NewServer(mux)
@@ -402,6 +421,7 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	srv.pool.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
+	startSweep(t, srv)
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	if cfg.WebPublicURL == "" {
 		cfg.WebPublicURL = "http://" + ts.Listener.Addr().String() // for the console's CSRF check
@@ -655,8 +675,10 @@ func TestFailoverConcurrentSingleFlight(t *testing.T) {
 			t.Fatalf("request %d: %d", i, c)
 		}
 	}
+	// One open on A (shared by all four), one close of A (by the sweep once
+	// the last request on it ends), one open on B.
+	waitFor(t, "sweep close of A", func() bool { _, c := m.snapshot(); return len(c) >= 1 })
 	opens, closes := m.snapshot()
-	// One open on A (shared by all four), one close of A, one open on B.
 	if len(opens) != 2 || len(closes) != 1 {
 		t.Fatalf("opens %d closes %d (want 2/1)", len(opens), len(closes))
 	}
@@ -811,4 +833,14 @@ func TestFailoverDisabled(t *testing.T) {
 	if code != 402 || len(opens) != 1 || len(closes) != 0 {
 		t.Fatalf("code %d opens %d closes %d", code, len(opens), len(closes))
 	}
+}
+
+// startSweep runs the pool's orphan sweep as cmd/uplink does, for the
+// test's lifetime: retired and released sessions are closed there.
+func startSweep(t *testing.T, srv *Server) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { srv.pool.RunSweep(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
 }

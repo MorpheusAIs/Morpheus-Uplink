@@ -1,13 +1,16 @@
 package pool
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +45,11 @@ type leaseSess struct {
 	opened, ends   int64
 	closed         bool
 	durationOpened int
+	// visibleAt: the session is listed only from this fake time (a late
+	// mint after a cut open); closeAt: it is closed from this fake time
+	// (a close that finished after the client gave up). 0: unset.
+	visibleAt, closeAt int64
+	bid                string // bid id when not bidID(model, prov)
 }
 
 // leaseRouter is a proxy-router for lease tests: rates bids, opens by bid
@@ -96,6 +104,109 @@ type leaseRouter struct {
 	// lists counts session-list answers (offset 0); listsAfterLand
 	// counts those after a session landed through openFault.
 	lists, listsAfterLand int
+
+	// GET /config: rpcURLs fake RPC URLs (they carry a fake key the tests
+	// look for in logs), or configStatus when non-zero.
+	rpcURLs, configStatus, configCalls int
+	// The router keeps going after a disconnect. openHang: a by-bid open
+	// answers nothing until the client gives up, then the session mints
+	// mintDelay later on the fake clock. openTake advances the fake clock
+	// by that much inside every open before it answers (a slow open).
+	// closeHang: a close answers nothing until the client gives up, then
+	// the session closes closeDelay later; closeTake: like openTake.
+	openHang, closeHang bool
+	mintDelay           time.Duration
+	closeDelay          time.Duration
+	openTake, closeTake time.Duration
+	// Write gauges (own lock: an answer may be written under mu).
+	gmu               sync.Mutex
+	closeInflight     int
+	maxCloseInflight  int
+	writesInflight    int // opens plus closes in flight
+	maxWritesInflight int
+	// extraMint, when set, is asked after each by-bid open that minted:
+	// true mints a second session on the same bid (an escalated extra tx
+	// that did not revert, or a second router call).
+	extraMint func(bid string) bool
+	// openStatus, when set, mints the by-bid open (hidden from the next
+	// hideLanded lists) and answers this status, like a proxy in front of
+	// the router that lost the router's answer (502/503/504).
+	openStatus int
+	// calls counts every request except GET /config (router calls per
+	// operation).
+	calls atomic.Int64
+	// closeHook, when set, runs as each close arrives (before closeTake).
+	closeHook func(id string)
+}
+
+// endOnce ends a write gauge when the answer starts (the client cannot
+// see it before), not when the handler returns: the next slot holder may
+// already be sending by then.
+type endOnce struct {
+	http.ResponseWriter
+	once sync.Once
+	end  func()
+}
+
+func (e *endOnce) WriteHeader(code int) { e.once.Do(e.end); e.ResponseWriter.WriteHeader(code) }
+func (e *endOnce) Write(b []byte) (int, error) {
+	e.once.Do(e.end)
+	return e.ResponseWriter.Write(b)
+}
+
+// rpcURLSecret is in every fake RPC URL the mock's /config lists; it must
+// never appear in a log, error or status answer.
+const rpcURLSecret = "k3y-must-not-leak"
+
+// visibleLocked: s is on chain at the mock's fake time (lr.mu held).
+func (lr *leaseRouter) visibleLocked(s *leaseSess) bool {
+	now := lr.clock.Now().Unix()
+	if s.closeAt != 0 && now >= s.closeAt {
+		s.closed = true
+	}
+	return s.visibleAt == 0 || now >= s.visibleAt
+}
+
+// writeBegin and writeEnd count wallet writes (opens and closes) in flight.
+func (lr *leaseRouter) writeBegin(close bool) {
+	lr.gmu.Lock()
+	defer lr.gmu.Unlock()
+	lr.writesInflight++
+	lr.maxWritesInflight = max(lr.maxWritesInflight, lr.writesInflight)
+	if close {
+		lr.closeInflight++
+		lr.maxCloseInflight = max(lr.maxCloseInflight, lr.closeInflight)
+	}
+}
+
+func (lr *leaseRouter) writeEnd(close bool) {
+	lr.gmu.Lock()
+	defer lr.gmu.Unlock()
+	lr.writesInflight--
+	if close {
+		lr.closeInflight--
+	}
+}
+
+// writePeaks is the most wallet writes (and closes) ever in flight at once.
+func (lr *leaseRouter) writePeaks() (writes, closes int) {
+	lr.gmu.Lock()
+	defer lr.gmu.Unlock()
+	return lr.maxWritesInflight, lr.maxCloseInflight
+}
+
+// openSet is the mock's on-chain open session ids at its fake time.
+func (lr *leaseRouter) openSet() []string {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	var out []string
+	for _, id := range lr.order {
+		if s := lr.sessions[id]; lr.visibleLocked(s) && !s.closed {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // healthy is the mock's healthy-bid source.
@@ -178,8 +289,22 @@ func (lr *leaseRouter) providersOf(model string) []string {
 
 func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	lr := &leaseRouter{clock: c, sessions: map[string]*leaseSess{}, bidders: map[string][]string{}, rows: map[string][]map[string]any{},
-		unhealthy: map[string]bool{}, health: map[string][]string{}, landed: map[string]bool{}}
+		unhealthy: map[string]bool{}, health: map[string][]string{}, landed: map[string]bool{}, rpcURLs: 1}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
+		lr.mu.Lock()
+		defer lr.mu.Unlock()
+		lr.configCalls++
+		if lr.configStatus != 0 {
+			http.Error(w, `{"error":"config unavailable"}`, lr.configStatus)
+			return
+		}
+		urls := []string{}
+		for i := range lr.rpcURLs {
+			urls = append(urls, fmt.Sprintf("https://rpc%d.example/v2/%s", i, rpcURLSecret))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Version": "v7.18.0", "DerivedConfig": map[string]any{"EthNodeURLs": urls, "WalletAddress": "0x1111111111111111111111111111111111111111"}})
+	})
 	mux.HandleFunc("GET /wallet", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"address": "0x1111111111111111111111111111111111111111"})
 	})
@@ -188,8 +313,12 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		if s.closed {
 			closedAt = s.ends
 		}
+		bid := s.bid
+		if bid == "" {
+			bid = bidID(s.model, s.prov)
+		}
 		return map[string]any{"Id": id, "ModelAgentId": s.model, "Stake": "1000", "OpenedAt": s.opened, "EndsAt": s.ends, "ClosedAt": closedAt,
-			"Provider": s.prov, "BidID": bidID(s.model, s.prov)}
+			"Provider": s.prov, "BidID": bid}
 	}
 	mux.HandleFunc("GET /blockchain/sessions/user", func(w http.ResponseWriter, r *http.Request) {
 		lr.mu.Lock()
@@ -205,7 +334,7 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 				lr.hideLeft--
 			}
 			for _, id := range lr.order {
-				if s := lr.sessions[id]; !s.closed && !(hide && lr.landed[id]) {
+				if s := lr.sessions[id]; lr.visibleLocked(s) && !s.closed && !(hide && lr.landed[id]) {
 					rows = append(rows, row(id, s))
 				}
 			}
@@ -216,13 +345,38 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		lr.mu.Lock()
 		defer lr.mu.Unlock()
 		s := lr.sessions[r.PathValue("id")]
-		if s == nil {
-			http.Error(w, "not found", 404)
+		if s == nil || !lr.visibleLocked(s) {
+			http.Error(w, `{"error":"session not found"}`, 404)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"session": row(r.PathValue("id"), s)})
 	})
 	mux.HandleFunc("POST /blockchain/sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		lr.mu.Lock()
+		hang, take, hook := lr.closeHang, lr.closeTake, lr.closeHook
+		lr.mu.Unlock()
+		if hook != nil {
+			hook(r.PathValue("id"))
+		}
+		if take > 0 {
+			lr.clock.Advance(take)
+		}
+		if hang {
+			// Like the real router: the close goes on after the client gave
+			// up and lands closeDelay later.
+			// The server notices a disconnect only once the body is read.
+			_, _ = io.Copy(io.Discard, r.Body)
+			lr.mu.Lock()
+			lr.closes = append(lr.closes, r.PathValue("id"))
+			lr.mu.Unlock()
+			<-r.Context().Done()
+			lr.mu.Lock()
+			if s := lr.sessions[r.PathValue("id")]; s != nil {
+				s.closeAt = lr.clock.Now().Add(lr.closeDelay).Unix()
+			}
+			lr.mu.Unlock()
+			return
+		}
 		lr.mu.Lock()
 		defer lr.mu.Unlock()
 		id := r.PathValue("id")
@@ -295,7 +449,38 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 	mux.HandleFunc("POST /blockchain/bids/{id}/session", func(w http.ResponseWriter, r *http.Request) {
 		lr.mu.Lock()
 		lr.byBid = append(lr.byBid, r.PathValue("id"))
+		hang, take, extra := lr.openHang, lr.openTake, lr.extraMint
 		lr.mu.Unlock()
+		if take > 0 {
+			lr.clock.Advance(take)
+		}
+		if hang {
+			// Like the real router: the open goes on after the client gave
+			// up; the session mints mintDelay later.
+			b, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(b))
+			<-r.Context().Done()
+			m, pv, ok := lr.bidOwner(r.PathValue("id"))
+			if ok {
+				id := open(nil, r, m, pv)
+				lr.mu.Lock()
+				s := lr.sessions[id]
+				s.opened = lr.clock.Now().Add(lr.mintDelay).Unix()
+				s.ends = s.opened + int64(s.durationOpened)
+				s.visibleAt = s.opened
+				lr.mu.Unlock()
+			}
+			return
+		}
+		if extra != nil {
+			defer func() {
+				if extra(r.PathValue("id")) {
+					if m, pv, ok := lr.bidOwner(r.PathValue("id")); ok {
+						open(nil, r, m, pv)
+					}
+				}
+			}()
+		}
 		lr.mu.Lock()
 		fault, arrivals, gate := lr.openFault, lr.arrivals, lr.gate
 		lr.inflight++
@@ -321,7 +506,19 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		}
 		m, pv, ok := lr.bidOwner(r.PathValue("id"))
 		if !ok {
-			http.Error(w, `{"error":"provider unreachable"}`, 500)
+			http.Error(w, `{"error":"provider healthcheck ping failed: dial tcp: connect: connection refused"}`, 500)
+			return
+		}
+		lr.mu.Lock()
+		status := lr.openStatus
+		lr.mu.Unlock()
+		if status != 0 {
+			id := open(nil, r, m, pv)
+			lr.mu.Lock()
+			lr.landed[id] = true
+			lr.hideLeft = lr.hideLanded
+			lr.mu.Unlock()
+			http.Error(w, http.StatusText(status), status)
 			return
 		}
 		if fault != nil {
@@ -339,7 +536,19 @@ func newLeaseRouter(t *testing.T, c *fakeClock) (*leaseRouter, *Pool) {
 		}
 		open(w, r, m, pv)
 	})
-	ts := httptest.NewServer(mux)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/config" {
+			lr.calls.Add(1)
+		}
+		if r.Method == http.MethodPost && (strings.HasPrefix(r.URL.Path, "/blockchain/bids/") || strings.HasSuffix(r.URL.Path, "/close")) {
+			isClose := strings.HasSuffix(r.URL.Path, "/close")
+			lr.writeBegin(isClose)
+			e := &endOnce{ResponseWriter: w, end: func() { lr.writeEnd(isClose) }}
+			defer e.once.Do(e.end)
+			w = e
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 	p := New(router.New(ts.URL, "u", "p"), 600)
 	p.SetClock(c.Now)
@@ -499,9 +708,15 @@ func TestS5ReleaseOutcomes(t *testing.T) {
 	l.Done()
 	l3, _ := mustAcquire(t, p, modelA, AcquireOpts{KeyID: "k3"})
 	l3.Done()
-	if out := p.Release(modelA, "k3"); out != (ReleaseOutcome{Released: true, Closed: true}) {
+	// The last holder's release retires the session; the sweep closes it
+	// (never the request path).
+	if out := p.Release(modelA, "k3"); out != (ReleaseOutcome{Released: true, Reason: "closing"}) {
 		t.Fatalf("sole holder: %+v", out)
 	}
+	if lr.closedCount(r.SessionID) != 0 {
+		t.Fatal("release closed on the request path")
+	}
+	p.SweepIdle(time.Hour)
 	if lr.closedCount(r.SessionID) != 1 || len(p.Snapshot()) != 0 {
 		t.Fatal("sole-holder release did not close")
 	}
@@ -528,6 +743,7 @@ func TestS5FailoverWithInflightRetires(t *testing.T) {
 		t.Fatal("lease granted on a retired session")
 	}
 	other.Done()
+	p.SweepIdle(time.Hour) // the sweep closes the retired session
 	waitUntil(t, "deferred close", func() bool { return lr.closedCount(r.SessionID) == 1 })
 }
 

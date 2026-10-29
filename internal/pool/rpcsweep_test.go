@@ -1,0 +1,384 @@
+package pool
+
+// The sweep, closes and shared-wallet warnings.
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/absgrafx/morpheus-uplink/internal/router"
+)
+
+func pooledHas(p *Pool, id string) bool {
+	for _, x := range pooledIDs(p) {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestYoungUnheldNotAdoptedBySweep(t *testing.T) {
+	for _, pooled := range []bool{false, true} {
+		name := map[bool]string{false: "adopted", true: "closed"}[pooled]
+		t.Run(name, func(t *testing.T) {
+			c, lr, p, _ := rpcEnv(t)
+			if pooled {
+				l, _ := mustAcquire(t, p, modelB, AcquireOpts{})
+				l.Done()
+				ageAll(c)
+			}
+			lr.addChain("0xyoung", modelB, c.Now().Add(-60*time.Second), c.Now().Add(time.Hour))
+			// Every scan: the sweep, a status poll, a forced scan, a pre-open scan.
+			p.ScanOrphans(context.Background())
+			_ = p.RehydrateForce()
+			mustAcquire(t, p, modelC, AcquireOpts{})
+			if pooledHas(p, "0xyoung") || len(lr.closesSent()) != 0 {
+				t.Fatalf("young unheld session touched at 60 s: pooled %v closes %v", pooledIDs(p), lr.closesSent())
+			}
+			c.Advance(61 * time.Second) // 121 s old
+			p.ScanOrphans(context.Background())
+			if pooled {
+				if lr.closedCount("0xyoung") != 1 {
+					t.Fatalf("closes %v, want the extra session closed after pruneGrace", lr.closesSent())
+				}
+			} else if !pooledHas(p, "0xyoung") {
+				t.Fatalf("pooled %v, want the session adopted after pruneGrace", pooledIDs(p))
+			}
+		})
+	}
+}
+
+func TestYoungSessionAdoptedOnlyByMatchingAttempt(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	a := p.addAttempt(modelB, bidID(modelB, leaseProv1))
+	lr.addChainOn("0xother", modelB, leaseProv2, c.Now().Add(5*time.Second), c.Now().Add(time.Hour))
+	c.Advance(10 * time.Second)
+	p.ScanOrphans(context.Background())
+	if len(pooledIDs(p)) != 0 {
+		t.Fatalf("a young session on another bid was adopted: %v", pooledIDs(p))
+	}
+	lr.addChainOn("0xmine", modelB, leaseProv1, c.Now(), c.Now().Add(time.Hour))
+	p.ScanOrphans(context.Background())
+	if !pooledHas(p, "0xmine") {
+		t.Fatalf("pooled %v, want the session matching the attempt", pooledIDs(p))
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, x := range p.pending {
+		if x == a {
+			t.Fatal("matched attempt still pending")
+		}
+	}
+}
+
+func TestRecordlessOrphanAdoptedOrClosed(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t) // a fresh pool: no records of any session
+	old := c.Now().Add(-30 * time.Minute)
+	lr.addChain("0xa1", modelA, old, c.Now().Add(time.Hour))
+	lr.addChain("0xa2", modelA, old.Add(time.Minute), c.Now().Add(2*time.Hour))
+	lr.addChainOn("0xb1", modelB, leaseProv2, old, c.Now().Add(time.Hour))
+	lr.addChain("0xexp", modelC, old, c.Now().Add(-time.Minute))
+	p.MarkCooling(modelB, leaseProv2) // cooling does not stop adoption
+	for range 5 {
+		p.ScanOrphans(context.Background())
+	}
+	if !pooledHas(p, "0xa2") || !pooledHas(p, "0xb1") {
+		t.Fatalf("pooled %v, want 0xa2 (latest end) and 0xb1", pooledIDs(p))
+	}
+	if lr.closedCount("0xa1") != 1 || lr.closedCount("0xexp") != 1 {
+		t.Fatalf("closes %v, want the duplicate and the expired session", lr.closesSent())
+	}
+	assertNoOrphans(t, lr, p)
+}
+
+func TestAttemptWindowBoundaries(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	a := &attempt{model: normModel(modelB), bid: strings.ToLower(bidID(modelB, leaseProv1)), start: start}
+	s := func(opened time.Time) router.Session {
+		return router.Session{ModelAgentID: modelB, BidID: strings.ToUpper(bidID(modelB, leaseProv1)[2:]), OpenedAt: opened.Unix()}
+	}
+	for _, tc := range []struct {
+		at   time.Duration
+		want bool
+	}{
+		{-attemptSkew, true}, {-attemptSkew - time.Second, false},
+		{0, true}, {routerOpenMaxLife + attemptSkew, true}, {routerOpenMaxLife + attemptSkew + time.Second, false},
+	} {
+		ses := s(start.Add(tc.at))
+		ses.BidID = "0x" + ses.BidID
+		if got := a.matches(ses); got != tc.want {
+			t.Errorf("opened at %v: match %v, want %v", tc.at, got, tc.want)
+		}
+	}
+	other := s(start)
+	other.BidID = bidID(modelB, leaseProv2)
+	if a.matches(other) {
+		t.Error("another bid matched")
+	}
+	// Pruned after attemptKeep + attemptSkew; at most maxPendingAttempts kept.
+	c, _, p, _ := rpcEnv(t)
+	p.addAttempt(modelB, "0x01")
+	c.Advance(attemptKeep + attemptSkew - time.Second)
+	p.mu.Lock()
+	p.pruneAttemptsLocked(c.Now())
+	n := len(p.pending)
+	p.mu.Unlock()
+	if n != 1 {
+		t.Fatal("attempt pruned early")
+	}
+	c.Advance(time.Second)
+	for range maxPendingAttempts + 5 {
+		p.addAttempt(modelB, "0x02")
+	}
+	p.mu.Lock()
+	n = len(p.pending)
+	p.mu.Unlock()
+	if n != maxPendingAttempts {
+		t.Fatalf("%d pending attempts, want the cap %d", n, maxPendingAttempts)
+	}
+}
+
+func TestCloseAlreadyClosedIsSuccess(t *testing.T) {
+	for _, gone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ClosedAt set", true: "404"}[gone], func(t *testing.T) {
+			c, lr, p, _ := rpcEnv(t)
+			lr.addChain("0xdone", modelB, c.Now().Add(-time.Hour), c.Now().Add(-time.Minute))
+			var evs []ReconcileEvent
+			var mu sync.Mutex
+			p.SetOnRescanEvent(func(ev ReconcileEvent) { mu.Lock(); evs = append(evs, ev); mu.Unlock() })
+			lr.closeFail.Store(true)
+			lr.set(func(lr *leaseRouter) {
+				lr.closeHook = func(id string) {
+					lr.mu.Lock()
+					if gone {
+						delete(lr.sessions, id)
+					} else {
+						lr.sessions[id].closed = true
+					}
+					lr.mu.Unlock()
+				}
+			})
+			p.ScanOrphans(context.Background())
+			p.ScanOrphans(context.Background())
+			if n := len(lr.closesSent()); n != 1 {
+				t.Fatalf("closes %d, want 1 (no retry)", n)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(evs) != 1 || evs[0].Result != "already_closed" {
+				t.Fatalf("events %+v, want one already_closed", evs)
+			}
+		})
+	}
+}
+
+func TestUnheldRecheckedInsideSlot(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	l, res := mustAcquire(t, p, modelB, AcquireOpts{})
+	l.Done()
+	dup := orphans(c, lr, modelB, 1)[0]
+	// A tick records it close-due but cannot close (a cut open's window).
+	a := p.addAttempt(modelC, bidID(modelC, leaseProv1))
+	p.setRouterBusy(a)
+	p.ScanOrphans(context.Background())
+	// Before the next tick our session goes and an Acquire leases the old one.
+	lr.mu.Lock()
+	lr.sessions[res.SessionID].closed = true
+	lr.mu.Unlock()
+	p.notifyClosed(res.SessionID)
+	p.dropAttempt(a)
+	_, r2 := mustAcquire(t, p, modelB, AcquireOpts{})
+	if r2.SessionID != dup {
+		t.Fatalf("leased %s, want %s adopted", r2.SessionID, dup)
+	}
+	p.ScanOrphans(context.Background())
+	if n := len(lr.closesSent()); n != 0 {
+		t.Fatalf("closed %v after it was leased", lr.closesSent())
+	}
+}
+
+// closeDuring runs one sweep close of a duplicate of modelC while f runs
+// inside the close call; the kept session is dropped first so the closing
+// one would otherwise be adoptable.
+func closeDuring(t *testing.T, f func(c *fakeClock, lr *leaseRouter, p *Pool, closing string)) {
+	c, lr, p, _ := rpcEnv(t)
+	old := c.Now().Add(-30 * time.Minute)
+	lr.addChain("0xkeep", modelC, old, c.Now().Add(2*time.Hour))
+	lr.addChain("0xdup", modelC, old, c.Now().Add(time.Hour))
+	ran := false
+	lr.set(func(lr *leaseRouter) {
+		lr.closeHook = func(id string) {
+			if ran {
+				return
+			}
+			ran = true
+			lr.mu.Lock()
+			lr.sessions["0xkeep"].closed = true
+			lr.mu.Unlock()
+			p.notifyClosed("0xkeep")
+			f(c, lr, p, id)
+		}
+	})
+	p.ScanOrphans(context.Background())
+	if !ran {
+		t.Fatal("no close")
+	}
+}
+
+func TestPollAdoptDuringClose(t *testing.T) {
+	closeDuring(t, func(_ *fakeClock, _ *leaseRouter, p *Pool, closing string) {
+		_ = p.RehydrateForce()
+		_ = p.Rehydrate()
+		if pooledHas(p, closing) {
+			t.Fatal("status poll adopted a session being closed")
+		}
+	})
+}
+
+func TestLeaseDuringClose(t *testing.T) {
+	got := make(chan AcquireResult, 1)
+	closeDuring(t, func(_ *fakeClock, _ *leaseRouter, p *Pool, _ string) {
+		go func() {
+			_, r, err := p.Acquire(modelC, AcquireOpts{})
+			if err != nil {
+				t.Error(err)
+			}
+			got <- r
+		}()
+		time.Sleep(10 * time.Millisecond)
+	})
+	if r := <-got; r.SessionID == "0xdup" || r.SessionID == "" {
+		t.Fatalf("Acquire during the close got %q", r.SessionID)
+	}
+}
+
+func TestCloseMarkClearedOnFailure(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	lr.addChain("0xexp", modelB, c.Now().Add(-time.Hour), c.Now().Add(-time.Minute))
+	lr.closeFail.Store(true)
+	p.ScanOrphans(context.Background())
+	p.mu.Lock()
+	n := len(p.closingIDs)
+	p.mu.Unlock()
+	if n != 0 {
+		t.Fatal("failed close left its mark")
+	}
+	lr.closeFail.Store(false)
+	p.ScanOrphans(context.Background())
+	if lr.closedCount("0xexp") != 2 || len(lr.openSet()) != 0 {
+		t.Fatalf("closes %v, want a second try that closes it", lr.closesSent())
+	}
+}
+
+func TestPickOneTieBreak(t *testing.T) {
+	ss := []router.Session{
+		{ID: "0xC", EndsAt: 100, OpenedAt: 10},
+		{ID: "0xb", EndsAt: 200, OpenedAt: 10},
+		{ID: "0xa", EndsAt: 200, OpenedAt: 10},
+		{ID: "0xd", EndsAt: 200, OpenedAt: 5},
+	}
+	if got := pickOne(ss).ID; got != "0xa" {
+		t.Fatalf("pickOne = %s, want 0xa (latest end, later open, lowest id)", got)
+	}
+	ss = append(ss, router.Session{ID: "0xz", EndsAt: 200, OpenedAt: 11})
+	if got := pickOne(ss).ID; got != "0xz" {
+		t.Fatalf("pickOne = %s, want 0xz (later open)", got)
+	}
+}
+
+func TestSharedWalletTriggers(t *testing.T) {
+	t.Run("a: young session with no attempt", func(t *testing.T) {
+		logs := captureLogs(t)
+		c, lr, p, _ := rpcEnv(t)
+		lr.addChain("0xforeign", modelB, c.Now().Add(-30*time.Second), c.Now().Add(time.Hour))
+		p.ScanOrphans(context.Background())
+		if logs.count("trigger=a") != 1 {
+			t.Fatalf("logs: %s", logs)
+		}
+	})
+	t.Run("b: our pooled session closed elsewhere", func(t *testing.T) {
+		logs := captureLogs(t)
+		c, lr, p, _ := rpcEnv(t)
+		l, res := mustAcquire(t, p, modelB, AcquireOpts{})
+		l.Done()
+		ageAll(c)
+		lr.mu.Lock()
+		lr.sessions[res.SessionID].closed = true
+		lr.mu.Unlock()
+		p.ScanOrphans(context.Background())
+		if logs.count("trigger=b") != 1 {
+			t.Fatalf("logs: %s", logs)
+		}
+	})
+	t.Run("c: many foreign adoptions", func(t *testing.T) {
+		logs := captureLogs(t)
+		c, lr, p, _ := rpcEnv(t)
+		for _, m := range []string{modelA, modelB, modelC, modelD} {
+			lr.addChain("0xf"+m[2:6], m, c.Now().Add(-30*time.Minute), c.Now().Add(time.Hour))
+		}
+		p.ScanOrphans(context.Background())
+		if logs.count("trigger=c") != 1 {
+			t.Fatalf("logs: %s", logs)
+		}
+	})
+}
+
+func TestClockSkewWarn(t *testing.T) {
+	for _, tc := range []struct {
+		ahead time.Duration
+		warn  int
+	}{{attemptSkew + time.Second, 1}, {attemptSkew - time.Second, 0}} {
+		logs := captureLogs(t)
+		c, lr, p, _ := rpcEnv(t)
+		lr.addChain("0xahead", modelB, c.Now().Add(tc.ahead), c.Now().Add(time.Hour))
+		p.ScanOrphans(context.Background())
+		if n := logs.count("box clock behind chain"); n != tc.warn {
+			t.Errorf("chain %v ahead: %d warnings, want %d", tc.ahead, n, tc.warn)
+		}
+	}
+}
+
+func TestSharedWalletWarnRateLimited(t *testing.T) {
+	logs := captureLogs(t)
+	c, lr, p, _ := rpcEnv(t)
+	lr.addChain("0xf1", modelB, c.Now().Add(-10*time.Second), c.Now().Add(time.Hour))
+	p.ScanOrphans(context.Background())
+	c.Advance(time.Minute)
+	lr.addChain("0xf2", modelC, c.Now().Add(-10*time.Second), c.Now().Add(time.Hour))
+	p.ScanOrphans(context.Background())
+	if n := logs.count("wallet_shared_suspected"); n != 1 {
+		t.Fatalf("%d warnings 1 min apart, want 1", n)
+	}
+	c.Advance(sharedWalletWarnEvery)
+	lr.addChain("0xf3", modelD, c.Now().Add(-10*time.Second), c.Now().Add(time.Hour))
+	p.ScanOrphans(context.Background())
+	if n := logs.count("wallet_shared_suspected"); n != 2 {
+		t.Fatalf("%d warnings after the window, want 2", n)
+	}
+	if logs.count("suppressed=") == 0 {
+		t.Fatal("suppressed count not reported")
+	}
+}
+
+func TestKnownDuplicateClosedBySweepNotRequest(t *testing.T) {
+	c, lr, p, _ := rpcEnv(t)
+	l, _ := mustAcquire(t, p, modelB, AcquireOpts{})
+	l.Done()
+	p.addAttempt(modelB, bidID(modelB, leaseProv1))
+	lr.addChain("0xdup", modelB, c.Now(), c.Now().Add(time.Hour))
+	mustAcquire(t, p, modelC, AcquireOpts{}) // its pre-open scan matches 0xdup
+	p.mu.Lock()
+	known := p.knownDup["0xdup"]
+	p.mu.Unlock()
+	if !known || len(lr.closesSent()) != 0 {
+		t.Fatalf("known=%v closes=%v: the request path must only mark it", known, lr.closesSent())
+	}
+	p.ScanOrphans(context.Background()) // young, but a known duplicate
+	if lr.closedCount("0xdup") != 1 {
+		t.Fatalf("closes %v, want the sweep to close the known duplicate", lr.closesSent())
+	}
+}

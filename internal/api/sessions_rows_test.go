@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -114,6 +115,7 @@ func TestStatusNoGhostRowAfterClose(t *testing.T) {
 	if err := e.srv.pool.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
+	e.srv.pool.ScanOrphans(context.Background()) // the sweep closes it
 	if _, closes := m.snapshot(); len(closes) != 1 || closes[0] != id {
 		t.Fatalf("closes %v", closes)
 	}

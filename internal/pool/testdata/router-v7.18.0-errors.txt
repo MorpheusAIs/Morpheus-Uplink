@@ -1,0 +1,195 @@
+# Router v7.18.0 open-by-bid error texts and how Uplink classifies them
+# (internal/pool/transient.go classifyOpenErr). One case per line:
+#   <class><TAB><postElapsed><TAB><error text>
+# class: provider_fault | transient_presend | transient_window | maybe_sent.
+# postElapsed: how long the open POST ran. Every line assumes the router
+# uses one RPC URL and the operation's 18 s-rule retry is unused; the
+# other cases are in the tests. Texts follow the router's format strings
+# (proxy-router v7.18.0) and the incident log, ids and hosts redacted.
+
+# Incident texts.
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests: {"jsonrpc":"2.0","id":7,"error":{"code":429,"message":"Your app has exceeded its compute units per second capacity. If you have retries enabled, you can safely ignore this message."}}
+maybe_sent	21s	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests: {"jsonrpc":"2.0","id":7,"error":{"code":429,"message":"Your app has exceeded its compute units per second capacity. If you have retries enabled, you can safely ignore this message."}}
+transient_presend	1s	failed to get bid: 429 Too Many Requests: {"jsonrpc":"2.0","id":7,"error":{"code":429,"message":"Your app has exceeded its compute units per second capacity. If you have retries enabled, you can safely ignore this message."}}
+transient_presend	1s	failed to get provider: 429 Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: 429 Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: 429 Too Many Requests
+maybe_sent	9s	failed to send transaction: parse session receipt failed: failed to wait for confirmations 429 Too Many Requests
+provider_fault	5s	provider healthcheck ping failed: provider request failed: code: 500, msg: <nil>, error: failed to connect to provider: dial tcp <provider>:3333: i/o timeout
+provider_fault	1s	provider healthcheck ping failed: provider request failed: code: 500, msg: <nil>, error: failed to connect to provider: dial tcp <provider>:3333: connect: connection refused
+
+# Every marker after every pre-send prefix: transient, whatever the time.
+transient_presend	1s	failed to parse token supply: 429 Too Many Requests
+transient_presend	1s	failed to parse token supply: Too Many Requests
+transient_presend	1s	failed to parse token supply: rate limit reached
+transient_presend	1s	failed to parse token supply: usage limit exceeded
+transient_presend	1s	failed to parse token supply: quota exceeded
+transient_presend	1s	failed to parse token supply: request limit hit
+transient_presend	1s	failed to parse token supply: daily limit reached
+transient_presend	1s	failed to parse token supply: monthly limit reached
+transient_presend	1s	failed to parse token supply: Your app has exceeded its compute units per second capacity
+transient_presend	1s	failed to parse token budget: 429 Too Many Requests
+transient_presend	1s	failed to parse token budget: Too Many Requests
+transient_presend	1s	failed to parse token budget: rate limit reached
+transient_presend	1s	failed to parse token budget: usage limit exceeded
+transient_presend	1s	failed to parse token budget: quota exceeded
+transient_presend	1s	failed to parse token budget: request limit hit
+transient_presend	1s	failed to parse token budget: daily limit reached
+transient_presend	1s	failed to parse token budget: monthly limit reached
+transient_presend	1s	failed to parse token budget: Your app has exceeded its compute units per second capacity
+transient_presend	1s	failed to get bid: 429 Too Many Requests
+transient_presend	1s	failed to get bid: Too Many Requests
+transient_presend	1s	failed to get bid: rate limit reached
+transient_presend	1s	failed to get bid: usage limit exceeded
+transient_presend	1s	failed to get bid: quota exceeded
+transient_presend	1s	failed to get bid: request limit hit
+transient_presend	1s	failed to get bid: daily limit reached
+transient_presend	1s	failed to get bid: monthly limit reached
+transient_presend	1s	failed to get bid: Your app has exceeded its compute units per second capacity
+transient_presend	1s	failed to get my address: 429 Too Many Requests
+transient_presend	1s	failed to get my address: Too Many Requests
+transient_presend	1s	failed to get my address: rate limit reached
+transient_presend	1s	failed to get my address: usage limit exceeded
+transient_presend	1s	failed to get my address: quota exceeded
+transient_presend	1s	failed to get my address: request limit hit
+transient_presend	1s	failed to get my address: daily limit reached
+transient_presend	1s	failed to get my address: monthly limit reached
+transient_presend	1s	failed to get my address: Your app has exceeded its compute units per second capacity
+transient_presend	1s	failed to get provider: 429 Too Many Requests
+transient_presend	1s	failed to get provider: Too Many Requests
+transient_presend	1s	failed to get provider: rate limit reached
+transient_presend	1s	failed to get provider: usage limit exceeded
+transient_presend	1s	failed to get provider: quota exceeded
+transient_presend	1s	failed to get provider: request limit hit
+transient_presend	1s	failed to get provider: daily limit reached
+transient_presend	1s	failed to get provider: monthly limit reached
+transient_presend	1s	failed to get provider: Your app has exceeded its compute units per second capacity
+transient_presend	1s	failed to get current MOR allowance: 429 Too Many Requests
+transient_presend	1s	failed to get current MOR allowance: Too Many Requests
+transient_presend	1s	failed to get current MOR allowance: rate limit reached
+transient_presend	1s	failed to get current MOR allowance: usage limit exceeded
+transient_presend	1s	failed to get current MOR allowance: quota exceeded
+transient_presend	1s	failed to get current MOR allowance: request limit hit
+transient_presend	1s	failed to get current MOR allowance: daily limit reached
+transient_presend	1s	failed to get current MOR allowance: monthly limit reached
+transient_presend	1s	failed to get current MOR allowance: Your app has exceeded its compute units per second capacity
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: 429 Too Many Requests
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: Too Many Requests
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: rate limit reached
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: usage limit exceeded
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: quota exceeded
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: request limit hit
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: daily limit reached
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: monthly limit reached
+transient_presend	1s	failed to send transaction: approve MOR allowance failed: Your app has exceeded its compute units per second capacity
+transient_presend	30s	failed to get bid: 429 Too Many Requests
+
+# Every marker after every 18 s-rule (P*) prefix: transient under 18 s,
+# maybe-sent from 18 s.
+transient_window	2s	failed to get transactOpts: 429 Too Many Requests
+maybe_sent	25s	failed to get transactOpts: 429 Too Many Requests
+transient_window	2s	failed to get transactOpts: Too Many Requests
+maybe_sent	25s	failed to get transactOpts: Too Many Requests
+transient_window	2s	failed to get transactOpts: rate limit reached
+maybe_sent	25s	failed to get transactOpts: rate limit reached
+transient_window	2s	failed to get transactOpts: usage limit exceeded
+maybe_sent	25s	failed to get transactOpts: usage limit exceeded
+transient_window	2s	failed to get transactOpts: quota exceeded
+maybe_sent	25s	failed to get transactOpts: quota exceeded
+transient_window	2s	failed to get transactOpts: request limit hit
+maybe_sent	25s	failed to get transactOpts: request limit hit
+transient_window	2s	failed to get transactOpts: daily limit reached
+maybe_sent	25s	failed to get transactOpts: daily limit reached
+transient_window	2s	failed to get transactOpts: monthly limit reached
+maybe_sent	25s	failed to get transactOpts: monthly limit reached
+transient_window	2s	failed to get transactOpts: Your app has exceeded its compute units per second capacity
+maybe_sent	25s	failed to get transactOpts: Your app has exceeded its compute units per second capacity
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: 429 Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: 429 Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: rate limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: rate limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: usage limit exceeded
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: usage limit exceeded
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: quota exceeded
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: quota exceeded
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: request limit hit
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: request limit hit
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: daily limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: daily limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: monthly limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: monthly limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to get initial gas prices: Your app has exceeded its compute units per second capacity
+maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: Your app has exceeded its compute units per second capacity
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: 429 Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: 429 Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: rate limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: rate limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: usage limit exceeded
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: usage limit exceeded
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: quota exceeded
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: quota exceeded
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: request limit hit
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: request limit hit
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: daily limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: daily limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: monthly limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: monthly limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to get nonce: Your app has exceeded its compute units per second capacity
+maybe_sent	25s	failed to send transaction: open session failed: failed to get nonce: Your app has exceeded its compute units per second capacity
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: 429 Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: Too Many Requests
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: Too Many Requests
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: rate limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: rate limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: usage limit exceeded
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: usage limit exceeded
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: quota exceeded
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: quota exceeded
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: request limit hit
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: request limit hit
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: daily limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: daily limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: monthly limit reached
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: monthly limit reached
+transient_window	2s	failed to send transaction: open session failed: failed to build transaction: Your app has exceeded its compute units per second capacity
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: Your app has exceeded its compute units per second capacity
+
+# A prefix with no marker: a deterministic pre-send failure (provider
+# fault); a P* one from 18 s is maybe-sent.
+provider_fault	1s	failed to get bid: bid not found
+provider_fault	1s	failed to send transaction: approve MOR allowance failed: insufficient ETH for gas — add ETH to your wallet to cover transaction fees. Original: insufficient funds for gas * price + value
+provider_fault	2s	failed to get transactOpts: chain id mismatch
+maybe_sent	25s	failed to get transactOpts: chain id mismatch
+provider_fault	1s	failed to get bid: -32005
+
+# The router's rules: a revert is never transient; 429 counts only as a
+# whole token.
+provider_fault	1s	failed to send transaction: approve MOR allowance failed: 429 Too Many Requests: execution reverted
+maybe_sent	25s	failed to send transaction: open session failed: failed to build transaction: execution reverted: 0x429a
+provider_fault	2s	failed to send transaction: open session failed: failed to build transaction: execution reverted: 0x429a
+provider_fault	1s	failed to get bid: nonce 14290 too high
+provider_fault	1s	failed to get provider: 0xabc429def
+
+# Provider stage: always the provider's fault, whatever the rest says.
+provider_fault	1s	provider healthcheck ping failed: provider request failed: code: 429, msg: rate limit exceeded
+provider_fault	1s	provider healthcheck ping failed: provider request failed: code: 500, msg: 429 Too Many Requests
+provider_fault	1s	provider self-reports model as not serviceable: model 0x1234 status: degraded
+provider_fault	1s	failed to initiate session: provider request failed: timeout
+provider_fault	1s	TEE attestation failed: quote expired
+provider_fault	1s	cannot open session with own bid
+provider_fault	1s	failed to get bid: provider request failed: too many requests
+
+# Everything else on the open is maybe-sent.
+maybe_sent	1s	failed to send transaction: open session failed: failed to send transaction: 429 Too Many Requests
+maybe_sent	1s	failed to send transaction: open session failed: transaction could not be confirmed on-chain — the network may be congested, try again shortly. Original: escalation failed
+maybe_sent	1s	failed to send transaction: parse session receipt failed: no SessionOpened event
+maybe_sent	1s	session created on-chain (tx mined) but not yet visible after retries: session not found
+maybe_sent	1s	context cancelled during openSession retry: context deadline exceeded
+maybe_sent	1s	rate limit exceeded
+maybe_sent	1s	timeout
+maybe_sent	1s	429 Too Many Requests

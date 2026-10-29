@@ -38,7 +38,7 @@ func TestRehydrateLogsOnlyOnChange(t *testing.T) {
 
 	session := func(id, model string) map[string]any {
 		return map[string]any{"Id": id, "ModelAgentId": model, "Stake": "1000",
-			"OpenedAt": time.Now().Add(-time.Minute).Unix(), "EndsAt": time.Now().Add(time.Hour).Unix(), "ClosedAt": 0}
+			"OpenedAt": time.Now().Add(-3 * time.Minute).Unix(), "EndsAt": time.Now().Add(time.Hour).Unix(), "ClosedAt": 0} // past pruneGrace
 	}
 	m1 := "0x" + strings.Repeat("a1", 32)
 	m2 := "0x" + strings.Repeat("b2", 32)
