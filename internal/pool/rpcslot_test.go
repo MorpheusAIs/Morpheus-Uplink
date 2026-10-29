@@ -870,3 +870,33 @@ func TestSweepNotStarvedUnderSteadyOpens(t *testing.T) {
 		t.Fatalf("orphan_close_starved logged %d times after the window, want 2", n)
 	}
 }
+
+// A failover's slot waits follow the request context: a client that goes
+// away while opens hold the slot stops waiting, and nothing is closed or
+// opened for it.
+func TestFailoverSlotWaitFollowsRequestContext(t *testing.T) {
+	_, lr, p, _ := rpcEnv(t)
+	threeBidders(lr, modelB)
+	l, res := mustAcquire(t, p, modelB, AcquireOpts{KeyID: "k1"})
+	l.Done()
+	opens := len(lr.bidsTried())
+	hold := p.slot.tryAcquire("open")
+	defer p.slot.release(hold)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var err error
+	within(t, 2*time.Second, "failover with a cancelled request", func() {
+		_, err = p.FailoverCtx(ctx, modelB, res.SessionID, FailoverOpts{KeyID: "k1", Reopen: true})
+	})
+	// The guardrail read could not run: the session is kept (no
+	// alternate known), with the context's error in the message.
+	if !errors.Is(err, ErrNoAlternate) || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("err = %v, want no alternate (context deadline exceeded)", err)
+	}
+	if n := len(lr.closesSent()); n != 0 {
+		t.Fatalf("%d closes sent for a request that went away", n)
+	}
+	if n := len(lr.bidsTried()) - opens; n != 0 {
+		t.Fatalf("%d opens sent for a request that went away", n)
+	}
+}

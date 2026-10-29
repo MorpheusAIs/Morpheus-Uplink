@@ -726,6 +726,15 @@ type FailoverOpts struct {
 // It returns ErrNoAlternate, without closing anything, when no other
 // provider serves the model.
 func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResult, error) {
+	return p.FailoverCtx(context.Background(), modelID, failedID, o)
+}
+
+// FailoverCtx is Failover bound to the request context, like AcquireCtx:
+// ctx bounds the slot waits, the candidate read and every open step up to
+// the open POST; once a POST is sent the open runs to its own deadline and
+// is reconciled whatever happens to ctx. The failed session's close is
+// cleanup and does not follow ctx (closeBounded).
+func (p *Pool) FailoverCtx(ctx context.Context, modelID, failedID string, o FailoverOpts) (FailoverResult, error) {
 	durationSec := o.DurationSec
 	if durationSec <= 0 {
 		durationSec = p.DurationSec()
@@ -763,8 +772,8 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		if !o.Reopen {
 			return res, nil
 		}
-		got, err := p.failoverOpen(o.KeyID, modelID, func(op *openOp) (openResult, error) {
-			return op.openAvoidingCooling(context.Background(), durationSec)
+		got, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
+			return op.openAvoidingCooling(ctx, durationSec)
 		})
 		p.finishFailoverOpen(key, ao, got, durationSec, err, &res)
 		return res, err
@@ -782,9 +791,9 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	// 3. Guardrail: the same filtered list as a normal open, without the
 	// failed provider, before closing anything.
 	var cands []router.RatedBid
-	_, err := p.failoverOpen(o.KeyID, modelID, func(op *openOp) (openResult, error) {
+	_, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
 		var cerr error
-		cands, _, cerr = op.candidates(context.Background(), failedProv)
+		cands, _, cerr = op.candidates(ctx, failedProv)
 		return openResult{}, cerr
 	})
 	if err != nil || len(cands) == 0 {
@@ -821,8 +830,8 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		slog.Warn("pool: not opening", "model", modelID, "reason", "router_busy")
 		return res, errOpenBusyRefusal()
 	}
-	got, err := p.failoverOpen(o.KeyID, modelID, func(op *openOp) (openResult, error) {
-		return op.openExcluding(context.Background(), durationSec, cands)
+	got, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
+		return op.openExcluding(ctx, durationSec, cands)
 	})
 	p.finishFailoverOpen(key, ao, got, durationSec, err, &res)
 	if err != nil {
@@ -833,9 +842,13 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 }
 
 // failoverOpen runs one failover step holding the wallet slot.
-func (p *Pool) failoverOpen(keyID, modelID string, f func(op *openOp) (openResult, error)) (openResult, error) {
-	tok, err := p.slot.acquire(context.Background(), keyID)
+// ctx bounds the slot wait (and is passed to f by the caller).
+func (p *Pool) failoverOpen(ctx context.Context, keyID, modelID string, f func(op *openOp) (openResult, error)) (openResult, error) {
+	tok, err := p.slot.acquire(ctx, keyID)
 	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return openResult{}, cerr
+		}
 		slog.Warn("pool: not opening", "model", modelID, "reason", ReasonOpenBusy)
 		return openResult{}, errOpenBusyRefusal()
 	}
@@ -860,6 +873,8 @@ func (p *Pool) finishFailoverOpen(key string, ao AcquireOpts, got openResult, du
 // up waiting after FailoverCloseTimeout. A cut close keeps the session
 // marked closing until it is seen closed; it does not hold up opens.
 func (p *Pool) closeBounded(sessionID string) error {
+	// Not the request context: the failed session's close is cleanup that
+	// must run even if the client has gone; FailoverCloseTimeout bounds it.
 	ctx := context.Background()
 	tok, err := p.slot.acquire(ctx, "")
 	if err != nil {

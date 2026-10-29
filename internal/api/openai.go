@@ -189,7 +189,7 @@ var errAnswered = errors.New("answered")
 func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
 	keyID, reqModel, modelID, failedID string, durationSec int, fo router.ForwardOptions, firstErr error) (*router.ForwardResult, string, *pool.Lease, error) {
 	class := statusClass(firstErr)
-	fr, ferr := s.pool.Failover(modelID, failedID, pool.FailoverOpts{KeyID: keyID, DurationSec: durationSec, Reopen: true})
+	fr, ferr := s.pool.FailoverCtx(r.Context(), modelID, failedID, pool.FailoverOpts{KeyID: keyID, DurationSec: durationSec, Reopen: true})
 	if fr.CloseFailed {
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "close_failed")
 	}
