@@ -73,6 +73,13 @@ print(client.chat.completions.create(
   provider is available), in the OpenAI error shape (`error.message`,
   `error.type`, `error.code`). `502` means Uplink could not reach its
   router.
+- If Uplink's own wallet lacks the gas, MOR or token allowance needed to
+  open a session, the request answers `402` with `error.type`
+  `wallet_insufficient_funds` and message "The Uplink wallet needs funds
+  (gas, MOR or allowance) to open a session". There is no `Retry-After`
+  header, and Uplink does not retry or move to another provider. Fund the
+  wallet, then send the request again. The type tells it apart from a
+  provider's `402`.
 - Streaming: if the provider fails or its stream breaks off (no
   `data: [DONE]`) after part of the answer was sent, the stream ends with
   one `data: {"error":{...,"type":"provider_error"}}` event. Send the

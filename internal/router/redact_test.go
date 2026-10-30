@@ -24,6 +24,16 @@ func TestRedact(t *testing.T) {
 	if se.Body != in {
 		t.Fatal("Body changed")
 	}
+	for _, tc := range []struct{ name, in string }{
+		{"ws", `subscribe: dial ws://w.invalid:8546/v2/KEY3: refused`},
+		{"wss", `subscribe: dial wss://w.invalid/ws?apikey=KEY4: refused`},
+	} {
+		got := Redact(tc.in)
+		if strings.Contains(got, "KEY") || strings.Contains(got, "w.invalid") || strings.Contains(got, "://") ||
+			got != "subscribe: dial <url> refused" {
+			t.Fatalf("%s: Redact = %q", tc.name, got)
+		}
+	}
 	if SafeError(nil) != "" {
 		t.Fatal("SafeError(nil)")
 	}

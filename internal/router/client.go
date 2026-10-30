@@ -230,7 +230,10 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, payload []b
 // in-prompt failover, which would close and reopen behind the pool, is
 // always off ("failover": false). RejectExisting asks the router to refuse
 // the open, with HTTP 409 and the id of the session, when the wallet
-// already has a live session for the bid's model; it is always sent.
+// already has a live session for the bid's model. The field is always in
+// the body, but it is true only when Uplink holds no live session for that
+// model on the wallet: a first open, or a retry of an open that was cut off
+// or may have been sent. Failover and replacement opens send false.
 type OpenSessionRequest struct {
 	SessionDuration int  `json:"sessionDuration"`
 	RejectExisting  bool `json:"rejectExisting"`

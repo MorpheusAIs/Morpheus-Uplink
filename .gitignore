@@ -5,3 +5,5 @@
 *.log
 .env-demo
 *.deb
+__pycache__/
+*.pyc

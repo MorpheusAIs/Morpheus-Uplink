@@ -8,8 +8,8 @@ import (
 
 // Router error text is relayed to clients only after scrubRouterText: the
 // proxy-router's error strings can carry provider hosts and IPs, 0x
-// addresses and ids, URLs and upstream stack text. The full text goes to
-// the ops log only (relayRouterError).
+// addresses and ids, URLs and upstream stack text. The text goes to the
+// ops log only, with URLs and 32-byte ids masked (relayRouterError).
 var routerScrubRules = []struct {
 	re   *regexp.Regexp
 	with string
