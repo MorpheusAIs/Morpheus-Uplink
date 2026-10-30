@@ -98,8 +98,10 @@ type StatusError struct {
 	Body   string
 }
 
+// Error is the redacted form (see Redact); Body keeps the raw router text
+// for classification.
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("%s %s: status %d: %s", e.Method, e.Path, e.Code, e.Body)
+	return Redact(fmt.Sprintf("%s %s: status %d: %s", e.Method, e.Path, e.Code, e.Body))
 }
 
 // Error kinds for operator-facing messages.
@@ -151,8 +153,8 @@ func ErrorHint(kind string) string {
 	return ""
 }
 
-func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequest(method, c.BaseURL+path, body)
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +167,12 @@ func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request,
 }
 
 func (c *Client) doJSON(method, path string, reqBody any, out any) error {
+	return c.doJSONCtx(context.Background(), method, path, reqBody, out)
+}
+
+// doJSONCtx is doJSON bounded by ctx as well as AdminTimeout (the outer
+// client timeout): the call ends at whichever comes first.
+func (c *Client) doJSONCtx(ctx context.Context, method, path string, reqBody any, out any) error {
 	var payload []byte
 	if reqBody != nil {
 		raw, err := json.Marshal(reqBody)
@@ -173,7 +181,7 @@ func (c *Client) doJSON(method, path string, reqBody any, out any) error {
 		}
 		payload = raw
 	}
-	status, raw, err := c.roundTrip(method, path, payload)
+	status, raw, err := c.roundTrip(ctx, method, path, payload)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
@@ -191,7 +199,7 @@ func (c *Client) doJSON(method, path string, reqBody any, out any) error {
 	return nil
 }
 
-func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, error) {
+func (c *Client) roundTrip(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
 	// Guard for every session/bid path (and anything else): never ask the
 	// router for a direct-payment session.
 	if requestsDirectPayment(payload) {
@@ -201,7 +209,7 @@ func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, er
 	if payload != nil {
 		body = bytes.NewReader(payload)
 	}
-	req, err := c.newRequest(method, path, body)
+	req, err := c.newRequest(ctx, method, path, body)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -220,9 +228,15 @@ func (c *Client) roundTrip(method, path string, payload []byte) (int, []byte, er
 // "directPayment": false explicitly. There is no failover field either:
 // Uplink runs provider failover itself (internal/pool), so the router's
 // in-prompt failover, which would close and reopen behind the pool, is
-// always off ("failover": false).
+// always off ("failover": false). RejectExisting asks the router to refuse
+// the open, with HTTP 409 and the id of the session, when the wallet
+// already has a live session for the bid's model. The field is always in
+// the body, but it is true only when Uplink holds no live session for that
+// model on the wallet: a first open, or a retry of an open that was cut off
+// or may have been sent. Failover and replacement opens send false.
 type OpenSessionRequest struct {
-	SessionDuration int `json:"sessionDuration"`
+	SessionDuration int  `json:"sessionDuration"`
+	RejectExisting  bool `json:"rejectExisting"`
 }
 
 // MarshalJSON pins directPayment and failover to false.
@@ -231,7 +245,39 @@ func (r OpenSessionRequest) MarshalJSON() ([]byte, error) {
 		SessionDuration int  `json:"sessionDuration"`
 		Failover        bool `json:"failover"`
 		DirectPayment   bool `json:"directPayment"`
-	}{r.SessionDuration, false, false})
+		RejectExisting  bool `json:"rejectExisting"`
+	}{r.SessionDuration, false, false, r.RejectExisting})
+}
+
+// ExistingSessionError is the router's refusal of an open sent with
+// rejectExisting: the wallet already has a live session for the model
+// (HTTP 409 {"existingSessionID": "0x..."}).
+type ExistingSessionError struct {
+	SessionID string
+}
+
+func (e *ExistingSessionError) Error() string {
+	return "the wallet already has a live session for this model: " + e.SessionID
+}
+
+// existingSessionFrom reads the router's 409 answer to a guarded open; nil
+// when the answer is not that shape.
+func existingSessionFrom(err error) *ExistingSessionError {
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusConflict {
+		return nil
+	}
+	var v struct {
+		ExistingSessionID string `json:"existingSessionID"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(se.Body)), &v) != nil {
+		return nil
+	}
+	id := strings.TrimSpace(v.ExistingSessionID)
+	if len(id) != 66 || !strings.HasPrefix(id, "0x") {
+		return nil
+	}
+	return &ExistingSessionError{SessionID: id}
 }
 
 // ErrDirectPayment is returned instead of sending any router request whose
@@ -289,17 +335,30 @@ func requestsDirectPayment(payload []byte) bool {
 // provider). It is the only way Uplink opens a session: the pool picks the
 // bid (healthy, not excluded or avoided, in the router's rated order), so
 // the pick is never left to the router. The body is OpenSessionRequest
-// (staking only, router failover off).
+// (staking only, router failover off, rejectExisting false).
 func (c *Client) OpenSessionByBid(bidID string, durationSec int) (string, error) {
+	return c.OpenSessionByBidCtx(context.Background(), bidID, durationSec, false)
+}
+
+// OpenSessionByBidCtx is OpenSessionByBid bounded by ctx. With
+// rejectExisting the router refuses the open when the wallet already has a
+// live session for the bid's model: the error is then an
+// *ExistingSessionError naming that session.
+func (c *Client) OpenSessionByBidCtx(ctx context.Context, bidID string, durationSec int, rejectExisting bool) (string, error) {
 	bidID = strings.TrimSpace(bidID)
 	if bidID == "" {
 		return "", fmt.Errorf("empty bid id")
 	}
-	body := OpenSessionRequest{SessionDuration: durationSec}
+	body := OpenSessionRequest{SessionDuration: durationSec, RejectExisting: rejectExisting}
 	var res struct {
 		SessionID string `json:"sessionID"`
 	}
-	if err := c.doJSON(http.MethodPost, "/blockchain/bids/"+url.PathEscape(bidID)+"/session", body, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodPost, "/blockchain/bids/"+url.PathEscape(bidID)+"/session", body, &res); err != nil {
+		if rejectExisting {
+			if ex := existingSessionFrom(err); ex != nil {
+				return "", ex
+			}
+		}
 		return "", err
 	}
 	if res.SessionID == "" {
@@ -326,6 +385,11 @@ var ErrRatedBidsIncomplete = errors.New("rated bids contain unusable rows")
 // lowercase); when any row does not, the valid rows come back with an
 // error matching ErrRatedBidsIncomplete.
 func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
+	return c.RatedBidsCtx(context.Background(), modelID)
+}
+
+// RatedBidsCtx is RatedBids bounded by ctx.
+func (c *Client) RatedBidsCtx(ctx context.Context, modelID string) ([]RatedBid, error) {
 	var res struct {
 		Bids []struct {
 			ID  string `json:"ID"`
@@ -336,7 +400,7 @@ func (c *Client) RatedBids(modelID string) ([]RatedBid, error) {
 			Score float64 `json:"Score"`
 		} `json:"bids"`
 	}
-	if err := c.doJSON(http.MethodGet, "/blockchain/models/"+url.PathEscape(modelID)+"/bids/rated", nil, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, "/blockchain/models/"+url.PathEscape(modelID)+"/bids/rated", nil, &res); err != nil {
 		return nil, err
 	}
 	out := make([]RatedBid, 0, len(res.Bids))
@@ -386,13 +450,19 @@ func hexValue(s string, n int) (string, bool) {
 }
 
 func (c *Client) CloseSession(sessionID string) error {
+	return c.CloseSessionCtx(context.Background(), sessionID)
+}
+
+// CloseSessionCtx is CloseSession bounded by ctx. When ctx ends first, the
+// call returns then; the router may still finish the close on its side.
+func (c *Client) CloseSessionCtx(ctx context.Context, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return fmt.Errorf("empty session id")
 	}
 	// Empty JSON body — some proxies reject POST with no body.
 	path := "/blockchain/sessions/" + url.PathEscape(sessionID) + "/close"
-	return c.doJSON(http.MethodPost, path, map[string]any{}, nil)
+	return c.doJSONCtx(ctx, http.MethodPost, path, map[string]any{}, nil)
 }
 
 // Balance returns the router wallet's ETH and MOR balances (wei-scale ints).
@@ -613,11 +683,10 @@ func (c *Client) ForwardWith(ctx context.Context, w http.ResponseWriter, path, s
 	defer cancel(nil)
 	timers := startTimers(cancel, o)
 	defer timers.stop()
-	req, err := c.newRequest(http.MethodPost, path, bytes.NewReader(body))
+	req, err := c.newRequest(ctx, http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
 	if ct := header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}

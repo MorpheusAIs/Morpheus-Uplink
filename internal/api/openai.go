@@ -102,7 +102,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 		durationSec := cl.durationSec
 		stream := bodyStream(body)
 
-		lease, ensured, ok := s.acquireSession(w, keyID, reqModel, modelID, cl)
+		lease, ensured, ok := s.acquireSession(r.Context(), w, keyID, reqModel, modelID, cl)
 		if !ok {
 			return
 		}
@@ -134,7 +134,7 @@ func (s *Server) handleInference(routerPath string) http.HandlerFunc {
 				lease.Done()
 				s.pool.Invalidate(modelID)
 				var ok bool
-				lease, ensured, ok = s.acquireSession(w, keyID, reqModel, modelID, cl)
+				lease, ensured, ok = s.acquireSession(r.Context(), w, keyID, reqModel, modelID, cl)
 				if !ok {
 					return
 				}
@@ -189,7 +189,7 @@ var errAnswered = errors.New("answered")
 func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, routerPath string, body []byte,
 	keyID, reqModel, modelID, failedID string, durationSec int, fo router.ForwardOptions, firstErr error) (*router.ForwardResult, string, *pool.Lease, error) {
 	class := statusClass(firstErr)
-	fr, ferr := s.pool.Failover(modelID, failedID, pool.FailoverOpts{KeyID: keyID, DurationSec: durationSec, Reopen: true})
+	fr, ferr := s.pool.FailoverCtx(r.Context(), modelID, failedID, pool.FailoverOpts{KeyID: keyID, DurationSec: durationSec, Reopen: true})
 	if fr.CloseFailed {
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, "close_failed")
 	}
@@ -200,9 +200,15 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 			outcome = "no_alternate"
 		case errors.Is(ferr, pool.ErrNoAvailableProvider):
 			outcome = "no_available" // every eligible provider is avoided; nothing opened
+		case errors.Is(ferr, pool.ErrWalletNeedsFunds):
+			outcome = "wallet_funds"
 		}
 		warnf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
+		if outcome == "wallet_funds" {
+			writeWalletNeedsFunds(w)
+			return nil, "", nil, errAnswered
+		}
 		relayRouterError(w, firstErr) // the original status and body
 		return nil, "", nil, errAnswered
 	}

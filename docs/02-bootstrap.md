@@ -16,7 +16,7 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.17.0**). Pick the skin that matches your host:
+proxy-router **v7.18.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
@@ -24,11 +24,11 @@ proxy-router **v7.17.0**). Pick the skin that matches your host:
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 | **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `docker-compose.railway.deployed.yml` + `env.railway.example` (reference; Railway does not run compose) + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
 
-**Pin note:** tag `v7.17.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.18.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
-**CA bundle note:** the proxy-router `v7.17.0` image ships a refreshed CA bundle that removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS after the upgrade. The default endpoints in the compose files were checked against the new bundle on 2026-10-27.
+**CA bundle note:** the proxy-router `v7.18.0` image ships the same CA bundle as the previously pinned router (byte-identical, 145 roots). Compared with older router images it removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS. The default endpoints in the compose files were re-checked against the `v7.18.0` bundle on 2026-10-29.
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
@@ -187,8 +187,8 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 | Var | Used by | Notes |
 |-----|---------|--------|
-| `WALLET_PRIVATE_KEY` | Router only | Prefer a **dedicated** consumer wallet; fund from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
-| `ETH_NODE_ADDRESS` | Router only | Base HTTPS RPC. Uplink reads chain state through the router API. |
+| `WALLET_PRIVATE_KEY` | Router only | The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. Fund it from Rabby/MetaMask. Uplink holds no key; stake reclaim runs via the router API. |
+| `ETH_NODE_ADDRESS` | Router + Uplink | Base HTTPS RPC for the router. Uplink also receives it, only to know whether a provided RPC is set; it never logs the value and reads chain state through the router API. |
 | `COOKIE_CONTENT` | Router + Uplink | Router `user:password`. Uplink uses it to call the router over the internal network; the router port is never published. |
 | `ADMIN_PASSWORD` | Uplink | GUI login (username is always `admin`). |
 | `API_KEY_SEED` | Uplink | Hex seed for Master/Prompt. Keep it; rotating changes both built-in keys and invalidates the 2FA secret and recovery codes (way back: `UPLINK_RESET_2FA=true`, see [06](06-developers.md#admin-2fa-and-recovery-codes)). |
@@ -202,9 +202,9 @@ Diamond / `ETH_NODE_CHAIN_ID` may exist in Uplink config defaults but are **not*
 
 A session stake is locked while the session runs and is returned to this
 wallet, held at most until the next UTC day. Sessions cost ETH gas. Uplink
-only opens staking-mode sessions (`directPayment` is always false). Use a
-dedicated wallet: the boot reconcile and a graceful stop act on every open
-session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
+only opens staking-mode sessions (`directPayment` is always false).
+The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. The boot reconcile, the background sweep and a graceful stop act on
+every open session of the wallet (see [06-developers](06-developers.md#sessions-across-restarts)).
 
 </details>
 

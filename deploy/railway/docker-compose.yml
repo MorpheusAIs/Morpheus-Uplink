@@ -5,14 +5,16 @@
 #
 # Operator fillables (H4) in Railway Secrets / vars, never in this file:
 # WALLET_PRIVATE_KEY, ADMIN_PASSWORD, API_KEY_SEED, COOKIE_CONTENT,
-# ETH_NODE_ADDRESS, WEB_PUBLIC_URL (wallet key and RPC go to proxy-router only).
+# ETH_NODE_ADDRESS, WEB_PUBLIC_URL. The wallet key goes to proxy-router only;
+# Uplink also receives ETH_NODE_ADDRESS, only to know whether a provided RPC
+# is set.
 #
 # Railway does not run this file: no compose default or literal value below
 # applies there. Set the active lines of env.example as service variables
 # (README.md, "Unset on Railway").
 #
 # H3: single replica for wallet-bearing proxy-router.
-# Lumerin pin: v7.17.0 digest. The Uplink image is pinned to its digest in
+# Lumerin pin: v7.18.0 digest. The Uplink image is pinned to its digest in
 # the release assets (scripts/deploy-assets.sh).
 x-logging: &default-logging
   driver: json-file
@@ -58,6 +60,8 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Presence only: whether the router's RPC is set (the value is never logged).
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
       - DATA_DIR=/data
@@ -69,7 +73,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba
     restart: unless-stopped
     logging: *default-logging
     init: true

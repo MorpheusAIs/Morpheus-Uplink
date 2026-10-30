@@ -79,7 +79,7 @@ unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.17.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.18.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup or send journal/lease headers.
 Rely on native router expiry + Uplink housekeeping. Sessions can stay locked

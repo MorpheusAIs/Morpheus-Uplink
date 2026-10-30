@@ -13,9 +13,9 @@
 # Only :80 and :443 need to be public. Router :8082 stays internal.
 #
 # Privacy env (L1): PROXY_* and LOG_LEVEL_* are set and believed honored on
-# pinned v7.17.0; live acceptance pending. Do not market as TEE privacy.
+# pinned v7.18.0; live acceptance pending. Do not market as TEE privacy.
 #
-# Lumerin pin note: tag v7.17.0 is Lumerin main (gateway caps).
+# Lumerin pin note: tag v7.18.0 is Lumerin main (gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453 /
 # Diamond / MOR below).
 #
@@ -81,6 +81,8 @@ services:
       - COOKIE_CONTENT=${COOKIE_CONTENT:?set COOKIE_CONTENT to user:password}
       - ROUTER_URL=http://proxy-router:8082
       - WEB_PUBLIC_URL=${WEB_PUBLIC_URL}
+      # Presence only: whether the router's RPC is set (the value is never logged).
+      - ETH_NODE_ADDRESS=${ETH_NODE_ADDRESS}
       - ACTIVE_MODELS_URL=${ACTIVE_MODELS_URL:-https://active.mor.org/gateway_models.json}
       - GATEWAY_BIDS_URL=${GATEWAY_BIDS_URL:-https://active.mor.org/gateway_bids.json}
       - DATA_DIR=/data
@@ -94,7 +96,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.17.0@sha256:da1baa55299133ad63e2e590bd8cc1e95772ff81f4b44e2aa34cabe682e9a14d
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba
     restart: unless-stopped
     logging: *default-logging
     init: true

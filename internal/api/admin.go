@@ -193,7 +193,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if health, err := s.router.Healthcheck(); err == nil {
 		status["router"] = health
 	} else {
-		status["routerError"] = err.Error()
+		status["routerError"] = router.SafeError(err)
 		status["routerErrorKind"] = router.KindNotReady
 	}
 
@@ -202,7 +202,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["balance"] = balance
 		liquidWei = morFromBalance(balance)
 	} else {
-		status["balanceError"] = err.Error()
+		status["balanceError"] = router.SafeError(err)
 	}
 	status["routerAuth"] = s.routerAuthStatus()
 	status["sessionReconcile"] = s.sessionReconcileStatus()
@@ -292,7 +292,7 @@ func (s *Server) routerAuthStatus() map[string]any {
 func routerErr(w http.ResponseWriter, what string, err error) {
 	kind := router.ErrorKind(err)
 	writeJSON(w, http.StatusBadGateway, map[string]any{
-		"error": what + ": " + err.Error(),
+		"error": what + ": " + router.SafeError(err),
 		"kind":  kind,
 		"hint":  router.ErrorHint(kind),
 	})
@@ -404,7 +404,7 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 
 	supply, err := s.router.TokenSupply()
 	if err != nil {
-		http.Error(w, "token supply: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "token supply: "+router.SafeError(err), http.StatusBadGateway)
 		return
 	}
 	budget, err := s.router.TodaysBudget()

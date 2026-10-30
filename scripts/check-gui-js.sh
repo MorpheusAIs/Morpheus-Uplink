@@ -300,16 +300,16 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (T.statusHealth({ routerError: 'x' }).text !== T.UI_COPY.routerDown) fail('router down reason');
   if (T.statusHealth({ routerAuth: { ok: false } }).text !== T.UI_COPY.routerAuthFail) fail('router auth reason');
   const fresh = (m, b) => ({ models: { loaded: true, age_seconds: m, stale: false }, bids: { loaded: true, age_seconds: b, stale: false } });
-  T.renderSysLine('1.0.15', '7.17.0', T.statusHealth({}), 0, fresh(240, 720));
+  T.renderSysLine('1.0.15', '7.18.0', T.statusHealth({}), 0, fresh(240, 720));
   const line = els.stats.textContent;
-  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.17.0·active.mor.org (last updated 12 min ago)') fail('status line: ' + line);
+  if (line !== '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.18.0·active.mor.org (last updated 12 min ago)') fail('status line: ' + line);
 
   // Feed freshness item (last header item): see the cases below.
   const kids = () => els.stats.children;
   const feedEl = () => kids()[kids().length - 1];
   const bullet = () => kids()[0].className;
   const view = (feeds, health) => {
-    T.renderSysLine('1.0.15', '7.17.0', health || T.statusHealth({}), 0, feeds);
+    T.renderSysLine('1.0.15', '7.18.0', health || T.statusHealth({}), 0, feeds);
     const a = feedEl();
     return { text: a.textContent, red: / bad\b/.test(a.className), bullet: bullet(), a };
   };
@@ -362,7 +362,7 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   // Missing age_seconds key, missing feeds.models / feeds.bids, no
   // st.feeds key: that feed invalid, red, yellow, nothing throws, and the
   // rest of the header (health, sessions, versions) still renders.
-  const head = '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.17.0·';
+  const head = '\u25cfHealthy·0 open sessions·Uplink v1.0.15·Router v7.18.0·';
   const viaStatus = (st) => {
     let r;
     try { r = view(st.feeds); } catch (e) { fail('threw: ' + (e.stack || e)); }

@@ -1,10 +1,12 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
@@ -54,11 +56,22 @@ var ErrNoAvailableProvider = errors.New("no provider is available for this model
 
 // NoAvailableError is the ErrNoAvailableProvider value. RetryAfter is the
 // shortest remaining cool-down of a healthy, not excluded provider, rounded up to whole
-// seconds within 1s..MaxRetryAfter; 0 when none is cooling.
-type NoAvailableError struct{ RetryAfter time.Duration }
+// seconds within 1s..MaxRetryAfter; 0 when none is cooling. Reason is
+// set for the wallet-path refusals: router_transient (RetryAfter 1–4 s)
+// and open_busy (no RetryAfter).
+type NoAvailableError struct {
+	RetryAfter time.Duration
+	Reason     string
+}
 
 func (e *NoAvailableError) Error() string        { return ErrNoAvailableProvider.Error() }
 func (e *NoAvailableError) Is(target error) bool { return target == ErrNoAvailableProvider }
+
+// ErrWalletNeedsFunds means the router refused an open before sending it
+// because the wallet lacks funds (gas, MOR or allowance). Nothing was
+// opened; no provider is cooled and no other bid is tried: every open
+// would fail the same way until the wallet is funded.
+var ErrWalletNeedsFunds = errors.New("the wallet needs funds (gas, MOR or allowance) to open a session")
 
 // MaxRetryAfter caps the Retry-After of ErrNoAvailableProvider.
 const MaxRetryAfter = 600 * time.Second
@@ -299,11 +312,16 @@ func (p *Pool) MarkSessionCooling(modelID, sessionID string) string {
 // healthy one is excluded, or every remaining one is avoided. Each refusal
 // logs its reason with counts and short ids only.
 func (p *Pool) candidates(modelID, extraAvoid string) (cands, pool []router.RatedBid, err error) {
+	rows, rerr := p.client.RatedBids(modelID)
+	return p.candidatesFrom(modelID, extraAvoid, rows, rerr)
+}
+
+// candidatesFrom filters one rated-bids answer (see candidates).
+func (p *Pool) candidatesFrom(modelID, extraAvoid string, rows []router.RatedBid, rerr error) (cands, pool []router.RatedBid, err error) {
 	refuse := func(reason string, retry time.Duration, args ...any) ([]router.RatedBid, []router.RatedBid, error) {
 		slog.Warn("pool: not opening", append([]any{"model", modelID, "reason", reason}, args...)...)
 		return nil, nil, &NoAvailableError{RetryAfter: retry}
 	}
-	rows, rerr := p.client.RatedBids(modelID)
 	if rerr != nil {
 		var ue *url.Error
 		switch {
@@ -368,12 +386,108 @@ func (p *Pool) candidates(modelID, extraAvoid string) (cands, pool []router.Rate
 
 func normProv(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
+// openOp is one open operation (an Acquire open, or a failover reopen)
+// holding the wallet slot. Its transient retries share one budget.
+type openOp struct {
+	p             *Pool
+	tok           *slotToken
+	model         string
+	start         time.Time // pool clock
+	retries       int
+	windowRetries int
+	// rejectExisting is sent with every open of this operation: set only
+	// when Uplink holds no live session for the model on the wallet (a
+	// first open, or a retry of an open that was cut or may have been
+	// sent). Failover and replacement opens never set it.
+	rejectExisting bool
+}
+
+func (p *Pool) newOpenOp(tok *slotToken, modelID string) *openOp {
+	return &openOp{p: p, tok: tok, model: modelID, start: p.now()}
+}
+
+// openResult is a session an open produced: opened (the router returned
+// its id) or adopted (found on chain after an open whose answer was lost,
+// or named by the router's rejectExisting refusal). resumed: adopted from
+// that refusal without matching an open attempt of this process.
+type openResult struct {
+	id, provider     string
+	adopted          bool
+	resumed          bool
+	openedAt, endsAt time.Time
+	stake            *big.Int
+}
+
+// backoff waits before the next transient retry. It reports false (and
+// the step it would have waited) when the operator did not set the
+// router's RPC (one attempt: the router's own RPC list and retries
+// apply), when the retry count, the operation budget or the slot
+// deadline does not allow another, or ctx ended.
+func (op *openOp) backoff(ctx context.Context) (time.Duration, bool) {
+	d := backoffStep(op.retries)
+	if !op.p.providedRPC.Load() {
+		return d, false
+	}
+	now := op.p.now()
+	if op.retries >= transientMaxRetries || now.Sub(op.start)+d > transientBudget ||
+		now.Add(d).After(op.tok.deadline) || ctx.Err() != nil {
+		return d, false
+	}
+	if err := op.p.sleep(ctx, jittered(d)); err != nil {
+		return d, false
+	}
+	op.retries++
+	return d, true
+}
+
+// candidates reads the rated bids inside the slot, backing off on a
+// rate-limited read, then filters them (Pool.candidatesFrom).
+func (op *openOp) candidates(ctx context.Context, extraAvoid string) (cands, pool []router.RatedBid, err error) {
+	p := op.p
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		rctx, cancel := p.slot.callCtx(ctx, op.tok, readCallTimeout)
+		rows, rerr := p.client.RatedBidsCtx(rctx, op.model)
+		cancel()
+		if rerr != nil && ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		if rerr != nil && isTransientRead(rerr) {
+			if d, ok := op.backoff(ctx); !ok {
+				if ctx.Err() != nil {
+					return nil, nil, ctx.Err()
+				}
+				slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "rated", "retries", op.retries)
+				return nil, nil, errTransient(d)
+			}
+			continue
+		}
+		return p.candidatesFrom(op.model, extraAvoid, rows, rerr)
+	}
+}
+
 // openExcluding opens a session by walking alts (candidates' filtered
 // list, router order) by bid: at most MaxBidAttempts opens, one per
 // provider. Each open names its bid, so the pick is never left to the
-// router. A failed open puts that provider in cool-down; a walk where
-// every open failed returns an error matching errBidWalkExhausted.
-func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.RatedBid) (string, string, error) {
+// router. Each error is classified (transient.go):
+//   - provider fault: that provider cools and the walk moves on;
+//   - a chain-stage error before the send: the same bid again after a
+//     backoff when the operator set the router's RPC; otherwise one
+//     attempt, then router_transient (never cooled, never walked);
+//   - a funding error before the send: ErrWalletNeedsFunds at once (no
+//     retry, never cooled, never walked);
+//   - maybe sent: never re-opened; the wallet's sessions are polled for
+//     it (reconcile). Found: it is the result. Not found: router_transient,
+//     and the attempt stays pending for later scans;
+//   - the router's rejectExisting refusal (409): nothing was sent; the
+//     session it names is adopted (adoptExisting).
+//
+// A walk where every open was a provider fault returns an error matching
+// errBidWalkExhausted.
+func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []router.RatedBid) (openResult, error) {
+	p := op.p
 	tried := map[string]bool{}
 	attempts := 0
 	var lastErr error
@@ -386,19 +500,201 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 		}
 		tried[normProv(b.Provider)] = true
 		attempts++
-		id, err := p.client.OpenSessionByBid(b.ID, durationSec)
-		if err != nil {
-			lastErr = err
-			warnf("pool: open bid %s (provider %s) for model %s: %v", short(b.ID), short(b.Provider), modelID, err)
-			p.MarkCooling(modelID, b.Provider)
-			continue
+	sameBid:
+		for {
+			if err := ctx.Err(); err != nil {
+				return openResult{}, err
+			}
+			if left := p.slot.remaining(op.tok); left < openMinPostTime+reconcileReserve {
+				slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "slot_deadline", "left", left.Round(time.Second))
+				return openResult{}, errTransient(transientCap)
+			}
+			att := p.addAttempt(op.model, b.ID)
+			postStart := p.now()
+			// Once sent, the open is never cancelled by the caller: its
+			// result is reconciled whatever happens to the request.
+			pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), realDur(p.slot.remaining(op.tok)-reconcileReserve))
+			id, err := p.client.OpenSessionByBidCtx(pctx, b.ID, durationSec, op.rejectExisting)
+			cancel()
+			elapsed := p.now().Sub(postStart)
+			if err == nil {
+				p.dropAttempt(att)
+				return openResult{id: id, provider: b.Provider}, nil
+			}
+			var ex *router.ExistingSessionError
+			if errors.As(err, &ex) {
+				p.dropAttempt(att) // refused before any transaction
+				slog.Info("pool: open refused: the wallet already has a live session for the model",
+					"model", op.model, "bid", short(b.ID), "session", short(ex.SessionID))
+				return op.adoptExisting(ctx, ex.SessionID)
+			}
+			windowOK := p.providedRPC.Load() && op.windowRetries < maxWindowRetries
+			class := classifyOpenErr(err, elapsed, windowOK)
+			slog.Warn("pool: open failed", "model", op.model, "bid", short(b.ID), "provider", short(b.Provider),
+				"class", class.String(), "after", elapsed.Round(time.Millisecond), "err", router.SafeError(err))
+			switch class {
+			case walletFunds:
+				p.dropAttempt(att)
+				slog.Warn("pool: not opening", "model", op.model, "reason", "wallet_funds")
+				return openResult{}, ErrWalletNeedsFunds
+			case providerFault:
+				p.dropAttempt(att)
+				lastErr = err
+				p.MarkCooling(op.model, b.Provider)
+				break sameBid
+			case transientPreSend, transientWindow:
+				if class == transientWindow {
+					op.windowRetries++ // the attempt stays pending: it may still land
+				} else {
+					p.dropAttempt(att)
+				}
+				d, ok := op.backoff(ctx)
+				if !ok {
+					if ctx.Err() != nil {
+						return openResult{}, ctx.Err()
+					}
+					slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "open", "retries", op.retries)
+					return openResult{}, errTransient(d)
+				}
+			default: // maybe sent
+				if isTransportErr(err) {
+					p.markCut(att)
+				}
+				return op.reconcile(context.WithoutCancel(ctx), att)
+			}
 		}
-		return id, b.Provider, nil
 	}
 	if lastErr == nil {
-		return "", "", fmt.Errorf("open on another provider (none tried): %w", ErrNoAlternate)
+		return openResult{}, fmt.Errorf("open on another provider (none tried): %w", ErrNoAlternate)
 	}
-	return "", "", &walkError{tried: attempts, last: lastErr}
+	return openResult{}, &walkError{tried: attempts, last: lastErr}
+}
+
+// reconcile polls the wallet's open sessions (reconcilePolls times,
+// reconcileGap apart, inside the slot hold) for the session att may have
+// opened. A match is the result (extra matches are known duplicates the
+// sweep closes). No match: router_transient; att stays pending, so a
+// later scan adopts the session if it lands.
+func (op *openOp) reconcile(ctx context.Context, att *attempt) (openResult, error) {
+	p := op.p
+	for i := 0; i < reconcilePolls; i++ {
+		if i > 0 {
+			if p.slot.remaining(op.tok) < reconcileGap+readCallTimeout/2 {
+				break
+			}
+			if err := p.sleep(ctx, reconcileGap); err != nil {
+				break
+			}
+		}
+		if p.slot.remaining(op.tok) <= 0 {
+			break
+		}
+		mk := func() (context.Context, context.CancelFunc) { return p.slot.callCtx(ctx, op.tok, readCallTimeout) }
+		open, _, err := p.readOpen(mk)
+		if err != nil {
+			continue
+		}
+		if got, ok := p.matchOpen(att, open); ok {
+			return got, nil
+		}
+	}
+	p.requestSweep()
+	slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "reconcile", "bid", short(att.bid))
+	return openResult{}, errTransient(transientCap)
+}
+
+// adoptExisting takes the session the router named when it refused a
+// rejectExisting open: read it, and adopt it when it is a live session of
+// this model that Uplink may use (not ending within the expiry buffer, not
+// closing, retired or a known duplicate, provider not excluded, not
+// already tracked). It resolves a pending open attempt it matches.
+// Otherwise (or when it cannot be read) the answer is router_transient and
+// the sweep is asked to run.
+func (op *openOp) adoptExisting(ctx context.Context, sessionID string) (openResult, error) {
+	p := op.p
+	refuse := func(why string) (openResult, error) {
+		slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "existing_session",
+			"session", short(sessionID), "why", why)
+		p.requestSweep()
+		return openResult{}, errTransient(transientCap)
+	}
+	rctx, cancel := p.slot.callCtx(ctx, op.tok, readCallTimeout)
+	s, err := p.client.GetSessionCtx(rctx, sessionID)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return openResult{}, ctx.Err()
+		}
+		return refuse("unreadable")
+	}
+	if s.ID == "" {
+		s.ID = sessionID
+	}
+	retired := p.isRetired(s.ID)
+	excluded := p.IsProviderExcluded(s.Provider)
+	got, why := p.adoptable(op.model, s, retired, excluded)
+	if why != "" {
+		return refuse(why)
+	}
+	return got, nil
+}
+
+// adoptable checks a session named by a rejectExisting refusal (see
+// adoptExisting) and, when it may be used, resolves a pending attempt it
+// matches. why is "" when it is adoptable.
+func (p *Pool) adoptable(model string, s router.Session, retired, excluded bool) (openResult, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	lid := strings.ToLower(s.ID)
+	switch {
+	case normModel(s.ModelAgentID) != model:
+		return openResult{}, "other_model"
+	case s.ClosedAt != 0:
+		return openResult{}, "closed"
+	case s.EndsAt <= p.now().Unix()+int64(expiryBuffer.Seconds()):
+		return openResult{}, "ending"
+	case retired || p.closingMarkedLocked(s.ID) || p.knownDup[lid] || p.sess[s.ID] != nil:
+		return openResult{}, "not_usable"
+	case excluded:
+		return openResult{}, "excluded"
+	}
+	got := openResult{id: s.ID, provider: s.Provider, adopted: true, resumed: true,
+		openedAt: time.Unix(s.OpenedAt, 0), endsAt: time.Unix(s.EndsAt, 0), stake: s.Stake}
+	if a := p.matchAttemptLocked(s); a != nil {
+		p.resolveAttemptLocked(a)
+		p.opened[lid] = true
+		got.resumed = false // an open of ours that landed
+	}
+	return got, ""
+}
+
+// matchOpen picks the session att opened from a list, if it is there.
+func (p *Pool) matchOpen(att *attempt, open []router.Session) (openResult, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var ms []router.Session
+	now := p.now()
+	for _, s := range open {
+		if !att.matches(s) || p.closingMarkedLocked(s.ID) || p.sess[s.ID] != nil {
+			continue
+		}
+		if s.EndsAt <= now.Unix()+int64(expiryBuffer.Seconds()) {
+			continue
+		}
+		ms = append(ms, s)
+	}
+	if len(ms) == 0 {
+		return openResult{}, false
+	}
+	keep := pickOne(ms)
+	for _, s := range ms {
+		if s.ID != keep.ID {
+			p.knownDup[strings.ToLower(s.ID)] = true
+		}
+	}
+	p.resolveAttemptLocked(att)
+	return openResult{id: keep.ID, provider: keep.Provider, adopted: true,
+		openedAt: time.Unix(keep.OpenedAt, 0), endsAt: time.Unix(keep.EndsAt, 0), stake: keep.Stake}, true
 }
 
 // openAvoidingCooling is the normal open: always by bid, on the first
@@ -407,29 +703,44 @@ func (p *Pool) openExcluding(modelID string, durationSec int, alts []router.Rate
 // session (fail fast): candidates' refusals are returned as they are, and
 // a walk where every open failed → ErrNoAvailableProvider with when to
 // retry. A refusal consumes a pending stream cut; a success clears it.
-func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
+func (op *openOp) openAvoidingCooling(ctx context.Context, durationSec int) (openResult, error) {
+	p := op.p
+	modelID := op.model
 	cut := p.pendingCut(modelID)
 	clear := func() {
 		if cut != "" {
 			p.clearCut(modelID)
 		}
 	}
-	cands, pool, err := p.candidates(modelID, "")
+	cands, pool, err := op.candidates(ctx, "")
 	if err != nil {
 		clear()
-		return "", "", err
+		return openResult{}, err
 	}
-	id, prov, err := p.openExcluding(modelID, durationSec, cands)
+	got, err := op.openExcluding(ctx, durationSec, cands)
 	if errors.Is(err, errBidWalkExhausted) {
 		slog.Warn("pool: not opening", "model", modelID, "reason", "walk_exhausted", "tried", min(len(cands), MaxBidAttempts))
 		clear()
-		return "", "", &NoAvailableError{RetryAfter: p.retryAfter(modelID, pool)}
+		return openResult{}, &NoAvailableError{RetryAfter: p.retryAfter(modelID, pool)}
 	}
 	if err != nil {
-		return "", "", err
+		return openResult{}, err
 	}
 	clear()
-	return id, prov, nil
+	return got, nil
+}
+
+// openAvoidingCooling runs one open operation under the wallet slot
+// (tests and callers without a slot of their own).
+func (p *Pool) openAvoidingCooling(modelID string, durationSec int) (string, string, error) {
+	ctx := context.Background()
+	tok, err := p.slot.acquire(ctx, "")
+	if err != nil {
+		return "", "", errOpenBusyRefusal()
+	}
+	defer p.slot.release(tok)
+	got, err := p.newOpenOp(tok, modelID).openAvoidingCooling(ctx, durationSec)
+	return got.id, got.provider, err
 }
 
 // retryAfter is the shortest remaining cool-down among pool's providers
@@ -456,14 +767,17 @@ func (p *Pool) retryAfter(modelID string, pool []router.RatedBid) time.Duration 
 		}
 	}
 	p.fmu.Unlock()
+	if best == 0 {
+		return 0 // no cool-down known: no Retry-After
+	}
 	return clampRetryAfter(best)
 }
 
 // clampRetryAfter caps d at MaxRetryAfter before rounding up to seconds;
-// any positive d is at least 1s, 0 stays 0 (no header).
+// it is never below 1s (0 or less gives 1s).
 func clampRetryAfter(d time.Duration) time.Duration {
 	if d <= 0 {
-		return 0
+		return time.Second
 	}
 	if d > MaxRetryAfter {
 		d = MaxRetryAfter
@@ -507,6 +821,15 @@ type FailoverOpts struct {
 // It returns ErrNoAlternate, without closing anything, when no other
 // provider serves the model.
 func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResult, error) {
+	return p.FailoverCtx(context.Background(), modelID, failedID, o)
+}
+
+// FailoverCtx is Failover bound to the request context, like AcquireCtx:
+// ctx bounds the slot waits, the candidate read and every open step up to
+// the open POST; once a POST is sent the open runs to its own deadline and
+// is reconciled whatever happens to ctx. The failed session's close is
+// cleanup and does not follow ctx (closeBounded).
+func (p *Pool) FailoverCtx(ctx context.Context, modelID, failedID string, o FailoverOpts) (FailoverResult, error) {
 	durationSec := o.DurationSec
 	if durationSec <= 0 {
 		durationSec = p.DurationSec()
@@ -519,6 +842,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 	lock := p.openLock(key)
 	lock.Lock()
 	defer lock.Unlock()
+	p.waitGate()
 
 	// 1. Someone else already swapped the session: use the replacement,
 	// leased in the same critical section that found it.
@@ -543,8 +867,10 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		if !o.Reopen {
 			return res, nil
 		}
-		id, prov, err := p.openAvoidingCooling(modelID, durationSec)
-		p.finishFailoverOpen(key, ao, id, prov, durationSec, err, &res)
+		got, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
+			return op.openAvoidingCooling(ctx, durationSec)
+		})
+		p.finishFailoverOpen(key, ao, got, durationSec, err, &res)
 		return res, err
 	}
 
@@ -559,9 +885,14 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 
 	// 3. Guardrail: the same filtered list as a normal open, without the
 	// failed provider, before closing anything.
-	cands, _, err := p.candidates(modelID, failedProv)
+	var cands []router.RatedBid
+	_, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
+		var cerr error
+		cands, _, cerr = op.candidates(ctx, failedProv)
+		return openResult{}, cerr
+	})
 	if err != nil || len(cands) == 0 {
-		slog.Warn("pool: failover: no healthy alternate; keeping session", "model", modelID, "session", short(failedID), "err", err)
+		slog.Warn("pool: failover: no healthy alternate; keeping session", "model", modelID, "session", short(failedID), "err", router.SafeError(err))
 		if err == nil {
 			return res, ErrNoAlternate
 		}
@@ -576,9 +907,7 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		if err := p.closeBounded(failedID); err != nil {
 			res.CloseFailed = true
 			p.failoverCloseFailed(failedID)
-			slog.Warn("pool: failover: close failed (retired; not re-adopted)", "model", modelID, "session", short(failedID), "err", err)
-		} else {
-			p.notifyClosed(failedID)
+			slog.Warn("pool: failover: close failed (retired; not re-adopted)", "model", modelID, "session", short(failedID), "err", router.SafeError(err))
 		}
 	} else {
 		res.CloseDeferred = true
@@ -589,41 +918,66 @@ func (p *Pool) Failover(modelID, failedID string, o FailoverOpts) (FailoverResul
 		return res, nil
 	}
 
-	// 5. Open on another provider, by bid from the filtered list.
+	// 5. Open on another provider, by bid from the filtered list (its own
+	// slot hold).
 	// 6. Pool it with its provider, leased.
-	id, prov, err := p.openExcluding(modelID, durationSec, cands)
-	p.finishFailoverOpen(key, ao, id, prov, durationSec, err, &res)
+	got, err := p.failoverOpen(ctx, o.KeyID, modelID, func(op *openOp) (openResult, error) {
+		return op.openExcluding(ctx, durationSec, cands)
+	})
+	p.finishFailoverOpen(key, ao, got, durationSec, err, &res)
 	if err != nil {
 		return res, err
 	}
-	log.Printf("pool: failed over model %s from provider %s to session %s (provider %s)", modelID, short(failedProv), short(id), short(prov))
+	log.Printf("pool: failed over model %s from provider %s to session %s (provider %s)", modelID, short(failedProv), short(got.id), short(got.provider))
 	return res, nil
+}
+
+// failoverOpen runs one failover step holding the wallet slot.
+// ctx bounds the slot wait (and is passed to f by the caller).
+func (p *Pool) failoverOpen(ctx context.Context, keyID, modelID string, f func(op *openOp) (openResult, error)) (openResult, error) {
+	tok, err := p.slot.acquire(ctx, keyID)
+	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return openResult{}, cerr
+		}
+		slog.Warn("pool: not opening", "model", modelID, "reason", ReasonOpenBusy)
+		return openResult{}, errOpenBusyRefusal()
+	}
+	defer p.slot.release(tok)
+	return f(p.newOpenOp(tok, modelID))
 }
 
 // finishFailoverOpen, when the open worked, pools the replacement and
 // leases it for the caller in one critical section.
-func (p *Pool) finishFailoverOpen(key string, ao AcquireOpts, id, prov string, durationSec int, err error, res *FailoverResult) {
+func (p *Pool) finishFailoverOpen(key string, ao AcquireOpts, got openResult, durationSec int, err error, res *FailoverResult) {
 	if err != nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := p.now()
-	p.entries[key] = entry{sessionID: id, expiresAt: now.Add(time.Duration(durationSec)*time.Second - expiryBuffer), provider: prov}
-	st := p.newStateLocked(key, id, now, now.Add(time.Duration(durationSec)*time.Second), ao.KeyID)
-	res.Lease = p.leaseLocked(id, st, ao.KeyID)
-	res.SessionID, res.Provider, res.Opened = id, prov, true
+	st := p.poolOpenedLocked(key, got, durationSec, ao.KeyID)
+	res.Lease = p.leaseLocked(got.id, st, ao.KeyID)
+	res.SessionID, res.Provider, res.Opened = got.id, got.provider, true
 }
 
-// closeBounded closes a session, giving up waiting after
-// FailoverCloseTimeout (the close may still land later).
+// closeBounded closes a session holding the wallet slot (queued), giving
+// up waiting after FailoverCloseTimeout. A cut close keeps the session
+// marked closing until it is seen closed; it does not hold up opens.
 func (p *Pool) closeBounded(sessionID string) error {
-	done := make(chan error, 1)
-	go func() { done <- p.client.CloseSession(sessionID) }()
-	select {
-	case err := <-done:
+	// Not the request context: the failed session's close is cleanup that
+	// must run even if the client has gone; FailoverCloseTimeout bounds it.
+	ctx := context.Background()
+	tok, err := p.slot.acquire(ctx, "")
+	if err != nil {
 		return err
-	case <-time.After(FailoverCloseTimeout):
-		return fmt.Errorf("close timed out after %s", FailoverCloseTimeout)
 	}
+	defer p.slot.release(tok)
+	out, err := p.closeWithToken(ctx, tok, sessionID, "", "", FailoverCloseTimeout)
+	if out == closeOK || out == closeAlready {
+		return nil
+	}
+	if err == nil {
+		err = fmt.Errorf("close failed")
+	}
+	return err
 }

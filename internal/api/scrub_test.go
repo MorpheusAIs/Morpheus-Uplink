@@ -16,8 +16,8 @@ import (
 
 // Security gate SHOULD-1: router error text is scrubbed before the cap on
 // every relay path (message, already OpenAI-shaped body, providerModelError
-// body); statuses are unchanged; the cap is rune-safe; the full text goes
-// to the ops log only.
+// body); statuses are unchanged; the cap is rune-safe; the text goes to
+// the ops log only, with URLs and 32-byte ids masked (router.Redact).
 func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 	var buf bytes.Buffer
 	var mu sync.Mutex
@@ -34,7 +34,7 @@ func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 		name   string
 		code   int
 		body   string
-		secret []string // must reach the log, never the client
+		secret []string // must reach the log (masked by router.Redact), never the client
 	}{
 		{"dial host", 500, `{"error":"failed to connect to provider: dial tcp provider-7.example.net:3333: i/o timeout"}`, []string{"provider-7.example.net"}},
 		{"dial ipv4", 502, `{"error":"failed to connect to provider: dial tcp 203.0.113.9:3333: connection refused"}`, []string{"203.0.113.9"}},
@@ -99,9 +99,13 @@ func TestRelayRouterErrorScrubsRouterText(t *testing.T) {
 			if strings.Contains(out, s) {
 				t.Errorf("%s: %q reached the client", tc.name, s)
 			}
-			if !strings.Contains(logged, s) {
-				t.Errorf("%s: %q missing from the ops log", tc.name, s)
+			// Text inside a URL is masked with the URL; the rest is kept.
+			if inLog := strings.Contains(router.Redact(tc.body), router.Redact(s)); inLog != strings.Contains(logged, router.Redact(s)) {
+				t.Errorf("%s: %q in the ops log = %v, want %v", tc.name, router.Redact(s), !inLog, inLog)
 			}
+		}
+		if strings.Contains(logged, "://") || strings.Contains(logged, id64) {
+			t.Errorf("%s: unmasked URL or id in the ops log: %s", tc.name, logged)
 		}
 		if tc.name == "untouched" && msg != "rate limited, retry later" {
 			t.Errorf("plain text changed: %q", msg)

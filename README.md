@@ -35,7 +35,7 @@ machine, backed by *your* consumer proxy-router (C-Node) and *your* wallet.
 - Same shape clients already know: `POST /v1/chat/completions`, embeddings,
   `GET /v1/models`, Bearer `sk-…` keys
 - Sessions open and reuse automatically (model name → on-chain session)
-- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. Use a dedicated wallet ([details](docs/06-developers.md#sessions-across-restarts))
+- On boot it reuses still-valid open sessions and closes expired or duplicate ones before opening any. A graceful `docker stop` closes every open session on the wallet, including sessions for models not in the catalog and, on a shared wallet, the other client's sessions; the stake is returned (a lock, not a loss). `CLOSE_SESSIONS_ON_EXIT=false` opts out. The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold. ([details](docs/06-developers.md#sessions-across-restarts))
 - Admin GUI at `/gui` — balances, keys, Probe, usage
 - You pay providers in MOR from the wallet you fund — no multi-tenant credits
 
@@ -125,7 +125,7 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.17.0**
+Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.18.0**
 (Lumerin `main` / #889 caps — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
@@ -142,7 +142,7 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Every image in them is
-  digest-pinned, Uplink and **proxy-router v7.17.0** included (not `:latest`).
+  digest-pinned, Uplink and **proxy-router v7.18.0** included (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to

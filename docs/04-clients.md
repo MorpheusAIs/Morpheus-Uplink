@@ -73,6 +73,13 @@ print(client.chat.completions.create(
   provider is available), in the OpenAI error shape (`error.message`,
   `error.type`, `error.code`). `502` means Uplink could not reach its
   router.
+- If Uplink's own wallet lacks the gas, MOR or token allowance needed to
+  open a session, the request answers `402` with `error.type`
+  `wallet_insufficient_funds` and message "The Uplink wallet needs funds
+  (gas, MOR or allowance) to open a session". There is no `Retry-After`
+  header, and Uplink does not retry or move to another provider. Fund the
+  wallet, then send the request again. The type tells it apart from a
+  provider's `402`.
 - Streaming: if the provider fails or its stream breaks off (no
   `data: [DONE]`) after part of the answer was sent, the stream ends with
   one `data: {"error":{...,"type":"provider_error"}}` event. Send the
@@ -117,8 +124,11 @@ curl -sS -X POST https://YOUR_HOST/v1/sessions/release \
   -H "Authorization: Bearer sk-…" -d '{"model":"…"}'
 ```
 
-  Answers `{"released":true,"closed":true}`, `…"closed":false,"reason":"shared"`
-  (another key still uses it) or `{"released":false,"reason":"not_held"}`.
+  Answers `{"released":true,"closed":false,"reason":"closing"}` (you were
+  the last holder; the close runs in the background shortly after),
+  `…"closed":false,"reason":"shared"` (another key still uses it) or
+  `{"released":false,"reason":"not_held"}`. Earlier builds answered
+  `"closed":true` for the last holder; treat `closing` like `closed`.
   When the operator turned release off (`sessionRelease` on the Settings
   tab) the answer is `403` `release_disabled`.
 - Details: [Long jobs](06-developers.md#long-jobs).

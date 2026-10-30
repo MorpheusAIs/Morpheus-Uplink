@@ -116,8 +116,8 @@ func relayRouterError(w http.ResponseWriter, err error) {
 		writeOpenAIError(w, http.StatusBadGateway, "inference failed")
 		return
 	}
-	// The full router text goes to the ops log only; the client gets it
-	// scrubbed (scrubRouterText) and capped.
+	// The router text goes to the ops log with URLs and 32-byte ids masked
+	// (warnf); the client gets it scrubbed (scrubRouterText) and capped.
 	warnf("api: router error %d on %s %s: %s", se.Code, se.Method, se.Path, se.Body)
 	code := se.Code
 	if code < 400 || code > 599 {

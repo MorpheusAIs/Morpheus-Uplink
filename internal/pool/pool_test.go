@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,10 @@ func TestRehydrateAdoptsOpenSession(t *testing.T) {
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
+	if closed.Load() != 0 {
+		t.Fatalf("rehydrate closed %d sessions; it only adopts", closed.Load())
+	}
+	p.ScanOrphans(context.Background()) // the sweep closes the expired one
 	if closed.Load() != 1 {
 		t.Fatalf("expected 1 expired close, got %d", closed.Load())
 	}

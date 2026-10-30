@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,6 +132,7 @@ type fakeSess struct {
 // only counts (Uplink never uses it; asserted 0 at cleanup).
 type fakeMarket struct {
 	t           *testing.T
+	openErrN    int // when > 0, only the first openErrN opens fail with openErrBody
 	mu          sync.Mutex
 	providers   []string
 	behave      map[string]fakeProvider
@@ -146,6 +148,18 @@ type fakeMarket struct {
 	unhealthy   map[string]bool // provider whose bid the bids feed marks degraded
 	byModel     int             // by-model opens (must stay 0)
 	openFail    map[string]bool // provider whose opens answer 500
+	// openErrBody, when set, answers every open with status 500 and this
+	// body (the router's shape for a chain RPC fault); no session opens.
+	openErrBody string
+	// ratedErrBody, when set, answers rated bids with status 500 and this body.
+	ratedErrBody string
+	// openLandBody, when set, opens the session on chain and still
+	// answers status 500 with this body (tx sent, receipt wait failed).
+	openLandBody string
+	// openArrived, when set, gets a signal when an open reaches the
+	// market; openGate, when set, then holds the open until it is closed.
+	openArrived chan struct{}
+	openGate    chan struct{}
 	// sessionLookup: "" normal; "fail" session detail answers 500;
 	// "empty" session detail has no provider.
 	sessionLookup string
@@ -173,9 +187,18 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 		m.t.Errorf("open body directPayment=%v", v)
 	}
 	for k := range body {
-		if k != "sessionDuration" && k != "failover" && k != "directPayment" {
+		if k != "sessionDuration" && k != "failover" && k != "directPayment" && k != "rejectExisting" {
 			m.t.Errorf("open body carries %q (staking-only body; avoidance goes by bid)", k)
 		}
+	}
+	m.mu.Lock()
+	arrived, gate := m.openArrived, m.openGate
+	m.mu.Unlock()
+	if arrived != nil {
+		arrived <- struct{}{}
+	}
+	if gate != nil {
+		<-gate
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -189,13 +212,22 @@ func (m *fakeMarket) open(w http.ResponseWriter, r *http.Request, byBid string) 
 		}
 	}
 	m.opens = append(m.opens, openRec{bid: byBid, provider: prov, body: body})
+	if m.openErrBody != "" && (m.openErrN == 0 || len(m.opens) <= m.openErrN) {
+		http.Error(w, m.openErrBody, http.StatusInternalServerError)
+		return
+	}
 	if prov == "" || m.openFail[prov] {
-		http.Error(w, `{"error":"no provider accepting session"}`, http.StatusInternalServerError)
+		// The router's provider-stage text: the provider is at fault.
+		http.Error(w, `{"error":"provider healthcheck ping failed: dial tcp: connect: connection refused"}`, http.StatusInternalServerError)
 		return
 	}
 	m.next++
 	id := fmt.Sprintf("0xsess%02d%s", m.next, strings.TrimPrefix(prov, "0x"))
 	m.sessions[id] = &fakeSess{provider: prov, bid: bidOf(prov), ends: time.Now().Add(time.Hour).Unix() + int64(m.next)}
+	if m.openLandBody != "" {
+		http.Error(w, m.openLandBody, http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"sessionID": id})
 }
 
@@ -282,6 +314,10 @@ func (m *fakeMarket) server() *httptest.Server {
 			http.Error(w, `{"error":"bids unavailable"}`, http.StatusInternalServerError)
 			return
 		}
+		if m.ratedErrBody != "" {
+			http.Error(w, m.ratedErrBody, http.StatusInternalServerError)
+			return
+		}
 		// Router shape: the outer ID is left unset (zero hash); the bid id is Bid.Id.
 		_, _ = w.Write(ratedRows(m.feedRowsLocked()...))
 	})
@@ -358,7 +394,8 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	t.Cleanup(cat.Close)
 	cfg := &config.Config{RouterURL: rt.URL, RouterUser: "admin", RouterPass: "routerpass", AdminPassword: "adminpass",
 		APIKeySeed: "failover-seed", DataDir: t.TempDir(), ActiveModelsURL: cat.URL, GatewayBidsURL: rt.URL + "/gateway_bids.json",
-		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600, SessionRelease: true}
+		SessionDurationSec: 600, SessionFailover: true, ProviderCooldownSec: 600, SessionRelease: true,
+		EthRPCURL: "https://rpc.invalid"} // the operator set the router's RPC (blank-RPC tests clear it)
 	if edit != nil {
 		edit(cfg)
 	}
@@ -369,6 +406,8 @@ func newFailoverEnv(t *testing.T, m *fakeMarket, edit func(*config.Config)) *fai
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	srv := wiredServer(cfg, st, rc, cfg.SessionDurationSec)
 	srv.pool.SetProviderCooldown(time.Duration(cfg.ProviderCooldownSec) * time.Second)
+	srv.pool.SetProvidedRPC(cfg.EthRPCURL != "") // presence only, as cmd/uplink does
+	startSweep(t, srv)
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	if cfg.WebPublicURL == "" {
 		cfg.WebPublicURL = "http://" + ts.Listener.Addr().String() // for the console's CSRF check
@@ -622,8 +661,10 @@ func TestFailoverConcurrentSingleFlight(t *testing.T) {
 			t.Fatalf("request %d: %d", i, c)
 		}
 	}
+	// One open on A (shared by all four), one close of A (by the sweep once
+	// the last request on it ends), one open on B.
+	waitFor(t, "sweep close of A", func() bool { _, c := m.snapshot(); return len(c) >= 1 })
 	opens, closes := m.snapshot()
-	// One open on A (shared by all four), one close of A, one open on B.
 	if len(opens) != 2 || len(closes) != 1 {
 		t.Fatalf("opens %d closes %d (want 2/1)", len(opens), len(closes))
 	}
@@ -778,4 +819,14 @@ func TestFailoverDisabled(t *testing.T) {
 	if code != 402 || len(opens) != 1 || len(closes) != 0 {
 		t.Fatalf("code %d opens %d closes %d", code, len(opens), len(closes))
 	}
+}
+
+// startSweep runs the pool's orphan sweep as cmd/uplink does, for the
+// test's lifetime: retired and released sessions are closed there.
+func startSweep(t *testing.T, srv *Server) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { srv.pool.RunSweep(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
 }

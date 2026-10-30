@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -79,6 +80,11 @@ func (d sessionDTO) toSession() (Session, error) {
 
 // GetSession fetches one session by id (open or closed) from the router.
 func (c *Client) GetSession(sessionID string) (Session, error) {
+	return c.GetSessionCtx(context.Background(), sessionID)
+}
+
+// GetSessionCtx is GetSession bounded by ctx.
+func (c *Client) GetSessionCtx(ctx context.Context, sessionID string) (Session, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return Session{}, fmt.Errorf("empty session id")
@@ -87,7 +93,7 @@ func (c *Client) GetSession(sessionID string) (Session, error) {
 		Session sessionDTO `json:"session"`
 	}
 	path := "/blockchain/sessions/" + url.PathEscape(sessionID)
-	if err := c.doJSON(http.MethodGet, path, nil, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, path, nil, &res); err != nil {
 		return Session{}, err
 	}
 	s, err := res.Session.toSession()
@@ -162,10 +168,15 @@ func (c *Client) AwaitActualDuration(sessionID string, attempts int, delay time.
 
 // WalletAddress returns the consumer wallet used by the proxy-router.
 func (c *Client) WalletAddress() (string, error) {
+	return c.WalletAddressCtx(context.Background())
+}
+
+// WalletAddressCtx is WalletAddress bounded by ctx.
+func (c *Client) WalletAddressCtx(ctx context.Context) (string, error) {
 	var res struct {
 		Address string `json:"address"`
 	}
-	if err := c.doJSON(http.MethodGet, "/wallet", nil, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, "/wallet", nil, &res); err != nil {
 		return "", err
 	}
 	if res.Address == "" {
@@ -174,7 +185,7 @@ func (c *Client) WalletAddress() (string, error) {
 	return res.Address, nil
 }
 
-func (c *Client) listSessionsPage(user string, offset, limit int, order string) ([]Session, error) {
+func (c *Client) listSessionsPage(ctx context.Context, user string, offset, limit int, order string) ([]Session, error) {
 	q := url.Values{}
 	q.Set("user", user)
 	q.Set("offset", strconv.Itoa(offset))
@@ -184,7 +195,7 @@ func (c *Client) listSessionsPage(user string, offset, limit int, order string) 
 		Sessions []sessionDTO `json:"sessions"`
 	}
 	path := "/blockchain/sessions/user?" + q.Encode()
-	if err := c.doJSON(http.MethodGet, path, nil, &res); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, path, nil, &res); err != nil {
 		return nil, err
 	}
 	out := make([]Session, 0, len(res.Sessions))
@@ -202,6 +213,11 @@ func (c *Client) listSessionsPage(user string, offset, limit int, order string) 
 // Stops after several consecutive pages of only closed sessions (same idea
 // as the proxy-router's rehydration early-exit).
 func (c *Client) ListOpenSessions(user string) ([]Session, error) {
+	return c.ListOpenSessionsCtx(context.Background(), user)
+}
+
+// ListOpenSessionsCtx is ListOpenSessions bounded by ctx.
+func (c *Client) ListOpenSessionsCtx(ctx context.Context, user string) ([]Session, error) {
 	const pageSize = 100
 	const stopAfterClosedPages = 3
 
@@ -209,7 +225,7 @@ func (c *Client) ListOpenSessions(user string) ([]Session, error) {
 	offset := 0
 	closedPages := 0
 	for {
-		page, err := c.listSessionsPage(user, offset, pageSize, "desc")
+		page, err := c.listSessionsPage(ctx, user, offset, pageSize, "desc")
 		if err != nil {
 			return nil, err
 		}

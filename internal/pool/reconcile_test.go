@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -135,6 +136,23 @@ func (f *fakeRouter) server(t *testing.T) *httptest.Server {
 			page = open[off:min(off+lim, len(open))]
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": page})
+	})
+	// The session by id, as the router reads it back after a close error;
+	// ClosedAt is set once the fake closed it, an unknown id is a 404.
+	mux.HandleFunc("GET /blockchain/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, s := range f.sessions {
+			if s["Id"].(string) == r.PathValue("id") {
+				row := maps.Clone(s)
+				if f.closed[r.PathValue("id")] > 0 {
+					row["ClosedAt"] = time.Now().Unix()
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"session": row})
+				return
+			}
+		}
+		http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
 	})
 	mux.HandleFunc("POST /blockchain/sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
 		f.closes.Add(1)
@@ -393,6 +411,10 @@ func TestRescanAuditsExpiredClose(t *testing.T) {
 	if err := p.RehydrateForce(); err != nil {
 		t.Fatal(err)
 	}
+	if len(evs) != 0 {
+		t.Fatalf("rehydrate closed: %+v", evs) // it only adopts
+	}
+	p.ScanOrphans(context.Background()) // the sweep closes, holding the slot
 	if len(evs) != 1 || evs[0].Kind != "session_reconcile_close" || evs[0].Reason != "expired" ||
 		evs[0].Source != "rescan" || evs[0].Result != "ok" || evs[0].Session != "0xexp-resc" {
 		t.Fatalf("rescan events %+v", evs)
@@ -592,20 +614,28 @@ func TestReconcileGateReleasedBeforeSlowCloses(t *testing.T) {
 		p.StartupReconcile(context.Background(), configuredAB, ReconcileConfig{})
 		close(done)
 	}()
-	res := make(chan error, 1)
-	go func() { _, err := acquireDone(p, modelA, 600); res <- err }()
-	select {
-	case err := <-res:
-		if err != nil || f.opened.Load() != 1 {
-			t.Fatalf("open during slow close: err=%v opened=%d", err, f.opened.Load())
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("open blocked by a slow close")
-	}
+	// The gate opens before the slow close ends. The close holds the
+	// wallet slot, so an open waits for at most that one close (one
+	// chain write per wallet at a time), then proceeds.
+	waitUntil(t, "gate released during the close", func() bool { return !p.gateClosed() })
 	if st := p.ReconcileStatus().State; st != "closing" {
 		t.Fatalf("state %q, want closing", st)
 	}
+	res := make(chan error, 1)
+	go func() { _, err := acquireDone(p, modelA, 600); res <- err }()
+	waitUntil(t, "open queued behind the close", func() bool { return p.slot.queued() == 1 })
+	if f.opened.Load() != 0 {
+		t.Fatal("open sent while a close held the wallet slot")
+	}
 	close(release)
+	select {
+	case err := <-res:
+		if err != nil || f.opened.Load() != 1 {
+			t.Fatalf("open after the close: err=%v opened=%d", err, f.opened.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("open still blocked after the close ended")
+	}
 	<-done
 	if f.closed["0xexp"] != 1 || p.ReconcileStatus().State != "ok" {
 		t.Fatalf("close not finished: %v %+v", f.closed, p.ReconcileStatus())

@@ -13,6 +13,31 @@
 
 ---
 
+## Upgrading to the v7.18.0 router pin
+
+- The uplink service now also receives `ETH_NODE_ADDRESS`, only to know
+  whether a provided RPC is set (the value itself is never logged). On
+  Railway, set it on the uplink service too. Leaving it empty keeps the
+  router's own RPC list.
+- The bundled proxy-router moves to v7.18.0 (digest-pinned in the release
+  compose).
+- `POST /v1/sessions/release` from the last holder now answers
+  `"closed":false,"reason":"closing"`: the close runs in the background
+  ([details](04-clients.md#long-jobs-timeouts-session-length-release)).
+- A chain RPC error at the router before the open is sent (a rate limit,
+  for example) no longer cools the provider or moves to another bid. With
+  `ETH_NODE_ADDRESS` set, Uplink retries the same bid with a short capped
+  backoff; either way the client then gets a clean `503` with a short
+  `Retry-After` (1 to 4 s).
+- When the router refuses an open because the wallet lacks funds (gas,
+  MOR or allowance) before sending it, the client gets `402`
+  `wallet_insufficient_funds` at once ("The Uplink wallet needs funds
+  (gas, MOR or allowance) to open a session", no `Retry-After`), with no
+  retry, cool-down or move to another bid. Fund the wallet, then retry.
+- The router wallet must be dedicated to this Uplink: do not share it with another router, NodeNeo or a script, because Uplink closes on-chain sessions it does not hold.
+
+---
+
 ## Upgrading to a build with settings in one place
 
 Console settings are no longer read from `.env` or the platform's

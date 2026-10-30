@@ -11,6 +11,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
 // /node/* is an admin-gated passthrough to the proxy-router API (Swagger,
@@ -19,7 +21,7 @@ import (
 // config, or access router files are refused here (403 + audit) before
 // anything is forwarded.
 //
-// Route table: proxy-router v7.17.0 (commit cd12b50f), registered flat on a
+// Route table: proxy-router v7.18.0, registered flat on a
 // gin.New() engine (internal/handlers/httphandlers/http.go:60-87; no groups
 // or prefixes; controllers in internal/apibus/controller.go:19). gin v1.10
 // defaults: case-sensitive match, RedirectTrailingSlash on,
@@ -275,7 +277,7 @@ func (s *Server) nodeProxy() http.Handler {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "router passthrough: " + err.Error()})
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "router passthrough: " + router.SafeError(err)})
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

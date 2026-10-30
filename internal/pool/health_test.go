@@ -229,13 +229,15 @@ func TestEmptyRatedBidsRefusesNoAvailable(t *testing.T) {
 }
 
 // TestRouterUnreachableLogsReason: a closed router port refuses with
-// ErrNoAvailableProvider and logs reason router_unreachable.
+// ErrNoAvailableProvider and, after the read backoff, logs reason
+// router_transient at the rated stage (a transport error is transient).
 func TestRouterUnreachableLogsReason(t *testing.T) {
 	var buf bytes.Buffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	defer slog.SetDefault(old)
 	p := New(router.New("http://127.0.0.1:1", "u", "p"), 600)
+	p.SetSleep(func(context.Context, time.Duration) error { return nil })
 	p.SetHealthyBids(func(string) (map[string]struct{}, error) {
 		return map[string]struct{}{"0xabc": {}}, nil
 	})
@@ -244,8 +246,8 @@ func TestRouterUnreachableLogsReason(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoAvailableProvider", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "reason=router_unreachable") {
-		t.Fatalf("log missing router_unreachable: %s", out)
+	if !strings.Contains(out, "reason=router_transient stage=rated") {
+		t.Fatalf("log missing router_transient at the rated stage: %s", out)
 	}
 	if strings.Contains(out, "rated_unreadable") {
 		t.Fatalf("log has rated_unreadable: %s", out)
@@ -481,6 +483,7 @@ func TestMidStreamCutGuardrailUsesFilteredList(t *testing.T) {
 	}
 	// The cut session is retired; its close lands once this request ends.
 	l.Done()
+	p.SweepIdle(time.Hour) // the sweep closes the retired session
 	waitUntil(t, "cut session closed", func() bool { return lr.closedCount(r.SessionID) == 1 })
 	if p.pendingCut(modelB) != leaseProv1 {
 		t.Fatalf("pending cut = %q, want %s", p.pendingCut(modelB), leaseProv1)
@@ -575,7 +578,9 @@ func TestReconcileStillClosesExcluded(t *testing.T) {
 func TestRehydrateAdoptsRegardlessOfHealth(t *testing.T) {
 	c := newFakeClock()
 	lr, p := newLeaseRouter(t, c)
-	lr.addChain("0xc-live", modelA, c.Now().Add(-time.Minute), c.Now().Add(2*time.Hour))
+	// Opened 3 min ago: past pruneGrace, so a scan may adopt it (a young
+	// unheld session is left alone).
+	lr.addChain("0xc-live", modelA, c.Now().Add(-3*time.Minute), c.Now().Add(2*time.Hour))
 	lr.setUnhealthy(modelA, leaseProv1)
 	lr.setUnhealthy(modelA, leaseProv2)
 	if err := p.RehydrateForce(); err != nil {
@@ -589,12 +594,13 @@ func TestRehydrateAdoptsRegardlessOfHealth(t *testing.T) {
 	noOpens(t, lr, "rehydrate")
 }
 
-// TestRetryAfterOnlyForCoolingRefusals: only all_cooling and walk_exhausted
-// carry a Retry-After, and only when a healthy, non-excluded provider is
-// cooling. Every other refusal carries none (0: no header), even while
-// providers of the model are cooling; all_cooling caused only by a stream
-// cut (no cool-down known) carries none either.
-func TestRetryAfterOnlyForCoolingRefusals(t *testing.T) {
+// TestRetryAfterOnlyForCoolingAndTransient: only all_cooling and
+// walk_exhausted (when a healthy, non-excluded provider is cooling) and
+// router_transient (1–4 s) carry a Retry-After. Every other refusal carries
+// none (0: no header), even while providers of the model are cooling;
+// all_cooling caused only by a stream cut (no cool-down known) carries none
+// either.
+func TestRetryAfterOnlyForCoolingAndTransient(t *testing.T) {
 	retryOf := func(t *testing.T, err error) time.Duration {
 		t.Helper()
 		var nae *NoAvailableError
@@ -641,13 +647,17 @@ func TestRetryAfterOnlyForCoolingRefusals(t *testing.T) {
 			noOpens(t, lr, c.name)
 		})
 	}
-	t.Run("router_unreachable", func(t *testing.T) {
+	t.Run("router_unreachable is router_transient", func(t *testing.T) {
+		// A transport error on the rated-bids read is transient:
+		// backed off, then router_transient with 1–4 s.
 		p := New(router.New("http://127.0.0.1:1", "u", "p"), 600)
+		p.SetSleep(func(context.Context, time.Duration) error { return nil })
 		p.SetHealthyBids(func(string) (map[string]struct{}, error) { return map[string]struct{}{}, nil })
 		coolBoth(p)
 		_, _, err := p.openAvoidingCooling(modelB, 600)
-		if ra := retryOf(t, err); ra != 0 {
-			t.Fatalf("Retry-After = %v, want none", ra)
+		var nae *NoAvailableError
+		if !errors.As(err, &nae) || nae.Reason != ReasonRouterTransient || nae.RetryAfter < time.Second || nae.RetryAfter > 4*time.Second {
+			t.Fatalf("err = %v (%+v), want router_transient with Retry-After 1–4 s", err, nae)
 		}
 	})
 	t.Run("all_cooling cut only", func(t *testing.T) {

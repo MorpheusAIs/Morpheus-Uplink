@@ -5,8 +5,9 @@ must match the router cookie (COOKIE_CONTENT). Anything else gets 401
 "invalid username or password", like the real router.
 
 Test controls (no auth, test-only): GET /e2e/stats, POST /e2e/fund?mor=N,
-POST /e2e/fail?path=P&code=N (inject errors), POST /e2e/seed-session?model=M&ends_in=SEC (an open session left behind by a
-previous process), GET /e2e/sessions (every session with its open/close
+POST /e2e/fail?path=P&code=N (inject errors), POST /e2e/seed-session?model=M&ends_in=SEC&age=SEC (an open session left behind by a
+previous process, opened age seconds ago: either side of the 2-minute
+orphan age), GET /e2e/sessions (every session with its open/close
 times and prompt count), GET /e2e/catalog (gateway model catalog, real
 shape: last_updated and a healthy bidDetail row per provider),
 POST /e2e/catalog-mode?m=normal|empty|braces|nodetail (nodetail: every
@@ -17,7 +18,12 @@ frozen; redirect: a 302 Uplink must not follow), POST /e2e/slow-close?sec=N,
 POST /e2e/provider-fail?provider=P&code=N&msg=M (that provider answers
 prompts with a provider model error; code=0 clears), GET /e2e/opens (every
 open request: model, bid ("" for an open by model), body field names,
-failover, provider picked). Rated rows carry the provider in mixed case,
+failover, provider picked), POST /e2e/open-fault?m=normal|ratelimit|receipt
+&n=N&step=bid|provider|gas|build|allowance (the next N opens, n=0: every
+open until m=normal, fail with status 500 in the router's shape when its
+chain RPC is rate limited; receipt: the session is created first, as when
+the tx landed but the receipt wait failed; counted in stats.open_faults
+and stats.open_faults_landed). Rated rows carry the provider in mixed case,
 like the router. Listens on 127.0.0.1 (MOCK_BIND) by default.
 Every model has two providers (PROVIDERS, best rated first). Sessions:
 list (/blockchain/sessions/user), open by model (best rated provider),
@@ -55,7 +61,45 @@ S = {
     "bids_mode": "normal",
     "bids_last": None,  # last bids file served (stale mode repeats it)
     "slow_close": 0,
+    "open_fault": None,  # {"mode", "step", "left"} (left 0: every open)
+    "rpc_id": 0,
 }
+
+# The router's open steps whose chain call fails under RPC rate limiting,
+# worded as the router words them.
+OPEN_FAULT_STEPS = {
+    "bid": "failed to get bid",
+    "provider": "failed to get provider",
+    "gas": "failed to send transaction: open session failed: failed to get initial gas prices",
+    "build": "failed to send transaction: open session failed: failed to build transaction",
+    "allowance": "failed to get current MOR allowance",
+}
+RPC_429 = ("Your app has exceeded its compute units per second capacity. If you have retries enabled, "
+           "you can safely ignore this message. If not, check out https://docs.alchemy.com/reference/throughput")
+RECEIPT_WAIT_429 = "failed to send transaction: parse session receipt failed: failed to wait for confirmations 429 Too Many Requests"
+
+
+def open_fault(model, provider, dur):
+    """Consume one open against the armed open-fault (call under LOCK).
+
+    Returns the router's status-500 error body when the open must fail,
+    else None. receipt: the session is created on chain first."""
+    f = S["open_fault"]
+    if not f:
+        return None
+    if f["left"] > 0:
+        f["left"] -= 1
+        if f["left"] == 0:
+            S["open_fault"] = None
+    S["stats"]["open_faults"] = S["stats"].get("open_faults", 0) + 1
+    if f["mode"] == "receipt":
+        new_session(model, time.time() + dur, "uplink", provider)
+        S["stats"]["open_faults_landed"] = S["stats"].get("open_faults_landed", 0) + 1
+        return {"error": RECEIPT_WAIT_429}
+    S["rpc_id"] += 1
+    rpc = json.dumps({"jsonrpc": "2.0", "id": S["rpc_id"], "error": {"code": 429, "message": RPC_429}},
+                     separators=(",", ":"))
+    return {"error": OPEN_FAULT_STEPS[f["step"]] + ": 429 Too Many Requests: " + rpc}
 
 
 CATALOG = [
@@ -246,10 +290,14 @@ class H(BaseHTTPRequestHandler):
                     model = ref
                     pick = PROVIDERS[0] if PROVIDERS else None
                 S["opens"].append({"model": model, "bid": ref if by_bid else "", "fields": sorted(body.keys()),
-                                   "failover": body.get("failover"), "provider": pick})
+                                   "failover": body.get("failover"), "rejectExisting": body.get("rejectExisting"),
+                                   "provider": pick})
                 if pick is None:
                     return self._json(500, {"error": "no provider accepting session"})
                 dur = int(body.get("sessionDuration") or 600)
+                fault = open_fault(model, pick, dur)
+                if fault is not None:
+                    return self._json(500, fault)
                 S["stats"]["session_opens"] += 1
                 return self._json(200, {"sessionID": new_session(model, time.time() + dur, "uplink", pick)})
             if path.startswith("/blockchain/sessions/") and path.endswith("/close") and method == "POST":
@@ -312,6 +360,7 @@ class H(BaseHTTPRequestHandler):
         self._body()
         if path == "/e2e/seed-session":
             sid = new_session(q.get("model", [""])[0], time.time() + int(q.get("ends_in", ["3600"])[0]), "seed")
+            S["sessions"][sid]["OpenedAt"] -= int(q.get("age", ["0"])[0])  # opened age seconds ago
             return self._json(200, {"id": sid})
         if path == "/e2e/catalog-mode":
             S["catalog_mode"] = q.get("m", ["normal"])[0]
@@ -325,6 +374,14 @@ class H(BaseHTTPRequestHandler):
                 S["pfail"][p] = (code, q.get("msg", ["provider error"])[0])
             else:
                 S["pfail"].pop(p, None)
+        elif path == "/e2e/open-fault":
+            mode, step = q.get("m", ["normal"])[0], q.get("step", ["bid"])[0]
+            if mode == "normal":
+                S["open_fault"] = None
+            elif mode in ("ratelimit", "receipt") and step in OPEN_FAULT_STEPS:
+                S["open_fault"] = {"mode": mode, "step": step, "left": max(0, int(q.get("n", ["1"])[0]))}
+            else:
+                return self._json(400, {"error": "bad open-fault mode or step"})
         elif path == "/e2e/fund":
             S["mor"] = q.get("mor", ["0"])[0]
         elif path == "/e2e/fail":

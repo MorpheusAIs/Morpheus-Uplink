@@ -1,7 +1,10 @@
 package pool
 
 import (
+	"context"
+	"errors"
 	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -15,10 +18,12 @@ import (
 //
 //	OPEN --request(k)--> inflight++, holders[k]=now   (same lock as hand-out)
 //	     --end/panic/cancel--> inflight--              (Lease.Done, deferred)
-//	     --release(k)--> delete holders[k]; none left and idle → CLOSING
+//	     --release(k)--> delete holders[k]; none left and idle → RETIRED
 //	     --sweep: idle ≥ grace--> CLOSING
 //	     --failover--> RETIRED (not handed out)
-//	RETIRED --inflight==0--> CLOSING --ok--> CLOSED | --fail--> RETIRED (sweep retries, max 3)
+//	RETIRED --inflight==0, sweep--> CLOSING --ok--> CLOSED | --fail--> RETIRED (sweep retries, max 3)
+//
+// Every close runs in the sweep, holding the wallet slot (slot.go).
 
 // maxCloseRetries bounds the sweep's retries of a failed close.
 const maxCloseRetries = 3
@@ -32,14 +37,19 @@ type sessState struct {
 	endsAt     time.Time // on-chain end
 	opener     string    // key id that opened it ("" adopted or failover)
 	retired    bool      // not handed out any more; closed when inflight reaches 0
+	retiredAt  time.Time // pool clock when first retired (close-due age with lastUse)
 	closing    bool
 	closeFails int
 }
 
 // SetClock sets the pool's clock (tests).
+// Uptime is measured on that clock from this call.
 func (p *Pool) SetClock(now func() time.Time) {
 	p.mu.Lock()
 	p.clock = now
+	if now != nil {
+		p.started = now()
+	}
 	p.mu.Unlock()
 }
 
@@ -48,6 +58,32 @@ func (p *Pool) now() time.Time {
 		return c()
 	}
 	return time.Now()
+}
+
+// SetSleep replaces the pool's wait between attempts (tests). nil: a
+// real, ctx-bounded sleep. A non-nil error ends the wait early.
+func (p *Pool) SetSleep(f func(ctx context.Context, d time.Duration) error) {
+	p.mu.Lock()
+	p.sleepFn = f
+	p.mu.Unlock()
+}
+
+// sleep waits d, or until ctx ends (ctx.Err()).
+func (p *Pool) sleep(ctx context.Context, d time.Duration) error {
+	p.mu.Lock()
+	f := p.sleepFn
+	p.mu.Unlock()
+	if f != nil {
+		return f(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // SetDurationMax sets the sessionDurationMax setting (seconds).
@@ -113,7 +149,7 @@ type Lease struct {
 }
 
 // Done ends the lease. When it leaves a retired session with nothing in
-// flight, the session is closed (in the background).
+// flight, the sweep is asked to close it.
 func (l *Lease) Done() {
 	if l == nil {
 		return
@@ -122,19 +158,17 @@ func (l *Lease) Done() {
 		p := l.p
 		p.mu.Lock()
 		st := p.sess[l.SessionID]
-		closeIt := false
+		kick := false
 		if st != nil {
 			if st.inflight > 0 {
 				st.inflight--
 			}
 			st.lastUse = p.now()
-			if st.inflight == 0 && st.retired && !st.closing && st.closeFails < maxCloseRetries {
-				st.closing, closeIt = true, true
-			}
+			kick = st.inflight == 0 && st.retired && !st.closing && st.closeFails < maxCloseRetries
 		}
 		p.mu.Unlock()
-		if closeIt {
-			go p.closeState(l.SessionID)
+		if kick {
+			p.requestSweep()
 		}
 	})
 }
@@ -171,7 +205,7 @@ func (p *Pool) LeaseSession(sessionID, keyID string) *Lease {
 			continue
 		}
 		st := p.stateLocked(key, e)
-		if st.retired || st.closing {
+		if st.retired || st.closing || p.closingMarkedLocked(sessionID) {
 			return nil
 		}
 		return p.leaseLocked(sessionID, st, keyID)
@@ -199,6 +233,9 @@ func (p *Pool) tryPooledLocked(key string, o AcquireOpts, dur int) (*Lease, Acqu
 	if !ok || !p.now().Before(e.expiresAt) {
 		return nil, AcquireResult{}
 	}
+	if p.closingMarkedLocked(e.sessionID) {
+		return nil, AcquireResult{}
+	}
 	st := p.stateLocked(key, e)
 	if st.retired || st.closing {
 		return nil, AcquireResult{}
@@ -207,11 +244,23 @@ func (p *Pool) tryPooledLocked(key string, o AcquireOpts, dur int) (*Lease, Acqu
 	return l, AcquireResult{SessionID: e.sessionID, DurationSec: dur}
 }
 
-// Acquire hands out a session for the model with a lease taken in the same
-// critical section. Reuse order: pooled → adopt an on-chain session → open.
-// A session is used until it expires or the idle sweep closes it; the next
-// call then opens a new one.
+// Acquire is AcquireCtx without a request context.
 func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, error) {
+	return p.AcquireCtx(context.Background(), modelID, o)
+}
+
+// AcquireCtx hands out a session for the model with a lease taken in the
+// same critical section. Reuse order: pooled → adopt an on-chain session →
+// open. A session is used until it expires or the sweep closes it.
+//
+// An open holds the wallet slot (one wallet call at a time, FIFO, 90 s
+// queue cap, 60 s hold cap): it rereads the pool, scans the wallet
+// (adopt-only), and opens by bid. ctx bounds the wait and every step up
+// to the open POST; once the POST is sent the open runs to its own
+// deadline and is reconciled whatever happens to ctx. Refusals:
+// open_busy (queue full or timed out; no Retry-After), router_transient
+// (Retry-After 1–4 s) and ErrWalletNeedsFunds (fail fast).
+func (p *Pool) AcquireCtx(ctx context.Context, modelID string, o AcquireOpts) (*Lease, AcquireResult, error) {
 	dur := o.DurationSec
 	if dur <= 0 {
 		dur = p.DurationSec()
@@ -225,7 +274,9 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 	p.mu.Unlock()
 
 	lock := p.openLock(key)
-	p.waitGate()
+	if err := p.waitGateCtx(ctx); err != nil {
+		return nil, AcquireResult{}, err
+	}
 	lock.Lock()
 	defer lock.Unlock()
 
@@ -235,8 +286,29 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 	if l != nil {
 		return l, res, nil
 	}
-	// Memory miss: prefer an already-staked on-chain session.
-	if err := p.RehydrateForce(); err != nil {
+	tok, err := p.slot.acquire(ctx, o.KeyID)
+	if err != nil {
+		if errors.Is(err, errSlotBusy) {
+			slog.Warn("pool: not opening", "model", modelID, "reason", ReasonOpenBusy, "queued", p.slot.queued())
+			return nil, AcquireResult{}, errOpenBusyRefusal()
+		}
+		return nil, AcquireResult{}, err
+	}
+	defer p.slot.release(tok)
+
+	p.mu.Lock()
+	l, res = p.tryPooledLocked(key, o, dur)
+	p.mu.Unlock()
+	if l != nil {
+		return l, res, nil
+	}
+	// Memory miss: prefer an already-staked on-chain session (adopt-only;
+	// it also resolves earlier open attempts).
+	sc, err := p.scan(ctx, tok, scanAdoptOnly)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, AcquireResult{}, ctx.Err()
+		}
 		warnf("pool: rehydrate before open for %s: %v", modelID, err)
 		if p.gated.Load() && !p.stateKnown.Load() {
 			return nil, AcquireResult{}, ErrSessionStateUnknown
@@ -249,57 +321,94 @@ func (p *Pool) Acquire(modelID string, o AcquireOpts) (*Lease, AcquireResult, er
 		log.Printf("pool: adopted on-chain session %s for model %s", short_(res.SessionID), modelID)
 		return l, res, nil
 	}
-
 	openDur := dur
 	// The cap applies to every open, with or without the header.
 	if mx := p.DurationMax(); mx > 0 && openDur > mx {
 		openDur = mx
 	}
-	id, prov, err := p.openAvoidingCooling(modelID, openDur)
+	op := p.newOpenOp(tok, modelID)
+	// rejectExisting only when Uplink holds no live session for the model
+	// (neither tracked nor in the list just read): a first open, or a
+	// retry of an open that was cut or may have been sent. The router then
+	// refuses the open if a session landed meanwhile, and names it.
+	p.mu.Lock()
+	op.rejectExisting = !p.holdsLiveLocked(key) && !(err == nil && sc.live[key])
+	p.mu.Unlock()
+	got, err := op.openAvoidingCooling(ctx, openDur)
 	if err != nil {
 		return nil, AcquireResult{}, err
 	}
-	now := p.now()
 	p.mu.Lock()
-	p.entries[key] = entry{sessionID: id, expiresAt: now.Add(time.Duration(openDur)*time.Second - expiryBuffer), provider: prov}
-	st := p.newStateLocked(key, id, now, now.Add(time.Duration(openDur)*time.Second), o.KeyID)
-	l = p.leaseLocked(id, st, o.KeyID)
+	var st *sessState
+	if got.resumed {
+		st = p.adoptLocked(key, got)
+	} else {
+		st = p.poolOpenedLocked(key, got, openDur, o.KeyID)
+	}
+	l = p.leaseLocked(got.id, st, o.KeyID)
 	p.mu.Unlock()
-	log.Printf("pool: opened session %s for model %s (duration %ds)", short_(id), modelID, openDur)
-	return l, AcquireResult{SessionID: id, Opened: true, DurationSec: openDur}, nil
+	if got.resumed {
+		log.Printf("pool: adopted on-chain session %s for model %s (named by the router)", short_(got.id), modelID)
+		return l, AcquireResult{SessionID: got.id, DurationSec: dur}, nil
+	}
+	if got.adopted {
+		log.Printf("pool: open for model %s found on chain as session %s", modelID, short_(got.id))
+		return l, AcquireResult{SessionID: got.id, Opened: true, DurationSec: int(got.endsAt.Sub(got.openedAt) / time.Second)}, nil
+	}
+	log.Printf("pool: opened session %s for model %s (duration %ds)", short_(got.id), modelID, openDur)
+	return l, AcquireResult{SessionID: got.id, Opened: true, DurationSec: openDur}, nil
+}
+
+// poolOpenedLocked pools a session this process just opened (or found on
+// chain after an open whose answer was lost) and returns its state.
+func (p *Pool) poolOpenedLocked(key string, got openResult, durSec int, opener string) *sessState {
+	now := p.now()
+	opened, ends := now, now.Add(time.Duration(durSec)*time.Second)
+	if got.adopted {
+		opened, ends = got.openedAt, got.endsAt
+	}
+	p.opened[strings.ToLower(got.id)] = true
+	p.entries[key] = entry{sessionID: got.id, expiresAt: ends.Add(-expiryBuffer), provider: normProv(got.provider), stake: got.stake}
+	return p.newStateLocked(key, got.id, opened, ends, opener)
+}
+
+// adoptLocked pools a live session this process did not open (the
+// router named it when it refused a rejectExisting open), as a scan
+// adopts one.
+func (p *Pool) adoptLocked(key string, got openResult) *sessState {
+	p.entries[key] = entry{sessionID: got.id, expiresAt: got.endsAt.Add(-expiryBuffer), provider: normProv(got.provider), stake: got.stake}
+	if st := p.sess[got.id]; st != nil {
+		return st
+	}
+	return p.newStateLocked(key, got.id, got.openedAt, got.endsAt, "")
+}
+
+// holdsLiveLocked reports whether Uplink tracks a session of the model
+// that is still live on chain (in use, retired or closing).
+func (p *Pool) holdsLiveLocked(key string) bool {
+	now := p.now()
+	for _, st := range p.sess {
+		if st.model == key && now.Before(st.endsAt) {
+			return true
+		}
+	}
+	return false
 }
 
 func short_(id string) string { return short(id) }
-
-// closeState closes a session marked closing; a failure puts it back to
-// retired for the sweep to retry (at most maxCloseRetries times).
-func (p *Pool) closeState(sessionID string) bool {
-	err := p.closeBounded(sessionID)
-	if err != nil {
-		p.mu.Lock()
-		if st := p.sess[sessionID]; st != nil {
-			st.closing, st.retired = false, true
-			st.closeFails++
-		}
-		p.mu.Unlock()
-		warnf("pool: close session %s: %v (retired; retried by the sweep)", short(sessionID), err)
-		return false
-	}
-	p.notifyClosed(sessionID)
-	return true
-}
 
 // ReleaseOutcome is the answer to a release.
 type ReleaseOutcome struct {
 	Released bool   `json:"released"`
 	Closed   bool   `json:"closed"`
-	Reason   string `json:"reason,omitempty"` // shared, in_flight, not_held, retry
+	Reason   string `json:"reason,omitempty"` // shared, in_flight, not_held, closing
 }
 
 // Release removes keyID from the holders of the model's session. With no
-// holder and nothing in flight left, the session is closed now; otherwise
-// the close is left to the idle sweep. The answer never depends on
-// whether a session exists when the key holds none (not_held).
+// holder and nothing in flight left, the session is retired (never handed
+// out again) and the sweep closes it: the answer is closed:false with
+// reason "closing". The answer never depends on whether a session exists
+// when the key holds none (not_held).
 func (p *Pool) Release(modelID, keyID string) ReleaseOutcome {
 	key := normModel(modelID)
 	p.mu.Lock()
@@ -338,56 +447,120 @@ func (p *Pool) Release(modelID, keyID string) ReleaseOutcome {
 		p.mu.Unlock()
 		return ReleaseOutcome{Released: true, Reason: "in_flight"}
 	}
-	st.closing = true
+	st.markRetired(p.now())
 	if e, ok := p.entries[key]; ok && e.sessionID == id {
 		delete(p.entries, key)
 	}
+	end := st.endsAt
 	p.mu.Unlock()
-	p.retire(id, st.endsAt)
-	if !p.closeState(id) {
-		return ReleaseOutcome{Released: true, Reason: "retry"}
-	}
-	return ReleaseOutcome{Released: true, Closed: true}
+	p.retire(id, end)
+	p.requestSweep()
+	return ReleaseOutcome{Released: true, Reason: "closing"}
 }
 
 // SweepIdle closes sessions with nothing in flight and no use for grace,
-// and retries retired sessions whose close failed. It returns the number
-// closed.
+// and retired sessions (released, failed over, or a close that failed). It
+// returns the number closed. Each close takes the wallet slot when it is
+// free and closes one session per hold; the rest wait for the next try.
+// After sweepMaxSkips busy tries, or once a close-due session is
+// orphanAlertAge old, it queues for one hold (FIFO, behind opens already
+// waiting) and closes one session.
 func (p *Pool) SweepIdle(grace time.Duration) int {
-	now := p.now()
-	var ids []string
-	p.mu.Lock()
-	for id, st := range p.sess {
-		if st.closing || st.inflight > 0 {
+	return p.sweepRetired(context.Background(), grace, true)
+}
+
+// sweepRetired is SweepIdle; with idle false it closes retired sessions
+// only.
+func (p *Pool) sweepRetired(ctx context.Context, grace time.Duration, idle bool) int {
+	n := 0
+	for ctx.Err() == nil && !p.gateClosed() {
+		pick := func() string {
+			now := p.now()
+			if p.cutCloseMarkLocked(now) {
+				return ""
+			}
+			var ids []string
+			for id, st := range p.sess {
+				if st.closing || st.inflight > 0 || p.closingMarkedLocked(id) {
+					continue
+				}
+				if !st.retired && (!idle || now.Sub(st.lastUse) < grace) {
+					continue
+				}
+				if st.retired && st.closeFails >= maxCloseRetries {
+					continue
+				}
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			if len(ids) == 0 {
+				return ""
+			}
+			return ids[0]
+		}
+		p.mu.Lock()
+		id := pick()
+		p.mu.Unlock()
+		if id == "" {
+			return n
+		}
+		tok := p.slot.tryAcquire("")
+		forced := false
+		if tok == nil {
+			// Count the busy try without the slot; after sweepMaxSkips of
+			// them, or once a close-due session is orphanAlertAge old,
+			// queue for one hold (FIFO behind the opens already waiting)
+			// and close one session.
+			p.mu.Lock()
+			p.retiredSkips++
+			skips := p.retiredSkips
+			due, oldest := p.localDueLocked(p.now())
+			p.mu.Unlock()
+			p.alertStarved(due, oldest)
+			if skips < sweepMaxSkips && oldest < orphanAlertAge {
+				p.retiredBusy.Store(true) // RunSweep tries again soon
+				return n
+			}
+			t, err := p.slot.acquire(ctx, "")
+			if err != nil {
+				return n
+			}
+			tok, forced = t, true
+		}
+		p.mu.Lock()
+		p.retiredSkips = 0 // this try holds the slot
+		if pick() != id {
+			p.mu.Unlock()
+			p.slot.release(tok)
 			continue
 		}
-		if !st.retired && now.Sub(st.lastUse) < grace {
-			continue
-		}
-		if st.retired && st.closeFails >= maxCloseRetries {
-			continue
-		}
+		st := p.sess[id]
 		st.closing = true
 		if e, ok := p.entries[st.model]; ok && e.sessionID == id {
 			delete(p.entries, st.model)
 		}
-		ids = append(ids, id)
-	}
-	p.mu.Unlock()
-	sort.Strings(ids)
-	n := 0
-	for _, id := range ids {
-		p.mu.Lock()
-		end := time.Time{}
-		if st := p.sess[id]; st != nil {
-			end = st.endsAt
-		}
+		end := st.endsAt
 		p.mu.Unlock()
 		p.retire(id, end)
-		if p.closeState(id) {
+		out, err := p.closeWithToken(ctx, tok, id, "", "", closeCallTimeout)
+		p.slot.release(tok)
+		if out == closeOK || out == closeAlready {
 			n++
 			log.Printf("pool: idle sweep closed session %s", short(id))
+			if forced {
+				return n // one close per queued hold
+			}
+			continue
 		}
+		p.mu.Lock()
+		if st := p.sess[id]; st != nil {
+			st.closing = false
+			st.markRetired(p.now())
+			st.closeFails++
+		}
+		p.mu.Unlock()
+		warnf("pool: close session %s: %v (retired; retried by the sweep)", short(id), err)
+		return n
 	}
 	return n
 }
@@ -405,7 +578,7 @@ func (p *Pool) retireForFailover(key, sessionID string) bool {
 	if st == nil {
 		return true
 	}
-	st.retired = true
+	st.markRetired(p.now())
 	if st.inflight > 0 || st.closing {
 		return false
 	}
@@ -442,4 +615,19 @@ func (p *Pool) TotalInFlight() int {
 		n += st.inflight
 	}
 	return n
+}
+
+func (st *sessState) markRetired(now time.Time) {
+	if !st.retired {
+		st.retired, st.retiredAt = true, now
+	}
+}
+
+// unheldSince is when a retired session with nothing in flight became
+// close-due: the later of its retirement and its last use.
+func (st *sessState) unheldSince() time.Time {
+	if st.lastUse.After(st.retiredAt) {
+		return st.lastUse
+	}
+	return st.retiredAt
 }

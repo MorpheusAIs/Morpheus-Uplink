@@ -12,8 +12,8 @@ import (
 // cool-down is known.
 func TestA2ClampRetryAfter(t *testing.T) {
 	for _, c := range []struct{ in, want time.Duration }{
-		{0, 0},
-		{-time.Second, 0},
+		{0, time.Second}, // never a zero Retry-After
+		{-time.Second, time.Second},
 		{200 * time.Millisecond, time.Second},
 		{time.Second, time.Second},
 		{1500 * time.Millisecond, 2 * time.Second},

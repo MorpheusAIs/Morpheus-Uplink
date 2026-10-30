@@ -246,9 +246,20 @@ func (s *Server) handleSessionRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// acquireSession wraps pool.Acquire with its typed error answers.
-func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID string, cl callLimits) (*pool.Lease, pool.AcquireResult, bool) {
-	lease, res, err := s.pool.Acquire(modelID, pool.AcquireOpts{KeyID: keyID, DurationSec: cl.durationSec})
+// acquireSession wraps pool.AcquireCtx with its typed error answers. Once
+// the client has gone it writes nothing (an open already sent finishes
+// detached and stays pooled).
+func (s *Server) acquireSession(ctx context.Context, w http.ResponseWriter, keyID, reqModel, modelID string, cl callLimits) (*pool.Lease, pool.AcquireResult, bool) {
+	lease, res, err := s.pool.AcquireCtx(ctx, modelID, pool.AcquireOpts{KeyID: keyID, DurationSec: cl.durationSec})
+	if ctx.Err() != nil {
+		if lease != nil {
+			if res.Opened {
+				s.store.TrackSessionOpen(res.SessionID, keyID, modelID)
+			}
+			lease.Done()
+		}
+		return nil, res, false
+	}
 	if errors.Is(err, pool.ErrNoEligibleProvider) {
 		// Only providers excluded by the providerExclude setting serve the model.
 		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")
@@ -258,6 +269,11 @@ func (s *Server) acquireSession(w http.ResponseWriter, keyID, reqModel, modelID 
 		// Every eligible provider is avoided right now: nothing was opened.
 		s.auditProviderUnavailable(modelID, "no_available")
 		writeNoAvailableProvider(w, err)
+		return nil, res, false
+	}
+	if errors.Is(err, pool.ErrWalletNeedsFunds) {
+		warnf("api: open session for %s (%s): the wallet needs funds", reqModel, modelID)
+		writeWalletNeedsFunds(w)
 		return nil, res, false
 	}
 	if err != nil {
@@ -290,9 +306,10 @@ func setTimeoutHeaders(w http.ResponseWriter, cl callLimits) {
 }
 
 // writeNoAvailableProvider answers ErrNoAvailableProvider: a typed 503 with
-// a fixed message (no ids) and, when a cool-down is known (all_cooling or
-// walk_exhausted; the pool sets RetryAfter only there), Retry-After in
-// whole seconds. No value known → no header; never "0".
+// a fixed message (no ids) and, when the pool set one (all_cooling and
+// walk_exhausted: the cool-down; router_transient: 1–4 s), Retry-After in
+// whole seconds. No value (open_busy and the other refusals) → no header;
+// never "0".
 func writeNoAvailableProvider(w http.ResponseWriter, err error) {
 	var na *pool.NoAvailableError
 	if errors.As(err, &na) {
@@ -301,6 +318,14 @@ func writeNoAvailableProvider(w http.ResponseWriter, err error) {
 		}
 	}
 	writeTypedError(w, http.StatusServiceUnavailable, "no_available_provider", "no provider is available for this model right now; retry later")
+}
+
+// writeWalletNeedsFunds answers an open the router refused before sending
+// because the wallet lacks funds: 402, no Retry-After (retrying cannot
+// help until the wallet is funded).
+func writeWalletNeedsFunds(w http.ResponseWriter) {
+	writeTypedError(w, http.StatusPaymentRequired, "wallet_insufficient_funds",
+		"The Uplink wallet needs funds (gas, MOR or allowance) to open a session")
 }
 
 // auditProviderUnavailable records a fail-fast refusal on the ops stream,
