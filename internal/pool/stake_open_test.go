@@ -37,6 +37,9 @@ type stakeMock struct {
 	budgetReads        atomic.Int64
 	ratedReads         atomic.Int64
 	openedSessionCount int
+	ratedHold          chan struct{} // non-nil: rated reads wait for it to close
+	ratedCode          int           // != 0: rated reads answer this status
+	ratedCur, ratedMax atomic.Int64
 }
 
 func mbid(n int) string  { return fmt.Sprintf("0x%064x", n) }
@@ -100,6 +103,28 @@ func newStakeEnv(t *testing.T, m *stakeMock, limit *big.Int) *Pool {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
 		m.ratedReads.Add(1)
+		cur := m.ratedCur.Add(1)
+		defer m.ratedCur.Add(-1)
+		for {
+			mx := m.ratedMax.Load()
+			if cur <= mx || m.ratedMax.CompareAndSwap(mx, cur) {
+				break
+			}
+		}
+		m.mu.Lock()
+		hold, code := m.ratedHold, m.ratedCode
+		m.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if code != 0 {
+			http.Error(w, `{"error":"x"}`, code)
+			return
+		}
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		rows := []map[string]any{}

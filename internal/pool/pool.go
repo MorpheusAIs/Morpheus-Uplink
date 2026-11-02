@@ -113,9 +113,11 @@ type Pool struct {
 	stakeRefusal StakeRefusal // last stake_limit_exceeded refusal; zero At: none since the last open
 	stakeLim     atomic.Pointer[stakeLimit]
 	heldInputs   atomic.Pointer[StakeInputs] // display supply/budget pair (never used by an open)
-	scanKick     chan struct{}               // buffered 1: run the sweep now
-	providedRPC  atomic.Bool                 // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
-	retiredBusy  atomic.Bool                 // a retired close found the wallet slot busy
+	ftOnce       sync.Once                   // ftc: FirstTry display cache (first_try_cache.go)
+	ftc          *firstTryCache
+	scanKick     chan struct{} // buffered 1: run the sweep now
+	providedRPC  atomic.Bool   // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
+	retiredBusy  atomic.Bool   // a retired close found the wallet slot busy
 }
 
 // ChainWait is the last open refused because the chain is congested or
