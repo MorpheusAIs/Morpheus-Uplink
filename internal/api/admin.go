@@ -415,7 +415,7 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "todays budget: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	stake, err := router.SessionStakeWei(supply, budget, pps, int64(durationSec))
+	stake, err := router.StakeForDurationWei(supply, budget, pps, int64(durationSec))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -483,7 +483,7 @@ func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
 		if pps == nil {
 			continue
 		}
-		stake, err := router.SessionStakeWei(supply, budget, pps, int64(durationSec))
+		stake, err := router.StakeForDurationWei(supply, budget, pps, int64(durationSec))
 		if err != nil {
 			continue
 		}

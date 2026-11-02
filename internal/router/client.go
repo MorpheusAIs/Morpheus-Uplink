@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"sort"
@@ -372,6 +373,9 @@ type RatedBid struct {
 	ID       string
 	Provider string // lowercase hex address
 	Score    float64
+	// PricePerSecond is the bid's price in wei per second; nil when the
+	// row has none or it is not a whole number.
+	PricePerSecond *big.Int
 }
 
 // ErrRatedBidsIncomplete marks a rated-bids answer with rows that could
@@ -394,8 +398,9 @@ func (c *Client) RatedBidsCtx(ctx context.Context, modelID string) ([]RatedBid, 
 		Bids []struct {
 			ID  string `json:"ID"`
 			Bid struct {
-				Id       string `json:"Id"`
-				Provider string `json:"Provider"`
+				Id             string          `json:"Id"`
+				Provider       string          `json:"Provider"`
+				PricePerSecond json.RawMessage `json:"PricePerSecond"`
 			} `json:"Bid"`
 			Score float64 `json:"Score"`
 		} `json:"bids"`
@@ -417,13 +422,26 @@ func (c *Client) RatedBidsCtx(ctx context.Context, modelID string) ([]RatedBid, 
 			bad++
 			continue
 		}
-		out = append(out, RatedBid{ID: id, Provider: prov, Score: b.Score})
+		out = append(out, RatedBid{ID: id, Provider: prov, Score: b.Score, PricePerSecond: ratedPrice(b.Bid.PricePerSecond)})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if bad > 0 {
 		return out, fmt.Errorf("%w (%d of %d)", ErrRatedBidsIncomplete, bad, len(res.Bids))
 	}
 	return out, nil
+}
+
+// ratedPrice decodes a rated bid's PricePerSecond (a decimal string or
+// number); nil when missing, null or not a whole number.
+func ratedPrice(raw json.RawMessage) *big.Int {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	n, err := parseBigIntJSON(raw)
+	if err != nil {
+		return nil
+	}
+	return n
 }
 
 // hexValue returns s lowercased when it is 0x followed by exactly n hex
