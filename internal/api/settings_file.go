@@ -39,6 +39,10 @@ type settingView struct {
 	// differs from Value until the next Uplink start (PendingRestart).
 	Effective      any  `json:"effective,omitempty"`
 	PendingRestart bool `json:"pendingRestart,omitempty"`
+	// Invalid: the saved value does not validate and is kept as is (a
+	// keepInvalid row); Uplink refuses what the row guards until it is
+	// fixed and Uplink restarts.
+	Invalid bool `json:"invalid,omitempty"`
 }
 
 func typedSetting(d config.SettingDef, v string) any {
@@ -55,10 +59,15 @@ func typedSetting(d config.SettingDef, v string) any {
 
 // restartValue is the value a restart-scope setting will have on the next
 // start (persisted > default) and its source.
+// An invalid saved value of a keepInvalid row is returned as is (trimmed):
+// it is what the next start runs with.
 func (s *Server) restartValue(d config.SettingDef, st store.Settings) (string, string) {
 	if raw, ok := st.Value(d.Name); ok {
 		if v, err := d.Validate(raw); err == nil {
 			return v, "persisted"
+		}
+		if d.KeepsInvalid() {
+			return strings.TrimSpace(raw), "persisted"
 		}
 	}
 	return d.Default, "default"
@@ -88,6 +97,10 @@ func (s *Server) settingsView() map[string]any {
 			eff := d.Effective(s.cfg)
 			v.Value, v.Source, v.Restart = typedSetting(d, val), src, "uplink"
 			v.Effective, v.PendingRestart = typedSetting(d, eff), val != eff
+			if d.KeepsInvalid() {
+				_, err := d.Validate(val)
+				v.Invalid = err != nil
+			}
 		case config.ScopeEnvOnly:
 			v.Value, v.Restart, v.Source = typedSetting(d, d.Effective(s.cfg)), "uplink", "default"
 			if s.cfg.EnvOnlySet[d.Env] {

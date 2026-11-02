@@ -34,7 +34,9 @@ func newSettingsEnv(t *testing.T, env map[string]string, persist map[string]stri
 func newSettingsEnvPrep(t *testing.T, env map[string]string, persist map[string]string, prep func(*Server)) *settingsEnv {
 	t.Helper()
 	for _, d := range config.Settings {
-		t.Setenv(d.Env, "")
+		if d.Env != "" { // a row added after the env era has no former variable
+			t.Setenv(d.Env, "")
+		}
 	}
 	cfg := s6Config(t, env)
 	st, err := store.Open(cfg.DataDir)
