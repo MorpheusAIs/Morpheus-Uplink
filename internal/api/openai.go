@@ -202,11 +202,18 @@ func (s *Server) failoverAndRetry(w http.ResponseWriter, r *http.Request, router
 			outcome = "no_available" // every eligible provider is avoided; nothing opened
 		case errors.Is(ferr, pool.ErrWalletNeedsFunds):
 			outcome = "wallet_funds"
+		case errors.Is(ferr, pool.ErrStakeLimitExceeded):
+			outcome = "stake_limit_exceeded"
+		case errors.Is(ferr, pool.ErrStakeLimitInvalid):
+			outcome = "stake_limit_invalid"
 		}
 		warnf("api: failover (model %s, session %s): %v", reqModel, pool.ShortID(failedID), ferr)
 		s.auditFailover(reqModel, failedID, fr.FailedProvider, class, outcome)
 		if outcome == "wallet_funds" {
 			writeWalletNeedsFunds(w)
+			return nil, "", nil, errAnswered
+		}
+		if s.writeStakeRefusal(w, modelID, ferr) { // spec §3: the 503, not the provider's error
 			return nil, "", nil, errAnswered
 		}
 		relayRouterError(w, firstErr) // the original status and body
@@ -356,20 +363,18 @@ func (s *Server) writeModelList(w http.ResponseWriter, models []catalog.Model) {
 	}
 	data := make([]map[string]any, 0, len(models))
 	for _, m := range models {
-		bid, _ := m.LowestBid()
+		// Held prices only: no rated, supply or budget read (spec §4 Load).
+		meta := stakePriceFields(s.heldStakePrice(m))
+		meta["name"] = m.Name
+		meta["blockchainId"] = m.ID
+		meta["tags"] = m.Tags
+		meta["modelType"] = m.ModelType
+		meta["sessionDurationSec"] = defaultDur
 		data = append(data, map[string]any{
 			"id":       m.SendableID(nameCount[strings.ToLower(m.Name)] > 1),
 			"object":   "model",
 			"owned_by": "morpheus",
-			"morpheus": map[string]any{
-				"name":               m.Name,
-				"blockchainId":       m.ID,
-				"tags":               m.Tags,
-				"modelType":          m.ModelType,
-				"priceMorPerHour":    m.LowestMorPerHour(),
-				"pricePerSecondWei":  bid.PricePerSecond,
-				"sessionDurationSec": defaultDur,
-			},
+			"morpheus": meta,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

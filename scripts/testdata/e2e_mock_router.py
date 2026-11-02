@@ -260,6 +260,12 @@ class H(BaseHTTPRequestHandler):
                     self.wfile.write(data)
                     return
                 return self._json(200, {"eth": "1000000000000000000", "mor": S["mor"]})
+            # Stake inputs: supply equal to the budget (a bid's stMOR/hr is
+            # its price per second x 3600, far below the default limit).
+            if path == "/blockchain/token/supply" and method == "GET":
+                return self._json(200, {"supply": "1000000000000000000000000"})
+            if path == "/blockchain/sessions/budget" and method == "GET":
+                return self._json(200, {"budget": "1000000000000000000000000"})
             if path == "/wallet":
                 return self._json(200, {"address": os.environ.get("MOCK_WALLET", "0x" + "ab" * 20)})
             if path == "/blockchain/sessions/user":
