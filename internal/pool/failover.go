@@ -319,8 +319,20 @@ func (p *Pool) candidates(modelID, extraAvoid string) (cands, pool []router.Rate
 
 // candidatesFrom filters one rated-bids answer (see candidates).
 func (p *Pool) candidatesFrom(modelID, extraAvoid string, rows []router.RatedBid, rerr error) (cands, pool []router.RatedBid, err error) {
+	return p.filterCandidates(modelID, extraAvoid, rows, rerr, true)
+}
+
+// candidatesFromQuiet is like candidatesFrom but does not log refusals.
+func (p *Pool) candidatesFromQuiet(modelID, extraAvoid string, rows []router.RatedBid, rerr error) (cands, pool []router.RatedBid, err error) {
+	return p.filterCandidates(modelID, extraAvoid, rows, rerr, false)
+}
+
+// filterCandidates is the body of candidatesFrom and candidatesFromQuiet.
+func (p *Pool) filterCandidates(modelID, extraAvoid string, rows []router.RatedBid, rerr error, logRefusals bool) (cands, pool []router.RatedBid, err error) {
 	refuse := func(reason string, retry time.Duration, args ...any) ([]router.RatedBid, []router.RatedBid, error) {
-		slog.Warn("pool: not opening", append([]any{"model", modelID, "reason", reason}, args...)...)
+		if logRefusals {
+			slog.Warn("pool: not opening", append([]any{"model", modelID, "reason", reason}, args...)...)
+		}
 		return nil, nil, &NoAvailableError{RetryAfter: retry}
 	}
 	if rerr != nil {
@@ -329,7 +341,9 @@ func (p *Pool) candidatesFrom(modelID, extraAvoid string, rows []router.RatedBid
 		case errors.As(rerr, &ue):
 			return refuse("router_unreachable", 0)
 		case errors.Is(rerr, router.ErrRatedBidsIncomplete) && len(rows) > 0:
-			slog.Warn("pool: rated bids have unusable rows; using the valid ones", "model", modelID, "valid", len(rows))
+			if logRefusals {
+				slog.Warn("pool: rated bids have unusable rows; using the valid ones", "model", modelID, "valid", len(rows))
+			}
 		default:
 			return refuse("rated_unreadable", 0)
 		}
@@ -346,7 +360,9 @@ func (p *Pool) candidatesFrom(modelID, extraAvoid string, rows []router.RatedBid
 		}
 	}
 	if allExcluded {
-		slog.Warn("pool: not opening", "model", modelID, "reason", "all_excluded", "rated", len(rows))
+		if logRefusals {
+			slog.Warn("pool: not opening", "model", modelID, "reason", "all_excluded", "rated", len(rows))
+		}
 		return nil, nil, ErrNoEligibleProvider
 	}
 	h, herr := p.healthyBids(modelID)
@@ -491,12 +507,33 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 	p := op.p
 	tried := map[string]bool{}
 	attempts := 0
+	skipped := 0
 	var lastErr error
+
+	limit, invalid := p.StakeLimit()
+	if invalid {
+		slog.Warn("pool: not opening", "model", op.model, "reason", "stake_limit_invalid")
+		return openResult{}, ErrStakeLimitInvalid
+	}
+	var in StakeInputs
+	if limit != nil {
+		var err error
+		in, err = op.readStakeInputsInSlot(ctx)
+		if err != nil {
+			return openResult{}, err
+		}
+	}
+
 	for _, b := range alts {
 		if attempts >= MaxBidAttempts {
 			break
 		}
 		if tried[normProv(b.Provider)] {
+			continue
+		}
+		if limit != nil && !withinLimit(b, in, limit) {
+			skipped++
+			slog.Info("pool: bid above the Max stMOR/hr limit; skipped", "model", op.model, "bid", short(b.ID))
 			continue
 		}
 		tried[normProv(b.Provider)] = true
@@ -520,7 +557,7 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 			elapsed := p.now().Sub(postStart)
 			if err == nil {
 				p.dropAttempt(att)
-				p.clearChainWait()
+				p.openSucceeded()
 				return openResult{id: id, provider: b.Provider}, nil
 			}
 			var ex *router.ExistingSessionError
@@ -570,6 +607,11 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 			}
 		}
 	}
+	if skipped > 0 {
+		p.setStakeRefusal()
+		slog.Warn("pool: not opening", "model", op.model, "reason", "stake_limit_exceeded", "skipped", skipped)
+		return openResult{}, ErrStakeLimitExceeded
+	}
 	if lastErr == nil {
 		return openResult{}, fmt.Errorf("open on another provider (none tried): %w", ErrNoAlternate)
 	}
@@ -602,7 +644,7 @@ func (op *openOp) reconcile(ctx context.Context, att *attempt, reason string) (o
 			continue
 		}
 		if got, ok := p.matchOpen(att, open); ok {
-			p.clearChainWait()
+			p.openSucceeded()
 			return got, nil
 		}
 	}

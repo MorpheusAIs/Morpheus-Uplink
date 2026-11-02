@@ -573,7 +573,7 @@ func (p *Pool) applyScan(open []router.Session, scanStart time.Time, mode int) s
 			stake = s.Stake.String()
 		}
 		display = append(display, ChainSession{
-			ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stake,
+			ModelID: s.ModelAgentID, SessionID: s.ID, StakeWei: stake, BidID: s.BidID,
 			EndsAt: time.Unix(s.EndsAt, 0).UTC(), Usable: s.EndsAt > nowUnix+buf, Pooled: pooledNow[s.ID],
 		})
 		if pooledNow[s.ID] {
