@@ -41,6 +41,9 @@ const (
 	reconcileGap        = 2 * time.Second        // between those polls
 	attemptSkew         = 30 * time.Second       // match window slack, both ends
 	attemptKeep         = 13 * time.Minute       // unresolved attempts kept in memory and matched (a router open call's life after Uplink stops waiting)
+	stuckKeep           = time.Hour              // attemptKeep for an attempt whose tx the router reports pending or not mined (it may land late)
+	chainWaitRetryAfter = 30 * time.Second       // Retry-After of the chain_congested and wallet_tx_pending refusals
+	chainWaitShowFor    = 5 * time.Minute        // the last such refusal is shown on the status page this long
 	routerCloseMaxLife  = 10 * time.Minute       // upper bound on a router close call's life after Uplink stops waiting
 	maxPendingAttempts  = 32                     // bound on that list; the oldest is dropped with a warning
 	maxWindowRetries    = 1                      // at most one P* (18 s rule) retry per open operation
@@ -317,9 +320,54 @@ func jittered(d time.Duration) time.Duration {
 
 // Refusal reasons carried by *NoAvailableError.
 const (
-	ReasonRouterTransient = "router_transient" // Retry-After 1–4 s
-	ReasonOpenBusy        = "open_busy"        // no Retry-After
+	ReasonRouterTransient = "router_transient"  // Retry-After 1–4 s
+	ReasonOpenBusy        = "open_busy"         // no Retry-After
+	ReasonChainCongested  = "chain_congested"   // Retry-After 30 s
+	ReasonWalletTxPending = "wallet_tx_pending" // Retry-After 30 s
 )
+
+// chainWaitTexts name a maybe-sent open whose transaction is waiting on
+// the chain (lowercase, matched after openStagePrefix; first match wins).
+var chainWaitTexts = []struct{ text, reason string }{
+	// An earlier tx from the wallet holds the nonce: this open was
+	// refused by the node, but it is still treated as maybe sent.
+	{"replacement transaction underpriced", ReasonWalletTxPending},
+	// The open's own tx was sent and not mined; it may still land.
+	{"transaction not mined after all escalation attempts", ReasonChainCongested},
+	{"transaction could not be confirmed on-chain", ReasonChainCongested},
+}
+
+// chainWaitReason is the refusal reason for a maybe-sent open error that
+// says the chain is congested or the wallet has a pending transaction,
+// else "". Only the router's own error body counts, and only in the open
+// transaction's stage. It never changes the open's class.
+func chainWaitReason(err error) string {
+	if err == nil || isTransportErr(err) {
+		return ""
+	}
+	var se *router.StatusError
+	if !errors.As(err, &se) {
+		return ""
+	}
+	text := routerErrorText(se)
+	if !strings.HasPrefix(text, openStagePrefix) {
+		return ""
+	}
+	rest := text[len(openStagePrefix):]
+	for _, c := range chainWaitTexts {
+		if strings.Contains(rest, c.text) {
+			return c.reason
+		}
+	}
+	return ""
+}
+
+// errChainWait is the chain_congested or wallet_tx_pending refusal. Its
+// Retry-After is the fixed chainWaitRetryAfter: it does not go through
+// clampTransient (that caps at transientCap).
+func errChainWait(reason string) error {
+	return &NoAvailableError{RetryAfter: chainWaitRetryAfter, Reason: reason}
+}
 
 // errTransient is the router_transient refusal. retryIn is clamped to
 // [1 s, transientCap] and always set.

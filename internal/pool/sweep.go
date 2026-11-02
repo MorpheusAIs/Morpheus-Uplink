@@ -36,15 +36,27 @@ type attempt struct {
 	bid   string    // lowercase bid id
 	start time.Time // pool clock, taken before the POST
 	cut   bool      // Uplink stopped waiting on it (a cut open)
+	// stuck: the router reported a wallet tx pending or not mined while
+	// this attempt was unresolved; it is kept and matched for stuckKeep.
+	stuck bool
 }
 
-// matches reports whether an on-chain session can be the result of a.
+// keepFor is how long a is kept and matched after its start (under p.mu).
+func (a *attempt) keepFor() time.Duration {
+	if a.stuck {
+		return stuckKeep
+	}
+	return attemptKeep
+}
+
+// matches reports whether an on-chain session can be the result of a
+// (under p.mu).
 func (a *attempt) matches(s router.Session) bool {
 	if normModel(s.ModelAgentID) != a.model || !strings.EqualFold(strings.TrimSpace(s.BidID), a.bid) {
 		return false
 	}
 	op := time.Unix(s.OpenedAt, 0)
-	return !op.Before(a.start.Add(-attemptSkew)) && !op.After(a.start.Add(attemptKeep+attemptSkew))
+	return !op.Before(a.start.Add(-attemptSkew)) && !op.After(a.start.Add(a.keepFor()+attemptSkew))
 }
 
 // addAttempt records an open POST about to be sent.
@@ -82,7 +94,7 @@ func (p *Pool) resolveAttemptLocked(a *attempt) {
 func (p *Pool) pruneAttemptsLocked(now time.Time) {
 	keep := p.pending[:0]
 	for _, a := range p.pending {
-		if now.Before(a.start.Add(attemptKeep + attemptSkew)) {
+		if now.Before(a.start.Add(a.keepFor() + attemptSkew)) {
 			keep = append(keep, a)
 		}
 	}
@@ -90,6 +102,22 @@ func (p *Pool) pruneAttemptsLocked(now time.Time) {
 		p.pending[i] = nil
 	}
 	p.pending = keep
+}
+
+// markStuck records a chain-wait refusal: wallet_tx_pending marks every
+// pending attempt stuck (one of them holds the wallet's nonce);
+// chain_congested marks only a, the open whose tx was not mined.
+func (p *Pool) markStuck(a *attempt, reason string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch reason {
+	case ReasonWalletTxPending:
+		for _, x := range p.pending {
+			x.stuck = true
+		}
+	case ReasonChainCongested:
+		a.stuck = true
+	}
 }
 
 // matchAttemptLocked is the pending attempt s resolves, if any.

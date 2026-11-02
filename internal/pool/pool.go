@@ -109,9 +109,43 @@ type Pool struct {
 	warnAt       map[string]time.Time
 	warnSkipped  map[string]int
 	walletAddr   string
+	chainWait    ChainWait     // last chain_congested / wallet_tx_pending refusal; zero At: none since the last open
 	scanKick     chan struct{} // buffered 1: run the sweep now
 	providedRPC  atomic.Bool   // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
 	retiredBusy  atomic.Bool   // a retired close found the wallet slot busy
+}
+
+// ChainWait is the last open refused because the chain is congested or
+// the wallet has a pending transaction (status page).
+type ChainWait struct {
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// setChainWait records a chain-wait refusal.
+func (p *Pool) setChainWait(reason string) {
+	p.mu.Lock()
+	p.chainWait = ChainWait{Reason: reason, At: p.now()}
+	p.mu.Unlock()
+}
+
+// clearChainWait forgets it (an open succeeded).
+func (p *Pool) clearChainWait() {
+	p.mu.Lock()
+	p.chainWait = ChainWait{}
+	p.mu.Unlock()
+}
+
+// LastChainWait is the last chain-wait refusal while it is under
+// chainWaitShowFor old and no open has succeeded since; ok false otherwise.
+func (p *Pool) LastChainWait() (ChainWait, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cw := p.chainWait
+	if cw.At.IsZero() || p.now().Sub(cw.At) >= chainWaitShowFor {
+		return ChainWait{}, false
+	}
+	return cw, true
 }
 
 // scanCounts is what the "rehydrated" log line reports.
