@@ -57,8 +57,9 @@ var ErrNoAvailableProvider = errors.New("no provider is available for this model
 // NoAvailableError is the ErrNoAvailableProvider value. RetryAfter is the
 // shortest remaining cool-down of a healthy, not excluded provider, rounded up to whole
 // seconds within 1s..MaxRetryAfter; 0 when none is cooling. Reason is
-// set for the wallet-path refusals: router_transient (RetryAfter 1–4 s)
-// and open_busy (no RetryAfter).
+// set for the wallet-path refusals: router_transient (RetryAfter 1–4 s),
+// chain_congested and wallet_tx_pending (RetryAfter 30 s) and open_busy
+// (no RetryAfter).
 type NoAvailableError struct {
 	RetryAfter time.Duration
 	Reason     string
@@ -519,6 +520,7 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 			elapsed := p.now().Sub(postStart)
 			if err == nil {
 				p.dropAttempt(att)
+				p.clearChainWait()
 				return openResult{id: id, provider: b.Provider}, nil
 			}
 			var ex *router.ExistingSessionError
@@ -560,7 +562,11 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 				if isTransportErr(err) {
 					p.markCut(att)
 				}
-				return op.reconcile(context.WithoutCancel(ctx), att)
+				reason := chainWaitReason(err) // "" unless the chain or the wallet's nonce is the hold-up
+				if reason != "" {
+					p.markStuck(att, reason)
+				}
+				return op.reconcile(context.WithoutCancel(ctx), att, reason)
 			}
 		}
 	}
@@ -573,9 +579,10 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 // reconcile polls the wallet's open sessions (reconcilePolls times,
 // reconcileGap apart, inside the slot hold) for the session att may have
 // opened. A match is the result (extra matches are known duplicates the
-// sweep closes). No match: router_transient; att stays pending, so a
-// later scan adopts the session if it lands.
-func (op *openOp) reconcile(ctx context.Context, att *attempt) (openResult, error) {
+// sweep closes). No match: router_transient, or the chain-wait refusal
+// when reason is set (chain_congested, wallet_tx_pending); att stays
+// pending, so a later scan adopts the session if it lands.
+func (op *openOp) reconcile(ctx context.Context, att *attempt, reason string) (openResult, error) {
 	p := op.p
 	for i := 0; i < reconcilePolls; i++ {
 		if i > 0 {
@@ -595,10 +602,16 @@ func (op *openOp) reconcile(ctx context.Context, att *attempt) (openResult, erro
 			continue
 		}
 		if got, ok := p.matchOpen(att, open); ok {
+			p.clearChainWait()
 			return got, nil
 		}
 	}
 	p.requestSweep()
+	if reason != "" {
+		p.setChainWait(reason)
+		slog.Warn("pool: not opening", "model", op.model, "reason", reason, "stage", "reconcile", "bid", short(att.bid))
+		return openResult{}, errChainWait(reason)
+	}
 	slog.Warn("pool: not opening", "model", op.model, "reason", ReasonRouterTransient, "stage", "reconcile", "bid", short(att.bid))
 	return openResult{}, errTransient(transientCap)
 }

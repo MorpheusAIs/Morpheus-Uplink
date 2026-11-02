@@ -1394,6 +1394,8 @@ const UI_COPY = {
   routerAuthFail: 'Router rejected Uplink\'s credential',
   routerDown: 'Router not responding',
   reconcileHeld: 'Session check retrying',
+  chainCongested: 'Base is congested: opens retry after 30 s',
+  walletTxPending: 'Wallet transaction pending on-chain: opens retry after 30 s',
   diskLow: 'Disk space low',
   openSessions: (n) => n + ' open session' + (n === 1 ? '' : 's'),
   uplinkVer: (v) => 'Uplink ' + v,
@@ -3024,6 +3026,8 @@ function statusHealth(st) {
   if (p && p.kind === 'router_auth') return { ok: false, text: UI_COPY.routerAuthFail };
   if (p) return { ok: false, text: UI_COPY.routerDown };
   if (st && st.sessionReconcile && st.sessionReconcile.opensHeld) return { ok: false, text: UI_COPY.reconcileHeld };
+  if (st && st.chainWait && st.chainWait.reason === 'chain_congested') return { ok: false, text: UI_COPY.chainCongested };
+  if (st && st.chainWait && st.chainWait.reason === 'wallet_tx_pending') return { ok: false, text: UI_COPY.walletTxPending };
   if (st && st.disk && st.disk.warn) return { ok: false, text: UI_COPY.diskLow };
   return { ok: true, text: UI_COPY.healthy };
 }

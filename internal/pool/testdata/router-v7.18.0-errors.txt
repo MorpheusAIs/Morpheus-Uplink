@@ -18,6 +18,12 @@ transient_window	2s	failed to send transaction: open session failed: failed to g
 maybe_sent	25s	failed to send transaction: open session failed: failed to get initial gas prices: 429 Too Many Requests
 maybe_sent	9s	failed to send transaction: parse session receipt failed: failed to wait for confirmations 429 Too Many Requests
 provider_fault	5s	provider healthcheck ping failed: provider request failed: code: 500, msg: <nil>, error: failed to connect to provider: dial tcp <provider>:3333: i/o timeout
+# Chain congestion incident (delayed inclusion, a nonce held by a stuck
+# open tx): still maybe-sent at any time; the refusal reason is
+# chain_congested or wallet_tx_pending (chainWaitReason).
+maybe_sent	1600ms	failed to send transaction: open session failed: failed to send transaction: replacement transaction underpriced
+maybe_sent	48s	failed to send transaction: open session failed: failed to send transaction: replacement transaction underpriced
+maybe_sent	48s	failed to send transaction: open session failed: transaction could not be confirmed on-chain — the network may be congested, try again shortly. Original: transaction not mined after all escalation attempts: last tx <hash>
 provider_fault	1s	provider healthcheck ping failed: provider request failed: code: 500, msg: <nil>, error: failed to connect to provider: dial tcp <provider>:3333: connect: connection refused
 
 # Every marker after every pre-send prefix: transient, whatever the time.

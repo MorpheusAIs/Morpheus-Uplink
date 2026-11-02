@@ -266,8 +266,9 @@ func (s *Server) acquireSession(ctx context.Context, w http.ResponseWriter, keyI
 		return nil, res, false
 	}
 	if errors.Is(err, pool.ErrNoAvailableProvider) {
-		// Every eligible provider is avoided right now: nothing was opened.
-		s.auditProviderUnavailable(modelID, "no_available")
+		// Every eligible provider is avoided right now, or the chain or the
+		// wallet's pending tx holds opens back: nothing new was opened.
+		s.auditProviderUnavailable(modelID, noAvailableOutcome(err))
 		writeNoAvailableProvider(w, err)
 		return nil, res, false
 	}
@@ -309,15 +310,43 @@ func setTimeoutHeaders(w http.ResponseWriter, cl callLimits) {
 // a fixed message (no ids) and, when the pool set one (all_cooling and
 // walk_exhausted: the cool-down; router_transient: 1–4 s), Retry-After in
 // whole seconds. No value (open_busy and the other refusals) → no header;
-// never "0".
+// never "0". The chain_congested and wallet_tx_pending refusals have their
+// own type and message, and retry_after in the body equal to the header.
 func writeNoAvailableProvider(w http.ResponseWriter, err error) {
 	var na *pool.NoAvailableError
+	sec := 0
+	reason := ""
 	if errors.As(err, &na) {
-		if sec := int(na.RetryAfter / time.Second); sec >= 1 {
-			w.Header().Set("Retry-After", strconv.Itoa(sec))
-		}
+		sec = int(na.RetryAfter / time.Second)
+		reason = na.Reason
+	}
+	if sec >= 1 {
+		w.Header().Set("Retry-After", strconv.Itoa(sec))
+	}
+	if msg, ok := chainWaitMessages[reason]; ok && sec >= 1 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{
+			"type": reason, "code": http.StatusServiceUnavailable, "message": msg, "retry_after": sec}})
+		return
 	}
 	writeTypedError(w, http.StatusServiceUnavailable, "no_available_provider", "no provider is available for this model right now; retry later")
+}
+
+// chainWaitMessages are the fixed messages of the chain-wait refusals.
+var chainWaitMessages = map[string]string{
+	pool.ReasonChainCongested:  "The Base network is congested and the session could not be confirmed yet; retry shortly",
+	pool.ReasonWalletTxPending: "The Uplink wallet has a transaction still pending on-chain; retry shortly",
+}
+
+// noAvailableOutcome is the audit outcome of an ErrNoAvailableProvider
+// refusal: the chain-wait reason, else no_available.
+func noAvailableOutcome(err error) string {
+	var na *pool.NoAvailableError
+	if errors.As(err, &na) {
+		if _, ok := chainWaitMessages[na.Reason]; ok {
+			return na.Reason
+		}
+	}
+	return "no_available"
 }
 
 // writeWalletNeedsFunds answers an open the router refused before sending

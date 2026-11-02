@@ -206,6 +206,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status["routerAuth"] = s.routerAuthStatus()
 	status["sessionReconcile"] = s.sessionReconcileStatus()
+	if cw, ok := s.pool.LastChainWait(); ok {
+		status["chainWait"] = cw
+	}
 	if s.catalog != nil {
 		// Gateway feed freshness (read only: never fetches).
 		status["feeds"] = s.catalog.FeedStatus()
