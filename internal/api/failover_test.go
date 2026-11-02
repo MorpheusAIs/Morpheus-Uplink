@@ -163,6 +163,10 @@ type fakeMarket struct {
 	// sessionLookup: "" normal; "fail" session detail answers 500;
 	// "empty" session detail has no provider.
 	sessionLookup string
+	// Stake inputs: supply and budget answers (both 1e24 when unset) and
+	// per-route read counts (rated, supply, budget).
+	supply, budget                       string
+	ratedReads, supplyReads, budgetReads int
 }
 
 func newFakeMarket(t *testing.T, providers ...string) *fakeMarket {
@@ -307,9 +311,24 @@ func (m *fakeMarket) server() *httptest.Server {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": rows})
 	})
+	stakeInput := func(field string, val *string, n *int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			*n++
+			v := *val
+			if v == "" {
+				v = "1000000000000000000000000"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{field: v})
+		}
+	}
+	mux.HandleFunc("GET /blockchain/token/supply", stakeInput("supply", &m.supply, &m.supplyReads))
+	mux.HandleFunc("GET /blockchain/sessions/budget", stakeInput("budget", &m.budget, &m.budgetReads))
 	mux.HandleFunc("GET /blockchain/models/{id}/bids/rated", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		m.ratedReads++
 		if m.bidsFail {
 			http.Error(w, `{"error":"bids unavailable"}`, http.StatusInternalServerError)
 			return
