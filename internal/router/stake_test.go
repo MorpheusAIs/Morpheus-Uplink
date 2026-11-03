@@ -30,6 +30,8 @@ func TestStakeForDurationWeiFormula(t *testing.T) {
 		{"10", "3", "1", 600, "2004"},
 		// 1800 s at a large supply (no float rounding; checked independently)
 		{"10000000000000000000000000", "3000000000000000000000", "123456789", 1800, "741152256630000"},
+		// incident values (spec §5 test 1): 600 s at the 1674.5 stMOR/hr bid
+		{"10167270338201280284144930", "29696281849255652158550", "1358532932157239", 600, "279541915869437820842"},
 	}
 	for _, c := range cases {
 		got, err := StakeForDurationWei(bi(c.supply), bi(c.budget), bi(c.pps), c.d)
@@ -39,6 +41,14 @@ func TestStakeForDurationWeiFormula(t *testing.T) {
 		if got.String() != c.want {
 			t.Fatalf("StakeForDurationWei(%s,%s,%s,%d)=%s want %s", c.supply, c.budget, c.pps, c.d, got, c.want)
 		}
+	}
+	// The same incident inputs give the bid's stMOR/hr price.
+	w, err := StMorPerHourWei(bi("10167270338201280284144930"), bi("29696281849255652158550"), bi("1358532932157239"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.String() != "1674460727337730707207" {
+		t.Fatalf("StMorPerHourWei(incident)=%s want 1674460727337730707207", w)
 	}
 }
 
