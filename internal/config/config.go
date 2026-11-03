@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math/big"
 	"net/url"
 	"os"
 	"regexp"
@@ -103,6 +104,13 @@ type Config struct {
 	IgnoredEnv []string
 	// EnvOnlySet names the env-only settings whose variable is set.
 	EnvOnlySet map[string]bool
+	// MaxStMorPerHour is the maxStMorPerHour setting as stored (default
+	// "150"; "" is off). StakeLimitWei is its parse (nil: off);
+	// StakeLimitInvalid is set when the stored value does not parse.
+	MaxStMorPerHour   string
+	StakeLimitWei     *big.Int
+	StakeLimitInvalid bool
+
 	// SettingNotes are persisted settings ignored at boot (names only).
 	SettingNotes []string
 }

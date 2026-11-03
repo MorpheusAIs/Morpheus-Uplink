@@ -64,7 +64,15 @@ type SettingDef struct {
 	canon    func(string) string   // KindString: canonical form of a valid value
 	get      func(*Config) string  // effective Uplink value
 	set      func(*Config, string) // live and restart rows: default, then saved (restart) at boot
+	// keepInvalid: an invalid saved value is not ignored at boot; it is
+	// kept (set) as is and the row's set marks it invalid (see
+	// ApplyPersisted and maxStMorPerHour).
+	keepInvalid bool
 }
+
+// KeepsInvalid reports whether an invalid saved value is kept (and shown
+// as invalid) rather than replaced by the default.
+func (d SettingDef) KeepsInvalid() bool { return d.keepInvalid }
 
 var logLevels = []string{"debug", "info", "warn", "error"}
 var routerLogLevels = []string{"debug", "info", "warn", "error", "dpanic", "panic", "fatal"}
@@ -104,6 +112,9 @@ var Settings = []SettingDef{
 	{Name: "sessionRelease", Env: "UPLINK_SESSION_RELEASE", Kind: KindBool, Default: "true", Scope: ScopeRestart, Group: "release",
 		Help: "Lets a generated key drop its hold on a model's session with POST /v1/sessions/release (true or false; false answers 403 release_disabled). The session closes when no holder and no request is left; otherwise the idle sweep closes it. Takes effect after an Uplink restart.", Consumer: "api handleSessionRelease (Config.SessionRelease)",
 		get: func(c *Config) string { return btoa(c.SessionRelease) }, set: func(c *Config, v string) { c.SessionRelease = atob(v) }},
+	{Name: "maxStMorPerHour", Kind: KindString, Default: "150", Scope: ScopeRestart, check: checkMorLimit, keepInvalid: true,
+		Help: "Highest price a new session may open at, in stMOR/hr; empty means no limit. Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetStakeLimit",
+		get: func(c *Config) string { return c.MaxStMorPerHour }, set: setMaxStMorPerHour},
 	{Name: "auditRetentionDays", Env: "AUDIT_RETENTION_DAYS", Kind: KindInt, Min: 1, Max: 3650, Default: "90", Scope: ScopeRestart,
 		Help: "Days the high-value audit stream (audit-security.jsonl) is kept (1–3650). Takes effect after an Uplink restart.", Consumer: "api.NewServer openAuditSink",
 		get: func(c *Config) string { return itoa(c.AuditRetentionDays) }, set: func(c *Config, v string) { c.AuditRetentionDays = atoi(v) }},
@@ -246,8 +257,8 @@ func ignoredSettingEnv() []string {
 }
 
 // ApplyPersisted applies persisted ScopeRestart values (by console name).
-// A value that no longer validates is
-// skipped, and so is a persisted value for an env-only or router row
+// A value that no longer validates is skipped (except a keepInvalid row,
+// which is kept and marked invalid), and so is a persisted value for an env-only or router row
 // (never applied from the file); the returned notes (names only) go to the
 // ops audit stream.
 func ApplyPersisted(c *Config, vals map[string]string) []string {
@@ -266,6 +277,12 @@ func ApplyPersisted(c *Config, vals map[string]string) []string {
 			continue
 		}
 		v, err := d.Validate(raw)
+		if err != nil && d.keepInvalid {
+			warnf("config: persisted %s is invalid; kept as invalid", d.Name)
+			notes = append(notes, MaxStMorPerHourInvalidNote)
+			d.set(c, strings.TrimSpace(raw))
+			continue
+		}
 		if err != nil {
 			warnf("config: persisted %s is invalid; ignored", d.Name)
 			notes = append(notes, d.Name+" persisted value invalid; ignored")

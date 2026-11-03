@@ -36,7 +36,7 @@ func TestConsoleSettingEnvIgnoredWithOneWarning(t *testing.T) {
 	clearSettingEnv(t)
 	var names []string
 	for _, d := range Settings {
-		if !d.Settable() {
+		if !d.Settable() || d.Env == "" {
 			continue
 		}
 		v, ok := ignoredEnvValues[d.Name]

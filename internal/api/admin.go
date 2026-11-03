@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/absgrafx/morpheus-uplink/internal/catalog"
 	"github.com/absgrafx/morpheus-uplink/internal/chain"
 	"github.com/absgrafx/morpheus-uplink/internal/keymaker"
 	"github.com/absgrafx/morpheus-uplink/internal/pool"
@@ -164,9 +165,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessions := sessionRows(s.pool.ChainOpen(), s.pool.Snapshot(), time.Now())
+	byID := map[string]catalog.Model{}
+	if models, err := s.catalog.List(); err == nil {
+		for _, m := range models {
+			byID[strings.ToLower(m.ID)] = m
+		}
+	}
 	for i := range sessions {
 		if name := s.catalog.NameByID(sessions[i].ModelID); name != "" {
 			sessions[i].ModelName = name
+		}
+		// The session's own bid at the held supply/budget (spec §4).
+		if m, ok := byID[strings.ToLower(sessions[i].ModelID)]; ok && sessions[i].BidID != "" {
+			sessions[i].StMorPerHourWei = s.sessionStMorPerHourWei(m, sessions[i].BidID)
 		}
 	}
 	status := map[string]any{
@@ -208,6 +219,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status["sessionReconcile"] = s.sessionReconcileStatus()
 	if cw, ok := s.pool.LastChainWait(); ok {
 		status["chainWait"] = cw
+	}
+	status["stakeLimit"] = s.stakeLimitStatus()
+	if sr, ok := s.pool.LastStakeRefusal(); ok {
+		status["stakeRefusal"] = sr
 	}
 	if s.catalog != nil {
 		// Gateway feed freshness (read only: never fetches).
@@ -360,8 +375,10 @@ func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleEstimateStake returns the real on-chain MOR lock for a model + duration:
-// stake ≈ (supply × pricePerSecond × duration) ÷ today's emissions budget.
+// handleEstimateStake returns the on-chain MOR lock for a model + duration:
+// stake ≈ (supply × pricePerSecond × duration) ÷ today's emissions budget,
+// at the bid the next open would try first (spec §4). A polled request
+// (X-Uplink-Poll: 1) reads nothing: held prices and supply/budget only.
 func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 	modelName := r.URL.Query().Get("model")
 	if modelName == "" {
@@ -391,53 +408,63 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	var pps *big.Int
-	var rate float64
+	var model catalog.Model
+	found := false
 	for _, m := range models {
 		if m.ID == modelID || m.Name == modelName {
-			pps = m.LowestPricePerSecondWei()
-			rate = m.LowestMorPerHour()
+			model, found = m, true
 			break
 		}
 	}
-	if pps == nil {
+	if !found {
 		http.Error(w, "no bid price for model", http.StatusNotFound)
 		return
 	}
+	if r.Header.Get("X-Uplink-Poll") != "1" {
+		if _, err := s.pool.ReadStakeInputs(r.Context()); err != nil {
+			http.Error(w, "token supply: "+router.SafeError(err), http.StatusBadGateway)
+			return
+		}
+		s.fillStakePrices(r.Context(), []catalog.Model{model})
+	}
+	p := s.heldStakePrice(model)
+	if p.PPS == nil {
+		http.Error(w, "no bid price for model", http.StatusNotFound)
+		return
+	}
+	out := stakePriceFields(p)
+	held := s.heldStakeFields(p, durationSec)
+	for k, v := range held {
+		out[k] = v
+	}
+	out["model"] = modelName
+	out["modelId"] = modelID
+	out["durationSec"] = durationSec
+	out["minDurationSec"] = 600
+	out["explanation"] = "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget — not MOR/h × hours."
+	writeJSON(w, http.StatusOK, out)
+}
 
-	supply, err := s.router.TokenSupply()
-	if err != nil {
-		http.Error(w, "token supply: "+router.SafeError(err), http.StatusBadGateway)
-		return
+// heldStakeFields are stakeWei, supplyWei and budgetWei at the held
+// supply/budget pair; null before the first read.
+func (s *Server) heldStakeFields(p stakePrice, durationSec int) map[string]any {
+	out := map[string]any{"stakeWei": nil, "supplyWei": nil, "budgetWei": nil}
+	h, ok := s.pool.HeldStakeInputs()
+	if !ok {
+		return out
 	}
-	budget, err := s.router.TodaysBudget()
-	if err != nil {
-		http.Error(w, "todays budget: "+err.Error(), http.StatusBadGateway)
-		return
+	out["supplyWei"], out["budgetWei"] = h.Supply.String(), h.Budget.String()
+	if p.PPS != nil {
+		if stake, err := router.StakeForDurationWei(h.Supply, h.Budget, p.PPS, int64(durationSec)); err == nil {
+			out["stakeWei"] = stake.String()
+		}
 	}
-	stake, err := router.SessionStakeWei(supply, budget, pps, int64(durationSec))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"model":             modelName,
-		"modelId":           modelID,
-		"durationSec":       durationSec,
-		"priceMorPerHour":   rate,
-		"pricePerSecondWei": pps.String(),
-		"stakeWei":          stake.String(),
-		"sessionCostWei":    new(big.Int).Mul(pps, big.NewInt(int64(durationSec))).String(),
-		"supplyWei":         supply.String(),
-		"budgetWei":         budget.String(),
-		"minDurationSec":    600,
-		"explanation":       "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget — not MOR/h × hours.",
-	})
+	return out
 }
 
 // handleEstimateStakes returns on-chain lock estimates for every catalog model
 // at the given duration, plus liquid wallet MOR for affordability checks.
+// A polled request (X-Uplink-Poll: 1) reads no price: held values only.
 func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
 	durationSec := s.durationDefault()
 	if durationSec < 600 {
@@ -461,15 +488,12 @@ func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	supply, err := s.router.TokenSupply()
-	if err != nil {
-		routerErr(w, "token supply", err)
-		return
-	}
-	budget, err := s.router.TodaysBudget()
-	if err != nil {
-		routerErr(w, "todays budget", err)
-		return
+	if r.Header.Get("X-Uplink-Poll") != "1" {
+		if _, err := s.pool.ReadStakeInputs(r.Context()); err != nil {
+			routerErr(w, "token supply", err)
+			return
+		}
+		s.fillStakePrices(r.Context(), models)
 	}
 
 	var liquidWei *big.Int
@@ -479,32 +503,24 @@ func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]map[string]any, 0, len(models))
 	for _, m := range models {
-		pps := m.LowestPricePerSecondWei()
-		if pps == nil {
+		p := s.heldStakePrice(m)
+		if p.PPS == nil {
 			continue
 		}
-		stake, err := router.SessionStakeWei(supply, budget, pps, int64(durationSec))
-		if err != nil {
-			continue
-		}
-		out = append(out, map[string]any{
-			"model":             m.Name,
-			"modelId":           m.ID,
-			"priceMorPerHour":   m.LowestMorPerHour(),
-			"pricePerSecondWei": pps.String(),
-			"stakeWei":          stake.String(),
-		})
+		row := stakePriceFields(p)
+		row["stakeWei"] = s.heldStakeFields(p, durationSec)["stakeWei"]
+		row["model"] = m.Name
+		row["modelId"] = m.ID
+		out = append(out, row)
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"durationSec":    durationSec,
-		"minDurationSec": 600,
-		"liquidWei":      bigStr(liquidWei),
-		"supplyWei":      supply.String(),
-		"budgetWei":      budget.String(),
-		"models":         out,
-		"explanation":    "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget.",
-	})
+	body := s.heldStakeFields(stakePrice{}, durationSec)
+	delete(body, "stakeWei")
+	body["durationSec"] = durationSec
+	body["minDurationSec"] = 600
+	body["liquidWei"] = bigStr(liquidWei)
+	body["models"] = out
+	body["explanation"] = "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget."
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handlePoolCloseOne(w http.ResponseWriter, r *http.Request) {
@@ -594,6 +610,9 @@ type sessionRow struct {
 	Holders     []string   `json:"holders"` // key ids
 	OpenedAt    *time.Time `json:"openedAt,omitempty"`
 	Opener      string     `json:"opener,omitempty"`
+	// StMorPerHourWei: the session's bid price at the held supply/budget;
+	// null when unknown.
+	StMorPerHourWei *string `json:"stMorPerHourWei"`
 }
 
 // sessionRows merges the pool's lease state into the on-chain list by

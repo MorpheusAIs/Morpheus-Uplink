@@ -334,9 +334,9 @@ func TestS4ProviderExcludeModelList(t *testing.T) {
 	type entry struct {
 		ID       string `json:"id"`
 		Morpheus struct {
-			BlockchainID      string  `json:"blockchainId"`
-			PriceMorPerHour   float64 `json:"priceMorPerHour"`
-			PricePerSecondWei string  `json:"pricePerSecondWei"`
+			BlockchainID      string   `json:"blockchainId"`
+			PriceMorPerHour   *float64 `json:"priceMorPerHour"` // gone (spec §4 API)
+			PricePerSecondWei string   `json:"pricePerSecondWei"`
 		} `json:"morpheus"`
 	}
 	check := func(where, body string) {
@@ -348,7 +348,7 @@ func TestS4ProviderExcludeModelList(t *testing.T) {
 		if len(list.Data) != 1 || list.Data[0].Morpheus.BlockchainID != testModelID {
 			t.Fatalf("%s: listed %+v, want only test-model", where, list.Data)
 		}
-		if p := list.Data[0].Morpheus; p.PriceMorPerHour != 1 || p.PricePerSecondWei != "100" {
+		if p := list.Data[0].Morpheus; p.PriceMorPerHour != nil || p.PricePerSecondWei != "100" {
 			t.Fatalf("%s: price %+v, want the bid outside the list", where, p)
 		}
 		if strings.Contains(body, goneID) || strings.Contains(body, a40) {

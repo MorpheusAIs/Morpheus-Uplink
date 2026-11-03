@@ -109,7 +109,12 @@ type Pool struct {
 	warnAt       map[string]time.Time
 	warnSkipped  map[string]int
 	walletAddr   string
-	chainWait    ChainWait     // last chain_congested / wallet_tx_pending refusal; zero At: none since the last open
+	chainWait    ChainWait    // last chain_congested / wallet_tx_pending refusal; zero At: none since the last open
+	stakeRefusal StakeRefusal // last stake_limit_exceeded refusal; zero At: none since the last open
+	stakeLim     atomic.Pointer[stakeLimit]
+	heldInputs   atomic.Pointer[StakeInputs] // display supply/budget pair (never used by an open)
+	ftOnce       sync.Once                   // ftc: FirstTry display cache (first_try_cache.go)
+	ftc          *firstTryCache
 	scanKick     chan struct{} // buffered 1: run the sweep now
 	providedRPC  atomic.Bool   // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
 	retiredBusy  atomic.Bool   // a retired close found the wallet slot busy
@@ -163,6 +168,7 @@ type ChainSession struct {
 	EndsAt    time.Time `json:"endsAt"`
 	Usable    bool      `json:"usable"` // still within endsAt (minus buffer)
 	Pooled    bool      `json:"pooled"` // adopted into the reuse pool
+	BidID     string    `json:"-"`      // the session's bid (display price)
 }
 
 // New builds the session pool. Sessions are always staking-mode (never

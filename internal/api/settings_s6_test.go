@@ -24,7 +24,9 @@ func intp(n int) *int { return &n }
 func s6Config(t *testing.T, env map[string]string) *config.Config {
 	t.Helper()
 	for _, d := range config.Settings {
-		t.Setenv(d.Env, "")
+		if d.Env != "" { // a row added after the env era has no former variable
+			t.Setenv(d.Env, "")
+		}
 	}
 	for _, k := range []string{"UPLINK_DEV_HTTP", "COOKIE_CONTENT"} {
 		t.Setenv(k, "")

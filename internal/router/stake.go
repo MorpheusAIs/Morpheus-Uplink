@@ -1,7 +1,9 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -9,8 +11,13 @@ import (
 
 // TokenSupply returns current MOR total supply (wei) from the router.
 func (c *Client) TokenSupply() (*big.Int, error) {
+	return c.TokenSupplyCtx(context.Background())
+}
+
+// TokenSupplyCtx is TokenSupply bounded by ctx.
+func (c *Client) TokenSupplyCtx(ctx context.Context) (*big.Int, error) {
 	var raw json.RawMessage
-	if err := c.doJSON(http.MethodGet, "/blockchain/token/supply", nil, &raw); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, "/blockchain/token/supply", nil, &raw); err != nil {
 		return nil, err
 	}
 	return parseBigField(raw, "supply")
@@ -18,31 +25,65 @@ func (c *Client) TokenSupply() (*big.Int, error) {
 
 // TodaysBudget returns today's emissions budget (wei) from the router.
 func (c *Client) TodaysBudget() (*big.Int, error) {
+	return c.TodaysBudgetCtx(context.Background())
+}
+
+// TodaysBudgetCtx is TodaysBudget bounded by ctx.
+func (c *Client) TodaysBudgetCtx(ctx context.Context) (*big.Int, error) {
 	var raw json.RawMessage
-	if err := c.doJSON(http.MethodGet, "/blockchain/sessions/budget", nil, &raw); err != nil {
+	if err := c.doJSONCtx(ctx, http.MethodGet, "/blockchain/sessions/budget", nil, &raw); err != nil {
 		return nil, err
 	}
 	return parseBigField(raw, "budget")
 }
 
-// SessionStakeWei is the on-chain MOR pull for a session:
-//
-//	stake ≈ (supply × pricePerSecond × duration) ÷ todaysBudget
-//
-// (same formula as proxy-router computeSessionTokenAmount / EstimateOpenSessionStake).
-func SessionStakeWei(supply, budget, pricePerSecond *big.Int, durationSec int64) (*big.Int, error) {
-	if supply == nil || budget == nil || pricePerSecond == nil {
-		return nil, fmt.Errorf("missing supply, budget, or price")
+// errStakeInputs is the answer of the stake helpers when supply, budget or
+// price per second is missing or not above zero.
+var errStakeInputs = errors.New("supply, budget and price per second must all be above zero")
+
+func stakeInputsOK(supply, budget, pps *big.Int) bool {
+	return supply != nil && budget != nil && pps != nil && supply.Sign() > 0 && budget.Sign() > 0 && pps.Sign() > 0
+}
+
+// ceilDiv is ceil(num / den) for num >= 0 and den > 0.
+func ceilDiv(num, den *big.Int) *big.Int {
+	q, m := new(big.Int).QuoRem(num, den, new(big.Int))
+	if m.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
 	}
-	if budget.Sign() == 0 {
-		return nil, fmt.Errorf("zero emissions budget")
+	return q
+}
+
+// StMorPerHourWei is a bid's price as the MOR a session locks per hour of
+// session (stMOR/hr, in wei): ceil(supply × pricePerSecond × 3600 ÷ budget).
+// Integer math; an error unless supply, budget and pps are all above zero.
+func StMorPerHourWei(supply, budget, pps *big.Int) (*big.Int, error) {
+	if !stakeInputsOK(supply, budget, pps) {
+		return nil, errStakeInputs
+	}
+	num := new(big.Int).Mul(supply, pps)
+	num.Mul(num, big.NewInt(3600))
+	return ceilDiv(num, budget), nil
+}
+
+// StakeForDurationWei is the MOR an open of durationSec seconds locks:
+//
+//	ceil(supply × pricePerSecond × (durationSec + 1) ÷ budget)
+//
+// This is the router's formula (proxy-router computeSessionTokenAmount:
+// one second of duration headroom, rounded up); keep the two in step.
+// Integer math; an error unless supply, budget, pps and durationSec are all
+// above zero.
+func StakeForDurationWei(supply, budget, pps *big.Int, durationSec int64) (*big.Int, error) {
+	if !stakeInputsOK(supply, budget, pps) {
+		return nil, errStakeInputs
 	}
 	if durationSec <= 0 {
 		return nil, fmt.Errorf("invalid duration")
 	}
-	cost := new(big.Int).Mul(pricePerSecond, big.NewInt(durationSec))
-	num := new(big.Int).Mul(supply, cost)
-	return new(big.Int).Div(num, budget), nil
+	num := new(big.Int).Mul(supply, pps)
+	num.Mul(num, big.NewInt(durationSec+1))
+	return ceilDiv(num, budget), nil
 }
 
 func parseBigField(raw json.RawMessage, key string) (*big.Int, error) {

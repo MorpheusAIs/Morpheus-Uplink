@@ -12,7 +12,9 @@ import (
 func clearSettingEnv(t *testing.T) {
 	t.Helper()
 	for _, d := range Settings {
-		t.Setenv(d.Env, "")
+		if d.Env != "" { // a row added after the env era has no former variable
+			t.Setenv(d.Env, "")
+		}
 	}
 	for _, k := range []string{"UPLINK_DEV_HTTP", "COOKIE_CONTENT", "DATA_DIR"} {
 		t.Setenv(k, "")
@@ -53,6 +55,7 @@ func TestSettingsRegistryTable(t *testing.T) {
 		{"providerCooldown", "UPLINK_PROVIDER_COOLDOWN_SECONDS", KindInt, "600", 0, 86400, ScopeRestart, ""},
 		{"providerExclude", "UPLINK_PROVIDER_EXCLUDE", KindString, "", 0, 0, ScopeRestart, ""},
 		{"sessionRelease", "UPLINK_SESSION_RELEASE", KindBool, "true", 0, 0, ScopeRestart, "release"},
+		{"maxStMorPerHour", "", KindString, "150", 0, 0, ScopeRestart, ""},
 		{"auditRetentionDays", "AUDIT_RETENTION_DAYS", KindInt, "90", 1, 3650, ScopeRestart, ""},
 		{"housekeeping", "HOUSEKEEPING", KindBool, "true", 0, 0, ScopeRestart, ""},
 		{"activeModelsUrl", "ACTIVE_MODELS_URL", KindString, "https://active.mor.org/gateway_models.json", 0, 0, ScopeEnvOnly, ""},

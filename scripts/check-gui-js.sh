@@ -244,17 +244,18 @@ let clip = [];
 Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { clip.push(t); } } }, configurable: true, writable: true });
 eval([
   constBlock('UI_COPY'),
-  'let allModels = []; let modelStakes = {}; let modelStakesDurationSec = 600; let defaultSessionDuration = 600; const MIN_SESSION_DURATION = 600; let selectedModel = "";',
+  'let allModels = []; let modelStakes = {}; let connectStakes = {}; let modelStakesDurationSec = 600; let defaultSessionDuration = 600; const MIN_SESSION_DURATION = 600; let selectedModel = "";',
+  'let lastStatusSnapshot = null;',
   'let stakeEstimateError = null; let catalogState = { state: "ok" }; let authed = true;',
   'const RECOVERY_HINT_KEY = "uplink.2fa.recoveryLeft"; let loginPassword = ""; let recoveryMode = false;',
   'function flashIconCopied() {} function probeDurationSec() { return 600; }',
   ...['escapeHtml', 'escapeAttr', 'tipHTML', 'setTip', 'fmtMor', 'fmtUnlockLocal', 'weiIsPositive', 'morTileHTML', 'renderMorTiles',
       'routerProblem', 'renderMasterKeyBanner', 'statusHealth', 'fmtFeedAge', 'renderFeedStatus', 'renderSysLine',
-      'modelBySendableId', 'stakeKeyFor', 'stakeRecord', 'modelTitle', 'connectDefaultDurationSec', 'connectStakeMor', 'fmtMorRate', 'fmtDuration',
+      'modelBySendableId', 'stakeKeyFor', 'stakeRecord', 'modelTitle', 'connectDefaultDurationSec', 'overStakeLimit', 'currentStakeLimit', 'fmtStMor', 'stakeLabel', 'fmtMorRate', 'fmtDuration',
       'connectModelOptionLabel', 'populateConnectModels', 'copyConnectModel', 'recoveryHint', 'setLoginStep', 'setRecoveryMode'].map(extract),
   'const FEED_STALE_SEC = 1800;',
   'global.T = { UI_COPY, renderMorTiles, fmtUnlockLocal, statusHealth, renderSysLine, renderMasterKeyBanner,',
-  '  populateConnectModels, copyConnectModel, setLoginStep, setModels(m, st) { allModels = m; modelStakes = st || {}; } };',
+  '  populateConnectModels, copyConnectModel, setLoginStep, setModels(m, st) { allModels = m; modelStakes = st || {}; connectStakes = modelStakes; } };',
 ].join('\n'));
 const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
 (async () => {
@@ -391,14 +392,16 @@ const MOR = (n) => String(BigInt(Math.round(n * 1e4)) * 10n ** 14n);
   if (/<|>/.test(els.stats.textContent)) fail('markup reached the status line');
   if (/id="feedStatus"|feedsLabel|Data feeds/.test(html)) fail('old Data feeds line still present');
 
-  // Model dropdown: name + lock, no hash; copy copies the full ID.
+  // Model dropdown: name + stMOR/hr and lock, no hash; copy copies the full ID.
   const ID = '0x' + 'ab'.repeat(32);
-  T.setModels([{ id: ID, name: 'glm-5.2', blockchainId: ID }, { id: 'x2', name: 'glm-5.2' }], { [ID]: { stakeMor: 0.36 } });
+  T.setModels([{ id: ID, name: 'glm-5.2', blockchainId: ID }, { id: 'x2', name: 'glm-5.2' }],
+    { [ID]: { stakeMor: 0.36, stakeWei: '360000000000000000', stMorPerHour: 2.16, stMorPerHourWei: '2160000000000000000', priceSource: 'firstTry' } });
   els.connectModelSelect = { value: '', innerHTML: '' };
   T.populateConnectModels();
   const opts = els.connectModelSelect.innerHTML;
   if (opts.replace(/value="[^"]*"/g, '').includes('0x')) fail('model option shows the ID/hash: ' + opts);
   if (!opts.includes('glm-5.2 (2)')) fail('duplicate names need a plain suffix: ' + opts);
+  if (!opts.includes('2.16 stMOR/hr · ~0.3600 MOR')) fail('model option needs "X stMOR/hr · ~Y MOR": ' + opts);
   els.connectModelSelect.value = ID;
   await T.copyConnectModel();
   if (clip[clip.length - 1] !== ID) fail('copy must copy the full model ID, got ' + clip[clip.length - 1]);
@@ -821,26 +824,28 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 const head = /<table id="sessTable">\s*<thead><tr>(.*?)<\/tr><\/thead>/s.exec(html);
 if (!head) fail('sessTable header not found');
 const cols = [...head[1].matchAll(/<th>(.*?)<\/th>/g)].map((m) => m[1]);
-const want = ['Model', 'Session', 'Stake', 'Opened', 'Ends', 'In flight', 'Holders', 'Status', ''];
+const want = ['Model', 'Session', 'Stake', 'stMOR/hr', 'Opened', 'Ends', 'In flight', 'Holders', 'Status', ''];
 if (JSON.stringify(cols) !== JSON.stringify(want)) fail('Sessions columns: ' + JSON.stringify(cols));
 const body = { innerHTML: '' };
 global.document = { querySelector: () => body };
 global.escapeHtml = (s) => String(s); global.escapeAttr = (s) => String(s);
-global.shortSecret = (s) => String(s).slice(0, 6); global.fmtMor = () => '1 MOR';
+global.shortSecret = (s) => String(s).slice(0, 6); global.fmtMor = (w) => (w === '7' ? '7 wei' : '1 MOR');
 global.fmtEnds = (iso) => (iso ? 'T:' + iso : '—');
 eval(extract('renderSessions') + '\nglobal.renderSessions = renderSessions;');
-renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', openedAt: 'o1', endsAt: 'e1', pooled: true, usable: true, inFlight: 3, holderCount: 2, holders: ['k1', 'k2'], long: true }], '');
+renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', stMorPerHourWei: '7', openedAt: 'o1', endsAt: 'e1', pooled: true, usable: true, inFlight: 3, holderCount: 2, holders: ['k1', 'k2'], long: true }], '');
 const cells = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim());
-if (cells.length !== 9) fail('row has ' + cells.length + ' cells');
-if (cells[3] !== 'T:o1' || cells[4] !== 'T:e1' || cells[5] !== '3' || cells[6] !== '2' || cells[7] !== 'reused') fail('cells ' + JSON.stringify(cells));
+if (cells.length !== 10) fail('row has ' + cells.length + ' cells');
+if (cells[3] !== '7 wei' || cells[4] !== 'T:o1' || cells[5] !== 'T:e1' || cells[6] !== '3' || cells[7] !== '2' || cells[8] !== 'reused') fail('cells ' + JSON.stringify(cells));
 if (!body.innerHTML.includes('title="k1, k2"')) fail('holders tooltip');
+renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', stMorPerHourWei: null, endsAt: 'e1', holders: [] }], '');
+if ([...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim())[3] !== '—') fail('unknown session price must show —');
 renderSessions([], '');
-if (!body.innerHTML.includes('colspan=9')) fail('empty row must span 9 columns');
+if (!body.innerHTML.includes('colspan=10')) fail('empty row must span 10 columns');
 if (/\blong\b/i.test(extract('renderSessions')) || body.innerHTML.includes('long')) fail('the Sessions table must not show a long flag');
 if (/poolSessions/.test(src)) fail('the GUI must not read poolSessions');
 // A pooled row is "reused" only while usable; past its end it says so.
 renderSessions([{ modelId: '0xm1', sessionId: '0xs1', stakeWei: '1', endsAt: 'e1', pooled: true, usable: false, holders: [] }], '');
-const st2 = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim())[7];
+const st2 = [...body.innerHTML.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim())[8];
 if (st2 !== 'past end') fail('pooled but not usable must not say reused: ' + st2);
 // The header counts only real rows (an id and a set end time).
 eval(extract('sessionIsReal') + '\nglobal.sessionIsReal = sessionIsReal;');
@@ -848,5 +853,258 @@ const rows = [{ sessionId: '0xa', endsAt: '2026-10-28T12:00:00Z' }, { sessionId:
   { sessionId: '0xb' }, { endsAt: '2026-10-28T12:00:00Z' }, { sessionId: '0xc', endsAt: 'nonsense' }];
 if (rows.filter(sessionIsReal).length !== 1) fail('header must count only real rows: ' + rows.filter(sessionIsReal).length);
 if (!/\(st\.sessions \|\| \[\]\)\.filter\(sessionIsReal\)\.length/.test(src)) fail('the header count must use sessionIsReal');
-console.log('OK: Sessions table shows opened, ends, in flight and holders per session (no long flag); reused only while usable; header counts real rows');
+console.log('OK: Sessions table shows stMOR/hr, opened, ends, in flight and holders per session (no long flag); reused only while usable; header counts real rows');
+NODE
+# A. Test 11 marker parity & stakeLabel
+node - "$OUT" "$HTML" "$ROOT/internal/pool/testdata/stake_marker_vectors.json" <<'NODE'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const html = fs.readFileSync(process.argv[3], 'utf8');
+const vectors = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+function extract(name) {
+  const m = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{').exec(src);
+  if (!m) throw new Error('missing function ' + name);
+  let i = m.index + m[0].length, d = 1;
+  while (i < src.length && d > 0) { const c = src[i++]; if (c === '{') d++; else if (c === '}') d--; }
+  return src.slice(m.index, i);
+}
+function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+
+(async () => {
+
+// A. overStakeLimit
+global.BigInt = BigInt;
+eval(extract('overStakeLimit') + '\nglobal.overStakeLimit = overStakeLimit;');
+for (const v of vectors) {
+  const result = global.overStakeLimit(v.limit, v.w);
+  if (result !== v.over) fail(`overStakeLimit(${JSON.stringify(v.limit)}, ${JSON.stringify(v.w)}) expected ${v.over} got ${result}`);
+}
+if (global.overStakeLimit('1', null) !== false) fail('overStakeLimit("1", null) should be false');
+
+// stakeLabel
+eval(extract('currentStakeLimit') + '\nglobal.currentStakeLimit = currentStakeLimit;');
+eval(extract('fmtStMor') + '\nglobal.fmtStMor = fmtStMor;');
+eval(extract('fmtMorRate') + '\nglobal.fmtMorRate = fmtMorRate;');
+eval(extract('stakeLabel') + '\nglobal.stakeLabel = stakeLabel;');
+
+global.authed = true;
+global.lastStatusSnapshot = {stakeLimit: {maxStMorPerHourWei: '150000000000000000000', invalid: false}};
+
+let label = global.stakeLabel({stakeMor: 25.1, stMorPerHour: 150, stMorPerHourWei: '150000000000000000000', priceSource: 'firstTry'});
+if (label.includes('over limit')) fail('label should not have over limit for firstTry');
+if (label !== '150.0 stMOR/hr · ~25.10 MOR') fail(`label mismatch: ${label}`);
+
+label = global.stakeLabel({stakeMor: 25.1, stMorPerHour: 150, stMorPerHourWei: '150000000000000000001', priceSource: 'est.'});
+if (!label.endsWith(' est. · over limit')) fail(`label should end with est. · over limit: ${label}`);
+
+global.lastStatusSnapshot.stakeLimit.maxStMorPerHourWei = null;
+label = global.stakeLabel({stakeMor: 25.1, stMorPerHour: 150, stMorPerHourWei: '150000000000000000001', priceSource: 'est.'});
+if (label.includes('over limit')) fail('no limit should not show over limit');
+
+label = global.stakeLabel({stMorPerHourWei: null});
+if (label !== '—') fail('null stMorPerHourWei should give —');
+
+global.authed = false;
+label = global.stakeLabel({stMorPerHour: 150, stMorPerHourWei: '150000000000000000000'});
+if (label !== '—') fail('not authed should give —');
+
+// B. 10s tick
+global.setInterval = (fn) => { global.tick = fn; };
+global.loggedIn = () => true;
+global.document = { hidden: false };
+const calls = [];
+global.refresh = (o) => calls.push(o);
+const tickStart = src.indexOf('setInterval(() => {');
+const tickEnd = src.indexOf('}, 10000);', tickStart) + '}, 10000);'.length;
+const tickCode = src.slice(tickStart, tickEnd);
+eval(tickCode);
+for (const tab of ['playground', 'keys', 'settings']) {
+  global.activeTab = tab;
+  calls.length = 0;
+  global.tick();
+  if (calls.length === 0) fail(`no call for tab ${tab}`);
+  if (!calls.at(-1).poll) fail(`poll should be true for ${tab}`);
+  if (calls.at(-1).force !== false) fail(`force should be false for ${tab}`);
+}
+for (const tab of ['status', 'activity']) {
+  global.activeTab = tab;
+  calls.length = 0;
+  global.tick();
+  if (!calls.at(-1).poll) fail(`poll should be true for ${tab}`);
+  if (calls.at(-1).force !== true) fail(`force should be true for ${tab}`);
+}
+
+// C. refresh()
+eval(extract('refresh') + '\nglobal.refresh = refresh;');
+global.loggedIn = () => true;
+global.lastRefreshAt = 0;
+global.refreshInFlight = null;
+const doCalls = [];
+let resolveDo;
+global.doRefresh = (o) => { doCalls.push(o); return new Promise(r => { resolveDo = r; }); };
+const p1 = global.refresh({force: true, poll: true});
+for (let i = 0; i < 30; i++) {
+  const r = global.refresh({force: true, poll: true});
+  if (r !== p1) fail('refresh should return same promise when in flight');
+  const r2 = global.refresh({poll: true});
+  if (r2 !== p1) fail('poll refresh should return same promise');
+}
+if (doCalls.length !== 1) fail(`expected 1 doRefresh call, got ${doCalls.length}`);
+if (!doCalls[0].poll) fail('first doRefresh should have poll=true');
+global.refresh({force: true});
+resolveDo();
+await new Promise(r => setTimeout(r, 0));
+await new Promise(r => setTimeout(r, 0));
+if (doCalls.length !== 2) fail(`expected 2 doRefresh calls after resolve, got ${doCalls.length}`);
+if (doCalls[1].poll) fail('second doRefresh should have poll falsy');
+
+// D. doRefresh
+eval(extract('doRefresh') + '\nglobal.doRefresh = doRefresh;');
+global.api = async (path, o) => {
+  if (path === '/admin/status') {
+    global.apiStatusOpts = global.apiStatusOpts || [];
+    global.apiStatusOpts.push(o);
+    return { sessionDurationSec: 600, sessions: [] };
+  }
+  return { usage: [] };
+};
+global.setHeaderBalances = () => {};
+global.checkForUpdate = () => {};
+global.renderSysLine = () => {};
+global.statusHealth = () => ({});
+global.renderMasterKeyBanner = () => {};
+global.renderDiskStatus = () => {};
+global.renderMorTiles = () => {};
+global.shortSecret = s => s;
+global.renderRouterBanner = () => {};
+global.renderOriginWarn = () => {};
+global.renderSessionLengths = () => {};
+global.renderSessionReconcile = () => {};
+global.renderSessions = () => {};
+global.refreshKeys = async () => {};
+global.applyUsageView = () => {};
+global.fmtDuration = s => String(s);
+global.sessionIsReal = () => true;
+global.refreshModelStakes = (o) => { global.rms = global.rms || []; global.rms.push(o); };
+global.loadModels = (o) => { global.lm = global.lm || []; global.lm.push(o); return Promise.resolve(); };
+global.document.getElementById = () => ({ dataset: {}, textContent: '', innerHTML: '', value: '' });
+global.lastStatusSnapshot = null;
+global.defaultSessionDuration = 600;
+global.liquidWei = '0';
+global.secrets = {};
+global.lastClaimableWei = '0';
+global.reclaimReady = false;
+global.lastRawSessionIds = new Set();
+global.pendingClosed = new Set();
+global.rawUsageRows = [];
+global.allModels = [];
+global.apiStatusOpts = [];
+global.rms = [];
+global.lm = [];
+
+await global.doRefresh({poll: true});
+if (global.rms.at(-1).poll !== true) fail('refreshModelStakes should receive poll=true');
+if (global.lm.at(-1).poll !== true) fail('loadModels should receive poll=true');
+if (global.apiStatusOpts.at(-1).poll !== true) fail('api status should have poll=true');
+
+await global.doRefresh({});
+if (global.rms.at(-1).poll) fail('refreshModelStakes should receive poll falsy');
+if (global.lm.at(-1).poll) fail('loadModels should receive poll falsy');
+if (global.apiStatusOpts.at(-1).poll !== true) fail('api status should always have poll=true');
+
+// E. refreshModelStakes
+eval(extract('stakeRows') + '\nglobal.stakeRows = stakeRows;');
+eval(extract('fetchStakes') + '\nglobal.fetchStakes = fetchStakes;');
+eval(extract('refreshModelStakes') + '\nglobal.refreshModelStakes = refreshModelStakes;');
+global.authed = true;
+let pending;
+global.setTimeout = (fn) => { pending = fn; return 1; };
+global.clearTimeout = () => { pending = null; };
+global.lockPreviewTimer = 0;
+global.stakesSeq = 0;
+global.stakesPendingPoll = false;
+global.MIN_SESSION_DURATION = 600;
+global.probeDurationSec = () => 600;
+global.connectDefaultDurationSec = () => 600;
+global.document.getElementById = () => ({ value: '600' });
+global.filterModels = () => {};
+global.populateConnectModels = () => {};
+global.weiToMorNum = (w) => Number(w) / 1e18;
+global.showLogin = () => {};
+global.modelStakes = {};
+global.connectStakes = {};
+global.modelStakesDurationSec = 0;
+global.stakeEstimateError = null;
+global.liquidWei = '0';
+const fetches = [];
+global.fetch = async (url, o) => {
+  fetches.push({ url, poll: !!(o && o.headers && o.headers['X-Uplink-Poll'] === '1') });
+  return { ok: true, status: 200, json: async () => ({ durationSec: 600, models: [{ modelId: 'm1', stakeWei: '1000000000000000000', stMorPerHour: 2, stMorPerHourWei: '2000000000000000000', priceSource: 'est.' }] }) };
+};
+
+// (1)
+global.refreshModelStakes({poll: true});
+await pending();
+if (!fetches.at(-1).poll) fail('poll should be true');
+if (global.modelStakes.m1.stMorPerHourWei !== '2000000000000000000') fail('stMorPerHourWei mismatch');
+if (global.connectStakes !== global.modelStakes) fail('connectStakes should equal modelStakes');
+
+// (2)
+fetches.length = 0;
+global.refreshModelStakes({});
+global.refreshModelStakes({poll: true});
+await pending();
+if (fetches.at(-1).poll) fail('last fetch should have poll false after debounce');
+
+// (3)
+fetches.length = 0;
+global.refreshModelStakes({poll: true});
+global.refreshModelStakes({poll: true});
+await pending();
+if (!fetches.at(-1).poll) fail('poll should be true');
+
+// (4)
+global.connectDefaultDurationSec = () => 1800;
+global.probeDurationSec = () => 600;
+fetches.length = 0;
+global.refreshModelStakes({poll: true});
+await pending();
+if (fetches.length !== 2) fail(`expected 2 fetches, got ${fetches.length}`);
+if (!fetches[0].poll || !fetches[1].poll) fail('both fetches should have poll true');
+if (!fetches[1].url.endsWith('duration=1800')) fail('second fetch should be for connect duration');
+
+// F. loadModels
+eval(extract('loadModels') + '\nglobal.loadModels = loadModels;');
+global.authed = true;
+global.document.getElementById = () => ({ innerHTML: '' });
+global.populateConnectModels = () => {};
+global.filterModels = () => {};
+global.catalogState = {};
+global.showLogin = () => {};
+global.escapeHtml = s => s;
+global.fetch = async (url, o) => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ data: [{ id: 'a', morpheus: { name: 'a', pricePerSecondWei: '1', stMorPerHourWei: '1' } }] })
+});
+const rms2 = [];
+// The eval above declared refreshModelStakes in this scope; replace both.
+global.refreshModelStakes = refreshModelStakes = (o) => { rms2.push(o); };
+
+await global.loadModels({poll: true});
+if (rms2.at(-1).poll !== true) fail('loadModels should pass poll=true');
+
+await global.loadModels({});
+if (rms2.at(-1).poll) fail('loadModels without poll should pass falsy');
+
+if (global.allModels[0].priceMorPerHour !== undefined) fail('allModels[0] should not have priceMorPerHour');
+
+// G. Source checks
+if (src.includes('priceMorPerHour')) fail('GUI script contains priceMorPerHour');
+if (src.includes('sessionCostWei')) fail('GUI script contains sessionCostWei');
+if (src.includes('connectStakeMor')) fail('GUI script contains connectStakeMor');
+
+console.log('OK: Max stMOR/hr GUI: marker parity with the server vectors, labels, poll flag from every 10 s tick through refresh, doRefresh, refreshModelStakes and loadModels, no queued poll refresh, no GUI price math');
+
+})().catch((e) => fail(e.stack || String(e)));
 NODE

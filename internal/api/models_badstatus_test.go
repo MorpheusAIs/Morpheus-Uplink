@@ -47,9 +47,9 @@ func TestModelsPriceIgnoresNonStringStatusRow(t *testing.T) {
 			var list struct {
 				Data []struct {
 					Morpheus struct {
-						BlockchainID      string  `json:"blockchainId"`
-						PriceMorPerHour   float64 `json:"priceMorPerHour"`
-						PricePerSecondWei string  `json:"pricePerSecondWei"`
+						BlockchainID      string   `json:"blockchainId"`
+						PriceMorPerHour   *float64 `json:"priceMorPerHour"` // gone (spec §4 API)
+						PricePerSecondWei string   `json:"pricePerSecondWei"`
 					} `json:"morpheus"`
 				}
 			}
@@ -59,8 +59,8 @@ func TestModelsPriceIgnoresNonStringStatusRow(t *testing.T) {
 			if len(list.Data) != 1 || list.Data[0].Morpheus.BlockchainID != testModelID {
 				t.Fatalf("listed %s", raw)
 			}
-			if p := list.Data[0].Morpheus; p.PriceMorPerHour != 1 || p.PricePerSecondWei != "100" {
-				t.Fatalf("price %+v, want 1 MOR/h and 100 wei/s (the bad row ignored)", p)
+			if p := list.Data[0].Morpheus; p.PriceMorPerHour != nil || p.PricePerSecondWei != "100" {
+				t.Fatalf("price %+v, want 100 wei/s (the bad row ignored)", p)
 			}
 		})
 	}

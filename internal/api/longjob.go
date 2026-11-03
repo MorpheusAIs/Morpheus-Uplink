@@ -260,6 +260,9 @@ func (s *Server) acquireSession(ctx context.Context, w http.ResponseWriter, keyI
 		}
 		return nil, res, false
 	}
+	if s.writeStakeRefusal(w, modelID, err) {
+		return nil, res, false
+	}
 	if errors.Is(err, pool.ErrNoEligibleProvider) {
 		// Only providers excluded by the providerExclude setting serve the model.
 		writeTypedError(w, http.StatusServiceUnavailable, "no_eligible_provider", "no eligible provider for this model")

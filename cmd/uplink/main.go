@@ -65,6 +65,8 @@ func main() {
 	// Opens use only rated bids the gateway health feeds mark healthy.
 	pl.SetHealthyBids(cat.HealthyBidIDs)
 	pl.SetDurationMax(cfg.SessionDurationMax)
+	// Max stMOR/hr (boot value; an invalid saved value refuses every open).
+	pl.SetStakeLimit(cfg.StakeLimitWei, cfg.StakeLimitInvalid)
 	// Presence only: whether the operator set the router's chain RPC.
 	pl.SetProvidedRPC(strings.TrimSpace(cfg.EthRPCURL) != "")
 	slog.Info("pool: router chain RPC", "provided", pl.ProvidedRPC())
@@ -152,6 +154,9 @@ func main() {
 	// an unresolved open, it scans the wallet's sessions, adopts or closes
 	// the unheld ones (one close per wallet-slot hold).
 	go pl.RunSweep(hkCtx)
+
+	// Supply/budget pair for prices on display (opens read their own).
+	go pl.RunStakeInputsBoot(hkCtx)
 
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
