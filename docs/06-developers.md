@@ -401,7 +401,7 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 Tests: `scripts/check-no-direct-payment.sh`, `scripts/check-compose-policy.sh`,
 the mock-router e2e `scripts/e2e-mock-router.sh` (session logic) and the
-real-router smoke `scripts/e2e-real-router.sh` (pinned v7.18.0 image).
+real-router smoke `scripts/e2e-real-router.sh` (pinned v7.19.0 image).
 
 ### Sessions across restarts
 

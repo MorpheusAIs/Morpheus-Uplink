@@ -95,7 +95,7 @@ There is no separate docs host or MCP for Uplink.
    (`deploy/railway/`, reference asset `docker-compose.railway.deployed.yml`).
    Every image in the assets is digest-pinned. Prefer
    [MorpheusAIs releases/latest](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)
-   over forks. Proxy-router (Lumerin) is **pinned to v7.18.0 by digest**
+   over forks. Proxy-router (Lumerin) is **pinned to v7.19.0 by digest**
    (Lumerin `main`, includes #889 gateway caps — **not** Base
    testnet; chain defaults remain mainnet) — never advise `:latest`. Railway: secrets in Railway Secrets only;
    single-replica proxy-router.
@@ -385,7 +385,7 @@ as the catalog. Defaults:
 | `ACTIVE_MODELS_URL` | `https://active.mor.org/gateway_models.json` |
 | `GATEWAY_BIDS_URL` | `https://active.mor.org/gateway_bids.json` |
 
-Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.18.0**
+Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/MorpheusAIs/Morpheus-Uplink/releases/latest)). Release compose **digest-pins Uplink and proxy-router (Lumerin) v7.19.0**
 (Lumerin `main` / #889 caps — **not** Base testnet) — not
 `:latest`. More clients: [docs/04-clients.md](docs/04-clients.md).
 
@@ -402,7 +402,7 @@ Images: `ghcr.io/morpheusais/uplink` ([latest release](https://github.com/Morphe
   Generated (ephemeral) keys and local usage history do not — export them if
   you care. Sessions and stake live on-chain with the wallet.
 - **Deploy from release assets**, not a git checkout. Every image in them is
-  digest-pinned, Uplink and **proxy-router v7.18.0** included (not `:latest`).
+  digest-pinned, Uplink and **proxy-router v7.19.0** included (not `:latest`).
 - **Gateway catalog only:** `ACTIVE_MODELS_URL` →
   `https://active.mor.org/gateway_models.json`, `GATEWAY_BIDS_URL` →
   `https://active.mor.org/gateway_bids.json`. Never default to
@@ -540,7 +540,7 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.18.0**). Pick the skin that matches your host:
+proxy-router **v7.19.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
@@ -548,11 +548,11 @@ proxy-router **v7.18.0**). Pick the skin that matches your host:
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 | **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `docker-compose.railway.deployed.yml` + `env.railway.example` (reference; Railway does not run compose) + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.19.0@sha256:d2ab8b2c7568f51db1569ff03176c6ce0bef5037c783e97f02b031a0290c9ddf` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
 
-**Pin note:** tag `v7.18.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.19.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
-**CA bundle note:** the proxy-router `v7.18.0` image ships the same CA bundle as the previously pinned router (byte-identical, 145 roots). Compared with older router images it removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS. The default endpoints in the compose files were re-checked against the `v7.18.0` bundle on 2026-10-29.
+**CA bundle note:** the proxy-router `v7.19.0` image ships the same CA bundle as the previously pinned router (byte-identical, 145 roots). Compared with older router images it removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS. The default endpoints in the compose files were re-checked against this bundle on 2026-10-29 (then shipped in `v7.18.0`).
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 
@@ -1761,7 +1761,7 @@ Never document these as Uplink knobs or put them in `uplink_bake_env`:
 
 Tests: `scripts/check-no-direct-payment.sh`, `scripts/check-compose-policy.sh`,
 the mock-router e2e `scripts/e2e-mock-router.sh` (session logic) and the
-real-router smoke `scripts/e2e-real-router.sh` (pinned v7.18.0 image).
+real-router smoke `scripts/e2e-real-router.sh` (pinned v7.19.0 image).
 
 ### Sessions across restarts
 
@@ -2476,7 +2476,7 @@ unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.18.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.19.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup or send journal/lease headers.
 Rely on native router expiry + Uplink housekeeping. Sessions can stay locked
@@ -2588,7 +2588,7 @@ unsupported on the stock router (no cross-replica wallet lock).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.18.0** (Lumerin main; includes #889 gateway caps -- not Base
+Pinned **v7.19.0** (Lumerin main; includes #889 gateway caps -- not Base
 testnet). The image advertises `operation-journal-v1` and `stake-limit-v1`.
 Uplink does not drive managed-gateway cleanup (M2). Misconfiguration blast
 radius: sessions may not expire as expected; collateral can remain locked
@@ -2620,7 +2620,7 @@ module; put a reverse-proxy / WAF rate limit in front, or rebuild Caddy with
 
 Supported Uplink path: this scaffold (sibling to SecretVM/generic). Not third-party consumer-gateway Railway (no DOMAIN/PUBLIC_ORIGIN).
 
-Peer host overlay for Uplink + stock Lumerin **v7.18.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
+Peer host overlay for Uplink + stock Lumerin **v7.19.0** (Lumerin main / #889 caps -- not Base testnet). Same GHCR image
 pair as SecretVM and generic - different skin for ports, TLS edge, and
 secrets injection. **No** private patched node. **No** Railway Dockerfile
 for the Lumerin node.
@@ -2640,7 +2640,7 @@ Railway does not run compose, so use them as the reference: copy the image
 digests and variables into the Railway services instead of `:latest`.
 Stock router pin today:
 
-`ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba`
+`ghcr.io/morpheusais/morpheus-lumerin-node:v7.19.0@sha256:d2ab8b2c7568f51db1569ff03176c6ce0bef5037c783e97f02b031a0290c9ddf`
 
 ## Services
 
@@ -2685,7 +2685,7 @@ under `docker compose`.
 
 Railway applies neither the compose `${VAR:-default}` defaults nor its
 literal values. An unset variable takes the process's own default (Uplink
-code, Uplink image, or stock router v7.18.0):
+code, Uplink image, or stock router v7.19.0):
 
 | Variable (service) | Compose value | Unset on Railway | `env.railway.example` |
 |---|---|---|---|
@@ -2733,7 +2733,7 @@ cross-replica wallet lock on the stock router).
 
 ## H2 - managed-mode blast radius
 
-Pinned **v7.18.0** advertises `operation-journal-v1` and `stake-limit-v1`
+Pinned **v7.19.0** advertises `operation-journal-v1` and `stake-limit-v1`
 (#889, on Lumerin main -- not Base testnet). Uplink on this digest still
 does not send journal headers or stake-limit leases (M2). Chain defaults
 remain mainnet.
@@ -2757,7 +2757,7 @@ set them as `proxy-router` service variables:
   (unset: debug / info / info)
 
 **Set / believed honored; live acceptance pending.** Do **not** claim TEE
-privacy on the pinned v7.18.0 digest until verified.
+privacy on the pinned v7.19.0 digest until verified.
 
 ## M1 / keep list
 

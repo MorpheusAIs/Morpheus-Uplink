@@ -8,7 +8,7 @@
 # The commit is resolved at check time and never written into the repo.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WANT='ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba'
+WANT='ghcr.io/morpheusais/morpheus-lumerin-node:v7.19.0@sha256:d2ab8b2c7568f51db1569ff03176c6ce0bef5037c783e97f02b031a0290c9ddf'
 TAG="${WANT%%@*}"
 TAG="${TAG##*:}"
 bad=0
@@ -20,7 +20,7 @@ for f in "${composes[@]}"; do
     bad=1
   fi
   # No unpinned router tag without the digest
-  if grep -nE 'morpheus-lumerin-node:v7\.18\.0(["[:space:]]|$)' "$f" | grep -v '@sha256:'; then
+  if grep -nE 'morpheus-lumerin-node:v7\.19\.0(["[:space:]]|$)' "$f" | grep -v '@sha256:'; then
     echo "Unpinned router tag in $f"
     bad=1
   fi

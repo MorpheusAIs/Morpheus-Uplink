@@ -9,7 +9,7 @@
 # WALLET_PRIVATE_KEY goes to proxy-router only. Uplink also receives
 # ETH_NODE_ADDRESS, only to know whether a provided RPC is set.
 #
-# Lumerin pin: v7.18.0 digest. The Uplink image is pinned to its digest in
+# Lumerin pin: v7.19.0 digest. The Uplink image is pinned to its digest in
 # the release assets (scripts/deploy-assets.sh).
 # H2/H3: see deploy/secretvm/README.md.
 x-logging: &default-logging
@@ -63,7 +63,7 @@ services:
       - proxy-router
 
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.19.0@sha256:d2ab8b2c7568f51db1569ff03176c6ce0bef5037c783e97f02b031a0290c9ddf
     restart: unless-stopped
     logging: *default-logging
     init: true
