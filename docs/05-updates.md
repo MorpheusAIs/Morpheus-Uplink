@@ -13,6 +13,27 @@
 
 ---
 
+## Upgrading to the v7.19.0 router pin (per-session stake cap)
+
+- The bundled proxy-router moves to v7.19.0 (digest-pinned in the release
+  compose).
+- The stake cap is now **Max stMOR per session** (`maxStMorPerSession`):
+  the most stMOR one new session may stake, whatever its length. A saved
+  Max stMOR/hr value is converted once at the first start (hourly value
+  × default session hours, so 150/hr with a 2 h default becomes 300) and
+  the old key is removed. Without a saved value the default is 150 per
+  hour of the default session.
+- A refused open (`503` `stake_limit_exceeded`) now states the stake
+  needed, the cap and the session length, and what to change.
+- Model prices in the console and `/v1/models` come from the
+  active.mor.org feed only, as stMOR for the session length. The model
+  lists group models as Affordable, Over cap and Over budget. The Sessions
+  table no longer has a stMOR/hr column.
+- Uplink no longer keeps a rated-bids cache for prices; opens for the
+  same model share one rated-bids read.
+
+---
+
 ## Upgrading to the v7.18.0 router pin
 
 - The uplink service now also receives `ETH_NODE_ADDRESS`, only to know

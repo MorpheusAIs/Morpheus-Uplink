@@ -159,6 +159,22 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
 
+**Model prices.** Each model shows the stMOR a new session would stake
+for the session length above (the Status model picker uses the default
+session length). The price comes from the active.mor.org feed (refreshed
+every 5 minutes): the cheapest bid that is healthy, from a provider that
+is not excluded or cooling down. Uplink never reads the router for a
+price. Models are grouped, then sorted by name and price:
+
+- **Affordable**: within Max stMOR per session and the wallet's liquid MOR.
+- **Over cap** (amber): above Max stMOR per session but within liquid MOR.
+  Raise the cap or ask for a shorter session.
+- **Over budget** (grey): more than the wallet's liquid MOR.
+
+Amounts are rounded up to two decimals and recalculated when the session
+length changes. The stake is locked, not spent (see
+[Where is my MOR?](#where-is-my-mor)).
+
 ---
 
 ## Settings
@@ -181,6 +197,15 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are set in
   `.env` only and are not shown; the link at the bottom opens the full
   [environment variable reference](06-developers.md#environment-variables).
+- `maxStMorPerSession` is the most stMOR one new session may stake,
+  whatever its length ("don't burn more than this per session"); the
+  note shows the default session length it is measured against. The
+  default is 150 per hour of the default session (25 for 10 min); empty
+  means no cap. A request whose session would need more is refused with
+  `503` `stake_limit_exceeded`, and the Status line shows the stake
+  needed, the cap and the session length. A saved Max stMOR/hr value
+  from an older version is converted once at the first start (hourly
+  value × default session hours).
 - `sessionRelease` turns the apps' session release
   (`POST /v1/sessions/release`) on or off.
 - **Export settings** / **Import settings** download or load a settings

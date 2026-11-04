@@ -18,7 +18,7 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
-// Max stMOR/hr open-path tests (spec §5 tests 2-6 and 9) against a small
+// Max stMOR per session open-path tests (spec §5 tests 2-6 and 9) against a small
 // mock router: rated bids with prices, supply, budget and opens by bid.
 
 type mockBid struct {

@@ -591,6 +591,21 @@ the pool stays in charge of which session is open. Turning the
 
   The walk then tries at most 3 bids, one per provider; when every try
   fails to open, the request is refused (`walk_exhausted`).
+- *Max stMOR per session:* after step 5, a bid is skipped when its stake
+  for the requested session length, `ceil(supply × pricePerSecond ×
+  (duration + 1) ÷ budget)`, is above the cap. The supply/budget pair is
+  held for up to 1 h and read again on a new UTC day; without a usable
+  pair the open reads it first. When the cap skips every bid left, the
+  request gets `503` `stake_limit_exceeded` naming the stake needed, the
+  cap and the session length (no `Retry-After`); `/admin/status`
+  `stakeRefusal` carries `needWei`, `capWei` and `durationSec`. An invalid
+  saved cap refuses opens with `503` `stake_limit_invalid` until it is
+  fixed and Uplink restarts. A saved `maxStMorPerHour` from an older
+  version is converted once at boot (hourly × default session hours) and
+  removed.
+- *Rated bids read once per model:* opens for the same model that arrive
+  together share one rated-bids read (single-flight); nothing caches it
+  past that read.
 - *Refusals:* nothing is opened and the request gets `503`
   `no_available_provider` ("no provider is available for this model right
   now; retry later", no ids), except `all_excluded`, which is `503`
@@ -629,6 +644,16 @@ the pool stays in charge of which session is open. Turning the
   still lists, at its cheapest positive bid. Models sharing a name resolve
   to the one with the cheapest healthy bid; one with no healthy bid never
   wins over one that has one. The model list is not filtered by health.
+  *Shown prices* (`/v1/models` `morpheus` fields, `/admin/estimate-stake`
+  and `/admin/estimate-stakes`) use the same feed and never read the
+  router: the cheapest bid that is healthy in the bids feed and whose
+  provider is not excluded or cooling, else the cheapest positive bid.
+  `stakeWei` is the stake for the session length at the held
+  supply/budget pair (null before the first read); `stMorPerHourWei`
+  stays for compatibility. `estimate-stakes` rows add `group`
+  (`affordable`, `overCap` above the cap, `overBudget` above liquid MOR)
+  and come sorted by name, then stake; the body adds
+  `maxStMorPerSessionWei`.
   Each feed is refetched
   after 5 minutes. A failed fetch (non-200, any redirect, more than 8 MiB
   decoded, malformed, no usable row, a `last_updated` that is missing,
@@ -799,6 +824,7 @@ enrolment gate applies as on other admin routes.
 | `sessionFailover` | — | bool | `true` `false` | `true` | Uplink restart | api/openai.go (Config.SessionFailover) |
 | `providerCooldown` | — | int | 0…86400 | `600` | Uplink restart | cmd/uplink pool.SetProviderCooldown |
 | `providerExclude` | — | string | comma-separated `0x` addresses | (empty) | Uplink restart | cmd/uplink pool.SetProviderExclude, catalog.SetProviderExclude |
+| `maxStMorPerSession` | — | string | stMOR above 0 (up to 6 decimals, at most 100000) or empty (no cap) | 150 × default session hours | Uplink restart | cmd/uplink pool.SetStakeLimit |
 | `sessionRelease` | — | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
 | `auditRetentionDays` | — | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
 | `housekeeping` | — | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |

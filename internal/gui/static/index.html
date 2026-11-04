@@ -576,14 +576,22 @@
     border-radius: 999px; padding: 3px 8px; white-space: nowrap;
   }
   .model-item.unaffordable {
-    opacity: 0.42; cursor: not-allowed;
+    opacity: 0.45; cursor: not-allowed;
   }
   .model-item.unaffordable .bid-pill {
-    color: var(--muted); background: transparent;
-    border-color: var(--border);
+    color: #888; background: #333; border-color: #555;
   }
   .model-item.unaffordable.active {
     opacity: 0.7; border-color: rgba(239, 68, 68, 0.35);
+  }
+  .model-item.over-cap .bid-pill {
+    color: #f5c542; background: #1f1900; border-color: #cc9900;
+  }
+  .model-section {
+    display: block; padding: 6px 12px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase;
+    color: var(--muted); background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
   }
   textarea.curl-edit {
     min-height: 200px; max-height: 420px;
@@ -1157,7 +1165,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
         </div>
         <div style="overflow-x:auto">
           <table id="sessTable">
-            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>stMOR/hr</th><th>Opened</th><th>Ends</th><th>In flight</th><th>Holders</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Model</th><th>Session</th><th>Stake</th><th>Opened</th><th>Ends</th><th>In flight</th><th>Holders</th><th>Status</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -1268,7 +1276,7 @@ docker compose -f docker-compose.generic.deployed.yml up -d --force-recreate --n
           <div class="field">
             <div class="field-head">
               <label class="note" for="modelSearch">Search models</label>
-              <span class="hint" id="stakeListHint" title="Lock = on-chain stake for the duration above">Pills show lock for duration · grey = can't afford from liquid</span>
+              <span class="hint" id="stakeListHint" title="Stake = stMOR locked on-chain for the duration above, at the cheapest healthy bid">Pills show the stMOR stake for the duration above · amber = over the cap · grey = more than liquid MOR</span>
             </div>
             <input id="modelSearch" placeholder="fuzzy filter (name or tag)…" oninput="filterModels()">
             <div class="model-list" id="modelList"><div class="note" style="padding:12px">Loading catalog…</div></div>
@@ -1395,8 +1403,9 @@ const UI_COPY = {
   routerDown: 'Router not responding',
   reconcileHeld: 'Session check retrying',
   chainCongested: 'Base is congested: opens retry after 30 s',
-  stakeLimitInvalid: 'Max stMOR/hr is invalid: fix the value and restart',
-  stakeLimitRefusal: 'Stake limit: no provider within Max stMOR/hr',
+  stakeLimitInvalid: 'Max stMOR per session is invalid: fix the value and restart',
+  stakeLimitRefusal: (need, cap, dur) => 'Stake cap: a ' + dur + ' session needs ' + need + ' stMOR, the cap is ' + cap + ' stMOR per session. Raise Max stMOR per session or shorten the session.',
+  stakeLimitRefusalShort: 'Stake cap: no provider within Max stMOR per session. Raise it or shorten the session.',
   walletTxPending: 'Wallet transaction pending on-chain: opens retry after 30 s',
   diskLow: 'Disk space low',
   openSessions: (n) => n + ' open session' + (n === 1 ? '' : 's'),
@@ -1426,7 +1435,8 @@ const UI_COPY = {
   modelLabel: 'Model',
   keyTipPrompt: 'Prompt key: inference only (recommended). Ephemeral keys work the same; create more on the API Keys tab. The master key stays on the API Keys tab.',
   keyTipEphemeral: 'Ephemeral key: inference only. Export it from API Keys if you need it after a redeploy.',
-  modelTip: (dur) => 'stMOR/hr · ~MOR lock · ' + dur + ' default. The copy button copies the full model ID.',
+  modelTip: (dur) => 'stMOR stake for the default ' + dur + ' session at the cheapest healthy bid. The copy button copies the full model ID.',
+  maxStakeTip: 'Don\'t burn more than this per session.',
   modelTipAuth: 'Lock estimate unavailable: router rejected Uplink\'s credential.',
   modelTipNotReady: 'Lock estimate unavailable: router not ready yet.',
   modelTipError: 'Lock estimate unavailable.',
@@ -1607,7 +1617,8 @@ let selectedKeyId = 'prompt';
 let keyLabels = {}; // usage keyId -> "Name (abcd1234)"
 let lastClaimableWei = '0';
 let liquidWei = '0';
-let modelStakes = {}; // blockchain model id -> { stakeWei, stakeMor, stMorPerHour, stMorPerHourWei, priceSource }
+let modelStakes = {}; // blockchain model id -> { stakeWei, stakeMor, group, priceSource }
+let stakeCapWei = null; // Max stMOR per session in wei (null: off), from estimate-stakes
 let modelStakesDurationSec = 0; // duration used when modelStakes was last filled
 let connectStakes = {}; // same records at the default session duration (Connect a client)
 let stakesPendingPoll = false; // the pending stakes refresh is a timer poll
@@ -1715,6 +1726,7 @@ function settingText(v) {
 }
 function settingTip(s) {
   let t = s.help || s.name;
+  if (s.name === 'maxStMorPerSession') t = UI_COPY.maxStakeTip + ' ' + t;
   t += ' Default: ' + settingText(s.default) + '.';
   return t;
 }
@@ -1723,12 +1735,16 @@ function settingShown(s) {
   return s.scope !== 'env' && s.scope !== 'router' && s.settable !== false;
 }
 function settingNote(s) {
-  if (s.name === 'maxStMorPerHour' && lastStatusSnapshot && lastStatusSnapshot.stakeLimit && lastStatusSnapshot.stakeLimit.invalid) {
+  const cap = s.name === 'maxStMorPerSession';
+  if (cap && lastStatusSnapshot && lastStatusSnapshot.stakeLimit && lastStatusSnapshot.stakeLimit.invalid) {
     return UI_COPY.stakeLimitInvalid + (s.pendingRestart ? ' (saved; restart to apply)' : '');
   }
-  if (s.pendingRestart) return 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
-  if (s.source === 'persisted') return 'saved';
-  return 'default ' + settingText(s.default);
+  let n;
+  if (s.pendingRestart) n = 'saved \u2014 takes effect after an Uplink restart (running: ' + settingText(s.effective) + ')';
+  else if (s.source === 'persisted') n = 'saved';
+  else n = 'default ' + settingText(s.default);
+  if (cap) n += ' · for the default ' + fmtSessionLen(connectDefaultDurationSec()) + ' session';
+  return n;
 }
 function renderSettings(list) {
   const box = document.getElementById('settingsList');
@@ -3041,7 +3057,7 @@ function statusHealth(st) {
   if (st && st.stakeLimit && st.stakeLimit.invalid) return { ok: false, text: UI_COPY.stakeLimitInvalid };
   if (st && st.chainWait && st.chainWait.reason === 'chain_congested') return { ok: false, text: UI_COPY.chainCongested };
   if (st && st.chainWait && st.chainWait.reason === 'wallet_tx_pending') return { ok: false, text: UI_COPY.walletTxPending };
-  if (st && st.stakeRefusal) return { ok: false, text: UI_COPY.stakeLimitRefusal };
+  if (st && st.stakeRefusal) return { ok: false, text: stakeRefusalText(st.stakeRefusal) };
   if (st && st.disk && st.disk.warn) return { ok: false, text: UI_COPY.diskLow };
   return { ok: true, text: UI_COPY.healthy };
 }
@@ -3158,7 +3174,6 @@ function renderSessions(sessions, sessionsError) {
       <td class="model-cell">${modelCell}</td>
       <td><code title="${escapeAttr(sid)}">${shortSecret(sid)}</code></td>
       <td>${fmtMor(s.stakeWei)}</td>
-      <td>${s.stMorPerHourWei == null ? '—' : fmtMor(s.stMorPerHourWei)}</td>
       <td>${fmtEnds(s.openedAt)}</td>
       <td>${fmtEnds(s.endsAt)}</td>
       <td>${s.pooled ? (Number(s.inFlight) || 0) : '—'}</td>
@@ -3166,7 +3181,7 @@ function renderSessions(sessions, sessionsError) {
       <td>${status}</td>
       <td><button type="button" class="danger-ghost" data-sid="${escapeAttr(sid)}" onclick="closeSession(this.dataset.sid, this)" ${sid ? '' : 'disabled'}>Close</button></td>
     </tr>`;
-  }).join('') || '<tr><td colspan=10 class="note">none</td></tr>';
+  }).join('') || '<tr><td colspan=9 class="note">none</td></tr>';
 }
 
 async function refreshKeys() {
@@ -3272,41 +3287,74 @@ function modelTitle(m) {
   return m.id;
 }
 
-// Max stMOR/hr marker: the same strict > as the server (spec §4). limit is
-// /admin/status stakeLimit.maxStMorPerHourWei (null when off).
-function overStakeLimit(limit, w) {
-  return limit != null && w != null && BigInt(w) > BigInt(limit);
+// fmtStMorWei is a wei amount in stMOR, rounded up to 2 decimals (6 below
+// 0.01), the same as the server's refusal text.
+function fmtStMorWei(w) {
+  if (w == null || w === '') return '—';
+  let v;
+  try { v = BigInt(String(w)); } catch (_) { return '—'; }
+  if (v <= 0n) return '0.00';
+  const places = v < 10n ** 16n ? 6 : 2;
+  const unit = 10n ** BigInt(18 - places);
+  const q = ((v + unit - 1n) / unit).toString().padStart(places + 1, '0');
+  return q.slice(0, -places) + '.' + q.slice(-places);
 }
 
-function currentStakeLimit() {
-  return (lastStatusSnapshot && lastStatusSnapshot.stakeLimit && lastStatusSnapshot.stakeLimit.maxStMorPerHourWei) || null;
+// fmtSessionLen is a session length as "10 min", "2 h" or "1 h 30 min".
+function fmtSessionLen(sec) {
+  const m = Math.ceil((Number(sec) || 0) / 60);
+  if (m < 60) return m + ' min';
+  return m % 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' min' : (m / 60) + ' h';
 }
 
-function fmtStMor(n) {
-  if (n == null || !Number.isFinite(n)) return '—';
-  if (n >= 100) return n.toFixed(1);
-  if (n >= 1) return n.toFixed(2);
-  return Number(n.toPrecision(3)).toString();
+// stakeRefusalText is the Status line for the last stake-cap refusal.
+function stakeRefusalText(r) {
+  if (!r || r.needWei == null || r.capWei == null || !r.durationSec) return UI_COPY.stakeLimitRefusalShort;
+  return UI_COPY.stakeLimitRefusal(fmtStMorWei(r.needWei), fmtStMorWei(r.capWei), fmtSessionLen(r.durationSec));
 }
 
-/** "X stMOR/hr · ~Y MOR" from server values only; "—" signed out or before
- * the first supply/budget read. Marks est. and over-limit rows. */
+/** "X.XX stMOR" (the stake for the session length) from server values only;
+ * "—" signed out or before the first supply/budget read. */
 function stakeLabel(st) {
-  if (!authed || !st || st.stMorPerHourWei == null) return '—';
-  let text = fmtStMor(st.stMorPerHour) + ' stMOR/hr';
-  if (Number.isFinite(st.stakeMor)) text += ' · ~' + fmtMorRate(st.stakeMor) + ' MOR';
-  if (st.priceSource === 'est.') text += ' est.';
-  if (overStakeLimit(currentStakeLimit(), st.stMorPerHourWei)) text += ' · over limit';
-  return text;
+  if (!authed || !st || st.stakeWei == null) return '—';
+  return fmtStMorWei(st.stakeWei) + ' stMOR';
 }
 
-/** Option text: name and the default-session price only. The ID stays behind the copy button. */
+// Model sections, in order. The server sets each row's group; a model
+// with no priced bid goes last.
+const STAKE_GROUPS = ['affordable', 'overCap', 'overBudget', 'none'];
+function stakeGroupOf(st) {
+  return (st && STAKE_GROUPS.includes(st.group)) ? st.group : 'none';
+}
+function stakeGroupTitle(g, n) {
+  const t = { affordable: 'Affordable', overCap: 'Over cap', overBudget: 'Over budget', none: 'No price' }[g];
+  return t + ' · ' + n;
+}
+function connectGroupLabel(g) {
+  if (g === 'affordable') return 'Affordable (under cap, within liquid MOR)';
+  if (g === 'overCap') return 'Over cap (above ' + fmtStMorWei(stakeCapWei) + ' stMOR, within liquid MOR)';
+  if (g === 'overBudget') return 'Over budget (more than ' + fmtMorFixed(liquidWei, 2) + ' MOR liquid)';
+  return 'No price';
+}
+// byNameThenStake orders by model name, then stake (unknown last).
+function byNameThenStake(a, b) {
+  const n = a.name.localeCompare(b.name);
+  if (n) return n;
+  const x = a.st && a.st.stakeWei != null ? BigInt(a.st.stakeWei) : null;
+  const y = b.st && b.st.stakeWei != null ? BigInt(b.st.stakeWei) : null;
+  if (x === y) return a.id.localeCompare(b.id);
+  if (x == null) return 1;
+  if (y == null) return -1;
+  return x < y ? -1 : (x > y ? 1 : a.id.localeCompare(b.id));
+}
+
+/** Option text: "Model · X.XX stMOR" at the default session. The ID stays behind the copy button. */
 function connectModelOptionLabel(id, dupIndex) {
   const m = modelBySendableId(id);
   const rec = connectStakes[m ? stakeKeyFor(m) : id] || null;
   const name = (m ? modelTitle(m) : id) + (dupIndex > 1 ? ' (' + dupIndex + ')' : '');
-  if (rec && rec.stMorPerHourWei != null) {
-    return name + '\u2003\u2003' + stakeLabel(rec);
+  if (authed && rec && rec.stakeWei != null) {
+    return name + ' · ' + stakeLabel(rec);
   }
   return name;
 }
@@ -3315,7 +3363,7 @@ function populateConnectModels() {
   const sel = document.getElementById('connectModelSelect');
   if (!sel) return;
   const dur = connectDefaultDurationSec();
-  let h = UI_COPY.modelTip(fmtDuration(dur));
+  let h = UI_COPY.modelTip(fmtSessionLen(dur));
   if (stakeEstimateError) {
     h = stakeEstimateError.kind === 'router_auth' ? UI_COPY.modelTipAuth
       : stakeEstimateError.kind === 'router_not_ready' ? UI_COPY.modelTipNotReady
@@ -3333,15 +3381,25 @@ function populateConnectModels() {
     sel.innerHTML = `<option value="">${escapeHtml(label)}</option>`;
     return;
   }
-  const ids = allModels.map(m => m.id).sort((a, b) => a.localeCompare(b));
+  const rows = allModels.map(m => ({ id: m.id, name: modelTitle(m), st: connectStakes[stakeKeyFor(m)] || null }));
+  rows.sort(byNameThenStake);
+  const ids = rows.map(r => r.id);
   const seenNames = {};
-  sel.innerHTML = ids.map(id => {
-    const m = modelBySendableId(id);
-    const nm = m ? modelTitle(m) : id;
-    seenNames[nm] = (seenNames[nm] || 0) + 1;
-    // value is the full model ID; copyConnectModel copies it as-is.
-    return `<option value="${escapeAttr(id)}">${escapeHtml(connectModelOptionLabel(id, seenNames[nm]))}</option>`;
-  }).join('');
+  // value is the full model ID; copyConnectModel copies it as-is.
+  const option = (r) => {
+    seenNames[r.name] = (seenNames[r.name] || 0) + 1;
+    return `<option value="${escapeAttr(r.id)}">${escapeHtml(connectModelOptionLabel(r.id, seenNames[r.name]))}</option>`;
+  };
+  const grouped = authed && rows.some(r => r.st && r.st.group);
+  if (!grouped) {
+    sel.innerHTML = rows.map(option).join('');
+  } else {
+    sel.innerHTML = STAKE_GROUPS.map(g => {
+      const in_ = rows.filter(r => stakeGroupOf(r.st) === g);
+      if (!in_.length) return '';
+      return `<optgroup label="${escapeAttr(connectGroupLabel(g))}">${in_.map(option).join('')}</optgroup>`;
+    }).join('');
+  }
   if (prev && ids.includes(prev)) sel.value = prev;
   else if (selectedModel && ids.includes(selectedModel)) sel.value = selectedModel;
   else sel.selectedIndex = 0;
@@ -4127,8 +4185,7 @@ function stakeRows(data) {
     out[key] = {
       stakeWei: row.stakeWei == null ? null : String(row.stakeWei),
       stakeMor: row.stakeWei == null ? NaN : weiToMorNum(row.stakeWei),
-      stMorPerHour: row.stMorPerHour,
-      stMorPerHourWei: row.stMorPerHourWei,
+      group: row.group || null,
       priceSource: row.priceSource,
     };
   }
@@ -4187,6 +4244,7 @@ function refreshModelStakes(opts = {}) {
       if (seq !== stakesSeq) return;
       stakeEstimateError = null;
       if (data.liquidWei != null) liquidWei = String(data.liquidWei);
+      stakeCapWei = data.maxStMorPerSessionWei == null ? null : String(data.maxStMorPerSessionWei);
       modelStakes = stakeRows(data);
       connectStakes = cData === data ? modelStakes : stakeRows(cData);
       modelStakesDurationSec = Number(data.durationSec) || dur;
@@ -4373,37 +4431,41 @@ async function loadModels(opts = {}) {
 
 function filterModels() {
   const q = document.getElementById('modelSearch').value.trim();
-  const scored = allModels.map(m => {
+  const rows = allModels.map(m => {
     const hay = [m.name, m.id, m.blockchainId, ...(m.tags || [])].filter(Boolean).join(' ');
-    return { m, s: fuzzyScore(q, hay) };
-  }).filter(x => x.s > 0).sort((a, b) => b.s - a.s || modelTitle(a.m).localeCompare(modelTitle(b.m)) || a.m.id.localeCompare(b.m.id));
+    return { m, id: m.id, name: modelTitle(m), st: stakeRecord(m.id), s: fuzzyScore(q, hay) };
+  }).filter(x => x.s > 0);
   const box = document.getElementById('modelList');
-  if (!scored.length) {
+  if (!rows.length) {
     box.innerHTML = '<div class="note" style="padding:12px">No matches</div>';
     return;
   }
+  // Sections (affordable, over cap, over budget) once prices are in;
+  // name, then stake, within each. A search keeps its best 80 matches.
+  const shown = q ? rows.sort((a, b) => b.s - a.s || byNameThenStake(a, b)).slice(0, 80) : rows;
+  shown.sort(byNameThenStake);
   const dur = probeDurationSec();
-  box.innerHTML = scored.slice(0, 80).map(({ m }) => {
-    const st = stakeRecord(m.id);
-    const afford = canAffordModel(m.id);
+  const item = ({ m, st }) => {
     const reuse = hasReusableSession(m.id);
+    const g = stakeGroupOf(st);
+    const afford = canAffordModel(m.id);
     const twin = (m.name && m.name !== m.id) ? `<div class="tags">${escapeHtml(shortSecret(m.blockchainId || m.id))}</div>` : '';
     let pill;
     if (!authed) {
       pill = `<span class="bid-pill" title="—">—</span>`;
     } else if (st) {
-      const over = overStakeLimit(currentStakeLimit(), st.stMorPerHourWei);
-      let title = reuse
-        ? `Reusable open session — no new lock needed (would lock ~${Number.isFinite(st.stakeMor) ? fmtMorRate(st.stakeMor) + ' MOR' : '?'} for ${fmtDuration(dur)})`
-        : (afford
-          ? `Expected on-chain lock for ${fmtDuration(dur)}`
-          : `Need ~${Number.isFinite(st.stakeMor) ? fmtMorRate(st.stakeMor) : '?'} MOR liquid (wallet has less)`);
-      pill = `<span class="bid-pill${over ? ' over-limit' : ''}" title="${escapeAttr(title)}">${escapeHtml(stakeLabel(st))}</span>`;
+      const title = reuse
+        ? `Reusable open session — no new stake needed (a new one would stake ${stakeLabel(st)} for ${fmtSessionLen(dur)})`
+        : g === 'overCap'
+          ? `Above Max stMOR per session for ${fmtSessionLen(dur)}: raise the cap or shorten the session`
+          : (afford ? `stMOR staked on-chain for ${fmtSessionLen(dur)}` : `More than the liquid MOR in the wallet`);
+      pill = `<span class="bid-pill" title="${escapeAttr(title)}">${escapeHtml(stakeLabel(st))}</span>`;
     } else {
-      pill = `<span class="bid-pill" title="Estimating lock…">…</span>`;
+      pill = `<span class="bid-pill" title="Estimating stake…">…</span>`;
     }
     const cls = [
       m.id === selectedModel ? 'active' : '',
+      g === 'overCap' && !reuse ? 'over-cap' : '',
       afford ? '' : 'unaffordable',
     ].filter(Boolean).join(' ');
     return `<div class="model-item${cls ? ' ' + cls : ''}" data-model-id="${escapeAttr(m.id)}" role="button" tabindex="0">
@@ -4414,7 +4476,16 @@ function filterModels() {
        </div>
        ${pill}
      </div>`;
-  }).join('');
+  };
+  if (!authed || !shown.some(r => r.st && r.st.group)) {
+    box.innerHTML = shown.map(item).join('');
+  } else {
+    box.innerHTML = STAKE_GROUPS.map(g => {
+      const in_ = shown.filter(r => stakeGroupOf(r.st) === g);
+      if (!in_.length) return '';
+      return `<div class="model-section">${escapeHtml(stakeGroupTitle(g, in_.length))}</div>` + in_.map(item).join('');
+    }).join('');
+  }
   updateSelectedStakeNote();
 }
 
@@ -4423,12 +4494,13 @@ function updateSelectedStakeNote() {
   if (!note) return;
   if (!selectedModel) { note.textContent = ''; return; }
   const st = stakeRecord(selectedModel);
-  if (!st) { note.textContent = ''; return; }
+  if (!st || !authed || st.stakeWei == null) { note.textContent = ''; return; }
   const reuse = hasReusableSession(selectedModel);
-  const afford = canAffordModel(selectedModel);
-  note.innerHTML = ' · ' + escapeHtml(stakeLabel(st)) +
-    (reuse ? ' · reusable session (no new lock)' : '') +
-    (afford ? '' : ' <span style="color:var(--bad)">(exceeds liquid)</span>');
+  const g = stakeGroupOf(st);
+  note.innerHTML = ' · ' + escapeHtml(stakeLabel(st) + ' for ' + fmtSessionLen(probeDurationSec())) +
+    (reuse ? ' · reusable session (no new stake)' : '') +
+    (!reuse && g === 'overCap' ? ' <span style="color:var(--warn)">(over Max stMOR per session)</span>' : '') +
+    (canAffordModel(selectedModel) ? '' : ' <span style="color:var(--bad)">(more than liquid MOR)</span>');
 }
 
 function escapeAttr(s) {

@@ -1020,6 +1020,22 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
 3. **Run test**, or **Copy** the curl command.
 4. Confirm a normal completion in **Response**.
 
+**Model prices.** Each model shows the stMOR a new session would stake
+for the session length above (the Status model picker uses the default
+session length). The price comes from the active.mor.org feed (refreshed
+every 5 minutes): the cheapest bid that is healthy, from a provider that
+is not excluded or cooling down. Uplink never reads the router for a
+price. Models are grouped, then sorted by name and price:
+
+- **Affordable**: within Max stMOR per session and the wallet's liquid MOR.
+- **Over cap** (amber): above Max stMOR per session but within liquid MOR.
+  Raise the cap or ask for a shorter session.
+- **Over budget** (grey): more than the wallet's liquid MOR.
+
+Amounts are rounded up to two decimals and recalculated when the session
+length changes. The stake is locked, not spent (see
+[Where is my MOR?](#where-is-my-mor)).
+
 ---
 
 ## Settings
@@ -1042,6 +1058,15 @@ Deeper: [nodedocs — Where is my MOR?](https://nodedocs.mor.org/ai/where-is-my-
   `WEB_PUBLIC_URL`, `ACTIVE_MODELS_URL` and `GATEWAY_BIDS_URL` are set in
   `.env` only and are not shown; the link at the bottom opens the full
   [environment variable reference](06-developers.md#environment-variables).
+- `maxStMorPerSession` is the most stMOR one new session may stake,
+  whatever its length ("don't burn more than this per session"); the
+  note shows the default session length it is measured against. The
+  default is 150 per hour of the default session (25 for 10 min); empty
+  means no cap. A request whose session would need more is refused with
+  `503` `stake_limit_exceeded`, and the Status line shows the stake
+  needed, the cap and the session length. A saved Max stMOR/hr value
+  from an older version is converted once at the first start (hourly
+  value × default session hours).
 - `sessionRelease` turns the apps' session release
   (`POST /v1/sessions/release`) on or off.
 - **Export settings** / **Import settings** download or load a settings
@@ -1191,6 +1216,13 @@ curl -sS https://YOUR_HOST/v1/chat/completions \
   "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.
 - Uplink adds no limit on long sessions or calls at once; a `429` from
   the router or provider is passed through.
+- A longer session stakes more MOR. When the stake for the requested
+  length is above the operator's Max stMOR per session, the call is a
+  `503` `stake_limit_exceeded` that states the stake needed, the cap and
+  the length (for example "Opening glm-5.1 for 2 h needs at least
+  5.01 stMOR; the Uplink cap is 4.00 stMOR per session. Raise Max stMOR
+  per session or ask for a shorter session."). Ask for a shorter session
+  or have the operator raise the cap.
 - When done, release your hold so unused stake returns early:
 
 ```bash
@@ -1246,6 +1278,27 @@ unlock `/v1/usage`.
 2. Download the new release compose (`docker-compose.secretvm.deployed.yml`, `docker-compose.generic.deployed.yml`, or for Railway the digests in `docker-compose.railway.deployed.yml`). Keep the **same** secrets / `.env` (`API_KEY_SEED`, `WALLET_PRIVATE_KEY`).
 3. Export ephemeral keys **before** wiping storage if volumes recreate.
 4. After restart: Status health → Probe once → reclaim if **To claim** &gt; 0.
+
+---
+
+## Upgrading to the v7.19.0 router pin (per-session stake cap)
+
+- The bundled proxy-router moves to v7.19.0 (digest-pinned in the release
+  compose).
+- The stake cap is now **Max stMOR per session** (`maxStMorPerSession`):
+  the most stMOR one new session may stake, whatever its length. A saved
+  Max stMOR/hr value is converted once at the first start (hourly value
+  × default session hours, so 150/hr with a 2 h default becomes 300) and
+  the old key is removed. Without a saved value the default is 150 per
+  hour of the default session.
+- A refused open (`503` `stake_limit_exceeded`) now states the stake
+  needed, the cap and the session length, and what to change.
+- Model prices in the console and `/v1/models` come from the
+  active.mor.org feed only, as stMOR for the session length. The model
+  lists group models as Affordable, Over cap and Over budget. The Sessions
+  table no longer has a stMOR/hr column.
+- Uplink no longer keeps a rated-bids cache for prices; opens for the
+  same model share one rated-bids read.
 
 ---
 
@@ -1951,6 +2004,21 @@ the pool stays in charge of which session is open. Turning the
 
   The walk then tries at most 3 bids, one per provider; when every try
   fails to open, the request is refused (`walk_exhausted`).
+- *Max stMOR per session:* after step 5, a bid is skipped when its stake
+  for the requested session length, `ceil(supply × pricePerSecond ×
+  (duration + 1) ÷ budget)`, is above the cap. The supply/budget pair is
+  held for up to 1 h and read again on a new UTC day; without a usable
+  pair the open reads it first. When the cap skips every bid left, the
+  request gets `503` `stake_limit_exceeded` naming the stake needed, the
+  cap and the session length (no `Retry-After`); `/admin/status`
+  `stakeRefusal` carries `needWei`, `capWei` and `durationSec`. An invalid
+  saved cap refuses opens with `503` `stake_limit_invalid` until it is
+  fixed and Uplink restarts. A saved `maxStMorPerHour` from an older
+  version is converted once at boot (hourly × default session hours) and
+  removed.
+- *Rated bids read once per model:* opens for the same model that arrive
+  together share one rated-bids read (single-flight); nothing caches it
+  past that read.
 - *Refusals:* nothing is opened and the request gets `503`
   `no_available_provider` ("no provider is available for this model right
   now; retry later", no ids), except `all_excluded`, which is `503`
@@ -1989,6 +2057,16 @@ the pool stays in charge of which session is open. Turning the
   still lists, at its cheapest positive bid. Models sharing a name resolve
   to the one with the cheapest healthy bid; one with no healthy bid never
   wins over one that has one. The model list is not filtered by health.
+  *Shown prices* (`/v1/models` `morpheus` fields, `/admin/estimate-stake`
+  and `/admin/estimate-stakes`) use the same feed and never read the
+  router: the cheapest bid that is healthy in the bids feed and whose
+  provider is not excluded or cooling, else the cheapest positive bid.
+  `stakeWei` is the stake for the session length at the held
+  supply/budget pair (null before the first read); `stMorPerHourWei`
+  stays for compatibility. `estimate-stakes` rows add `group`
+  (`affordable`, `overCap` above the cap, `overBudget` above liquid MOR)
+  and come sorted by name, then stake; the body adds
+  `maxStMorPerSessionWei`.
   Each feed is refetched
   after 5 minutes. A failed fetch (non-200, any redirect, more than 8 MiB
   decoded, malformed, no usable row, a `last_updated` that is missing,
@@ -2159,6 +2237,7 @@ enrolment gate applies as on other admin routes.
 | `sessionFailover` | — | bool | `true` `false` | `true` | Uplink restart | api/openai.go (Config.SessionFailover) |
 | `providerCooldown` | — | int | 0…86400 | `600` | Uplink restart | cmd/uplink pool.SetProviderCooldown |
 | `providerExclude` | — | string | comma-separated `0x` addresses | (empty) | Uplink restart | cmd/uplink pool.SetProviderExclude, catalog.SetProviderExclude |
+| `maxStMorPerSession` | — | string | stMOR above 0 (up to 6 decimals, at most 100000) or empty (no cap) | 150 × default session hours | Uplink restart | cmd/uplink pool.SetStakeLimit |
 | `sessionRelease` | — | bool | `true` `false` | `true` | Uplink restart | api handleSessionRelease (Config.SessionRelease) |
 | `auditRetentionDays` | — | int | 1…3650 | `90` | Uplink restart | api.NewServer openAuditSink |
 | `housekeeping` | — | bool | `true` `false` | `true` | Uplink restart | cmd/uplink housekeep.New |
