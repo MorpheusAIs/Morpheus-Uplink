@@ -63,8 +63,8 @@ wait_for() {
   fail "timed out waiting for: $desc"
 }
 
-pin=$(sed -n 's/^ *image: *\(ghcr.io\/morpheusais\/morpheus-lumerin-node:v7\.18\.0@sha256:[0-9a-f]\{64\}\).*/\1/p' deploy/secretvm/docker-compose.yml)
-[ -n "$pin" ] || fail "router image is not the pinned v7.18.0 digest"
+pin=$(sed -n 's/^ *image: *\(ghcr.io\/morpheusais\/morpheus-lumerin-node:v7\.19\.0@sha256:[0-9a-f]\{64\}\).*/\1/p' deploy/secretvm/docker-compose.yml)
+[ -n "$pin" ] || fail "router image is not the pinned v7.19.0 digest"
 echo "router image: $pin"
 
 echo "== up =="
@@ -176,9 +176,9 @@ status_json | jq -e '.sessionReconcile.state == "ok" and .sessionReconcile.opens
   || fail "status sessionReconcile: $(status_json | jq -c .sessionReconcile)"
 echo "OK boot reconcile: empty list, nothing adopted or closed, opens not held"
 
-echo "== router v7.18.0 checks =="
+echo "== router v7.19.0 checks =="
 rver() { status_json | jq -r '(.router.version // .router.Version // "")'; }
-rver | grep -qE '(^|[^0-9])7\.18\.0([^0-9]|$)' || fail "/admin/status does not report router v7.18.0 ($(rver))"
+rver | grep -qE '(^|[^0-9])7\.19\.0([^0-9]|$)' || fail "/admin/status does not report router v7.19.0 ($(rver))"
 echo "OK /admin/status reports router $(rver)"
 # Error-text pin, ping case: an open by an unknown bid id fails at the
 # provider ping before any transaction (getBid returns a zero bid, and the

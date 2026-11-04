@@ -7,10 +7,10 @@
 # Gateway:  http://localhost:8080          (OpenAI-compatible /v1, GUI at /gui)
 # Router:   http://localhost:8082          (only bound to localhost for debugging)
 #
-# Privacy env (L1): set / believed honored on pinned v7.18.0; live acceptance
+# Privacy env (L1): set / believed honored on pinned v7.19.0; live acceptance
 # pending. Do not market as TEE privacy.
 #
-# Lumerin pin note: tag v7.18.0 is Lumerin main (gateway caps).
+# Lumerin pin note: tag v7.19.0 is Lumerin main (gateway caps).
 # NOT Base testnet -- chain comes from env (defaults Base mainnet 8453).
 x-logging: &default-logging
   driver: json-file
@@ -20,7 +20,7 @@ x-logging: &default-logging
 
 services:
   proxy-router:
-    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba
+    image: ghcr.io/morpheusais/morpheus-lumerin-node:v7.19.0@sha256:d2ab8b2c7568f51db1569ff03176c6ce0bef5037c783e97f02b031a0290c9ddf
     restart: unless-stopped
     logging: *default-logging
     init: true

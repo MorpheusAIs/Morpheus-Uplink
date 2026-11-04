@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,11 +13,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
-// Max stMOR/hr open-path tests (spec §5 tests 2-6 and 9) against a small
+// Max stMOR per session open-path tests (spec §5 tests 2-6 and 9) against a small
 // mock router: rated bids with prices, supply, budget and opens by bid.
 
 type mockBid struct {
@@ -63,14 +65,15 @@ func morWei(t *testing.T, s string) *big.Int {
 	return new(big.Int).Set(r.Num())
 }
 
-// ppsNear is a price per second whose stMOR/hr is about w (w/3600 rounded
-// up); price is its exact stMOR/hr at the mock's supply and budget.
+// ppsNear is a price per second whose stake for a 600 s session is about
+// w (w/601 rounded up); price is its exact stake at the mock's supply and
+// budget.
 func ppsNear(t *testing.T, w *big.Int) (pps, price *big.Int) {
 	t.Helper()
-	pps = new(big.Int).Add(w, big.NewInt(3599))
-	pps.Quo(pps, big.NewInt(3600))
+	pps = new(big.Int).Add(w, big.NewInt(600))
+	pps.Quo(pps, big.NewInt(601))
 	s, _ := new(big.Int).SetString(stakeSupply, 10)
-	price, err := router.StMorPerHourWei(s, s, pps)
+	price, err := router.StakeForDurationWei(s, s, pps, 600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,8 +294,8 @@ func TestStakeLimitSpec5NoPriceBid(t *testing.T) {
 	}
 }
 
-// Spec §5 test 6: a supply or budget read error, or a value <= 0, refuses
-// with no open, even with a held pair.
+// Spec §5 test 6: with no fresh held pair, a supply or budget read error,
+// or a value <= 0, refuses with no open.
 func TestStakeLimitSpec6FreshReadsRefuse(t *testing.T) {
 	in, _ := ppsNear(t, morWei(t, "10"))
 	for name, m := range map[string]*stakeMock{
@@ -304,7 +307,6 @@ func TestStakeLimitSpec6FreshReadsRefuse(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m.setBids(mockBid{mbid(1), mprov(1), in, 10})
 			p := newStakeEnv(t, m, morWei(t, "150"))
-			p.SetHeldStakeInputs(big.NewInt(1), big.NewInt(1))
 			err := openStake(p)
 			if !errors.Is(err, ErrNoAvailableProvider) || errors.Is(err, ErrStakeLimitExceeded) {
 				t.Fatalf("err %v, want a refusal", err)
@@ -313,6 +315,110 @@ func TestStakeLimitSpec6FreshReadsRefuse(t *testing.T) {
 				t.Fatalf("opens %v, want none", got)
 			}
 		})
+	}
+}
+
+// An open uses the held pair while it is under an hour old and from the
+// same UTC day, and reads (then holds) a new pair otherwise.
+func TestStakeInputsHeldForOpens(t *testing.T) {
+	in, _ := ppsNear(t, morWei(t, "10"))
+	m := &stakeMock{}
+	m.setBids(mockBid{mbid(1), mprov(1), in, 10})
+	p := newStakeEnv(t, m, morWei(t, "150"))
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	p.SetClock(func() time.Time { return now })
+	s, _ := new(big.Int).SetString(stakeSupply, 10)
+	p.SetHeldStakeInputs(s, s)
+	if err := openStake(p); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if m.supplyReads.Load() != 0 || m.budgetReads.Load() != 0 {
+		t.Fatalf("fresh pair: read supply %d, budget %d; want none", m.supplyReads.Load(), m.budgetReads.Load())
+	}
+	for _, c := range []struct {
+		name       string
+		heldAt, at time.Time
+	}{
+		{"over an hour", now, now.Add(61 * time.Minute)},
+		{"new UTC day", time.Date(2026, 11, 4, 23, 50, 0, 0, time.UTC), time.Date(2026, 11, 5, 0, 1, 0, 0, time.UTC)},
+	} {
+		heldAt, at := c.heldAt, c.at
+		p.SetClock(func() time.Time { return heldAt })
+		p.SetHeldStakeInputs(s, s)
+		before := m.supplyReads.Load()
+		p.SetClock(func() time.Time { return at })
+		if _, ok := p.FreshStakeInputs(); ok {
+			t.Fatalf("%s: pair still fresh", c.name)
+		}
+		if _, err := p.EnsureStakeInputs(context.Background()); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if m.supplyReads.Load() != before+1 {
+			t.Fatalf("%s: supply reads %d, want %d", c.name, m.supplyReads.Load(), before+1)
+		}
+	}
+}
+
+// The refusal names the least stake needed, the cap and the session length.
+func TestStakeLimitErrorDetail(t *testing.T) {
+	a, priceA := ppsNear(t, morWei(t, "40"))
+	b, _ := ppsNear(t, morWei(t, "60"))
+	m := &stakeMock{}
+	m.setBids(mockBid{mbid(1), mprov(1), b, 10}, mockBid{mbid(2), mprov(2), a, 9})
+	p := newStakeEnv(t, m, morWei(t, "25"))
+	err := openStake(p)
+	var e *StakeLimitError
+	if !errors.As(err, &e) || !errors.Is(err, ErrStakeLimitExceeded) {
+		t.Fatalf("err %v, want a *StakeLimitError", err)
+	}
+	if e.NeedWei.Cmp(priceA) != 0 || e.CapWei.Cmp(morWei(t, "25")) != 0 || e.DurationSec != 600 {
+		t.Fatalf("detail need %v cap %v dur %d", e.NeedWei, e.CapWei, e.DurationSec)
+	}
+	if got := err.Error(); !strings.Contains(got, "a 10 min session needs at least 40.0") || !strings.Contains(got, "the cap is 25.00 stMOR") {
+		t.Fatalf("text %q", got)
+	}
+	r, ok := p.LastStakeRefusal()
+	if !ok || r.NeedWei != priceA.String() || r.DurationSec != 600 {
+		t.Fatalf("status refusal %+v", r)
+	}
+}
+
+// Concurrent opens of one model share one rated-bids read.
+func TestRatedBidsReadShared(t *testing.T) {
+	in, _ := ppsNear(t, morWei(t, "10"))
+	m := &stakeMock{ratedHold: make(chan struct{})}
+	m.setBids(mockBid{mbid(1), mprov(1), in, 10})
+	p := newStakeEnv(t, m, nil)
+	const n = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := p.sharedRatedBids(context.Background(), stakeModel)
+			errs <- err
+		}()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for m.ratedCur.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // let every caller join
+	close(m.ratedHold)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := m.ratedReads.Load(); got != 1 {
+		t.Fatalf("rated reads %d, want 1", got)
+	}
+	// A later call reads again.
+	if _, err := p.sharedRatedBids(context.Background(), stakeModel); err != nil || m.ratedReads.Load() != 2 {
+		t.Fatalf("second read: %v, reads %d", err, m.ratedReads.Load())
 	}
 }
 

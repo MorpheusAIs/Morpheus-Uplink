@@ -112,12 +112,12 @@ type Pool struct {
 	chainWait    ChainWait    // last chain_congested / wallet_tx_pending refusal; zero At: none since the last open
 	stakeRefusal StakeRefusal // last stake_limit_exceeded refusal; zero At: none since the last open
 	stakeLim     atomic.Pointer[stakeLimit]
-	heldInputs   atomic.Pointer[StakeInputs] // display supply/budget pair (never used by an open)
-	ftOnce       sync.Once                   // ftc: FirstTry display cache (first_try_cache.go)
-	ftc          *firstTryCache
-	scanKick     chan struct{} // buffered 1: run the sweep now
-	providedRPC  atomic.Bool   // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
-	retiredBusy  atomic.Bool   // a retired close found the wallet slot busy
+	heldInputs   atomic.Pointer[StakeInputs] // supply/budget pair (prices; opens while fresh)
+	ratedMu      sync.Mutex
+	ratedCalls   map[string]*ratedCall // model id -> rated-bids read in flight (rated_shared.go)
+	scanKick     chan struct{}         // buffered 1: run the sweep now
+	providedRPC  atomic.Bool           // the operator set the router's RPC (ETH_NODE_ADDRESS); presence only
+	retiredBusy  atomic.Bool           // a retired close found the wallet slot busy
 }
 
 // ChainWait is the last open refused because the chain is congested or

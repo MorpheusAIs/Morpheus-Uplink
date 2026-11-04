@@ -313,7 +313,7 @@ func (p *Pool) MarkSessionCooling(modelID, sessionID string) string {
 // healthy one is excluded, or every remaining one is avoided. Each refusal
 // logs its reason with counts and short ids only.
 func (p *Pool) candidates(modelID, extraAvoid string) (cands, pool []router.RatedBid, err error) {
-	rows, rerr := p.client.RatedBids(modelID)
+	rows, rerr := p.sharedRatedBids(context.Background(), modelID)
 	return p.candidatesFrom(modelID, extraAvoid, rows, rerr)
 }
 
@@ -466,7 +466,7 @@ func (op *openOp) candidates(ctx context.Context, extraAvoid string) (cands, poo
 			return nil, nil, err
 		}
 		rctx, cancel := p.slot.callCtx(ctx, op.tok, readCallTimeout)
-		rows, rerr := p.client.RatedBidsCtx(rctx, op.model)
+		rows, rerr := p.sharedRatedBids(rctx, op.model)
 		cancel()
 		if rerr != nil && ctx.Err() != nil {
 			return nil, nil, ctx.Err()
@@ -516,9 +516,10 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 		return openResult{}, ErrStakeLimitInvalid
 	}
 	var in StakeInputs
+	var need *big.Int // least stake among skipped bids
 	if limit != nil {
 		var err error
-		in, err = op.readStakeInputsInSlot(ctx)
+		in, err = op.stakeInputsForOpen(ctx)
 		if err != nil {
 			return openResult{}, err
 		}
@@ -531,10 +532,19 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 		if tried[normProv(b.Provider)] {
 			continue
 		}
-		if limit != nil && !withinLimit(b, in, limit) {
-			skipped++
-			slog.Info("pool: bid above the Max stMOR/hr limit; skipped", "model", op.model, "bid", short(b.ID))
-			continue
+		if limit != nil {
+			// While on, a bid with no price, or whose stake cannot be
+			// computed, is skipped; strictly greater than the cap skips.
+			st := bidStake(b, in, durationSec)
+			if st == nil || st.Cmp(limit) > 0 {
+				skipped++
+				if st != nil && (need == nil || st.Cmp(need) < 0) {
+					need = st
+				}
+				slog.Info("pool: bid stake above Max stMOR per session; skipped", "model", op.model, "bid", short(b.ID),
+					"stakeMor", FormatMor(st), "capMor", FormatMor(limit), "durationSec", durationSec)
+				continue
+			}
 		}
 		tried[normProv(b.Provider)] = true
 		attempts++
@@ -608,9 +618,12 @@ func (op *openOp) openExcluding(ctx context.Context, durationSec int, alts []rou
 		}
 	}
 	if skipped > 0 {
-		p.setStakeRefusal()
-		slog.Warn("pool: not opening", "model", op.model, "reason", "stake_limit_exceeded", "skipped", skipped)
-		return openResult{}, ErrStakeLimitExceeded
+		e := &StakeLimitError{NeedWei: need, CapWei: limit, DurationSec: durationSec}
+		p.setStakeRefusal(e)
+		slog.Warn("pool: not opening", "model", op.model, "reason", "stake_limit_exceeded", "skipped", skipped,
+			"needMor", FormatMor(need), "capMor", FormatMor(limit), "durationSec", durationSec,
+			"fix", "raise Max stMOR per session or ask for a shorter session")
+		return openResult{}, e
 	}
 	if lastErr == nil {
 		return openResult{}, fmt.Errorf("open on another provider (none tried): %w", ErrNoAlternate)

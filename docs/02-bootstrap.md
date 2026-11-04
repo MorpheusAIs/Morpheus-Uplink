@@ -16,7 +16,7 @@ consumer-gateway Railway (no DOMAIN / PUBLIC_ORIGIN operator fields).
 ## Pick a compose path
 
 Three overlays, **same GHCR image pair** (digest-pinned uplink + stock
-proxy-router **v7.18.0**). Pick the skin that matches your host:
+proxy-router **v7.19.0**). Pick the skin that matches your host:
 
 | Path | Best when | Release / scaffold |
 |------|-----------|----------------|
@@ -24,11 +24,11 @@ proxy-router **v7.18.0**). Pick the skin that matches your host:
 | **Generic VPS** | You already have a box / Phala / dstack — Caddy + Let’s Encrypt / `.env` | `docker-compose.generic.deployed.yml` + `env.generic.example` |
 | **Railway (scaffold)** | Railway HTTPS edge; secrets in Railway Secrets only; single-replica proxy-router | `docker-compose.railway.deployed.yml` + `env.railway.example` (reference; Railway does not run compose) + [operator checklist](../deploy/railway/README.md) |
 
-Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.18.0@sha256:070b99a8104c6e19d1c25c932a313e72a50fb5caa82d87554b22899370e444ba` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
+Images (already named in the YAML): `ghcr.io/morpheusais/uplink@sha…` (digest-pinned) · `ghcr.io/morpheusais/morpheus-lumerin-node:v7.19.0@sha256:d2ab8b2c7568f51db1569ff03176c6ce0bef5037c783e97f02b031a0290c9ddf` (digest-pinned in compose). Every image in the release compose is digest-pinned; none is `:latest`.
 
-**Pin note:** tag `v7.18.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
+**Pin note:** tag `v7.19.0` is **Lumerin `main`** (includes [#889](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/pull/889) gateway caps) — **not** Base testnet. Chain ID / Diamond / MOR come from compose env and still default to **Base mainnet** (`8453`, Diamond `0x6aBE1d282f72B474E54527D93b979A4f64d3030a`, MOR `0x7431ada8a591c955a994a21710752ef9b882b8e3`).
 
-**CA bundle note:** the proxy-router `v7.18.0` image ships the same CA bundle as the previously pinned router (byte-identical, 145 roots). Compared with older router images it removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS. The default endpoints in the compose files were re-checked against the `v7.18.0` bundle on 2026-10-29.
+**CA bundle note:** the proxy-router `v7.19.0` image ships the same CA bundle as the previously pinned router (byte-identical, 145 roots). Compared with older router images it removes several older roots (for example emSign, Comodo AAA, Entrust Root G4, TrustCor, E-Tugra, SECOM RootCA1/RootCA3, SwissSign Silver G2, Hongkong Post Root CA 1, SecureSign RootCA11 and an older Firmaprofesional root). A custom `ETH_NODE_ADDRESS` or other upstream whose certificate chains to a removed root will fail TLS. The default endpoints in the compose files were re-checked against this bundle on 2026-10-29 (then shipped in `v7.18.0`).
 
 Overlay detail: [deploy/secretvm](../deploy/secretvm/README.md) · [deploy/generic](../deploy/generic/README.md) · [deploy/railway](../deploy/railway/README.md).
 

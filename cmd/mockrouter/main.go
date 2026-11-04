@@ -84,8 +84,9 @@ func main() {
 		})
 	}))
 
-	// Stake inputs: supply equal to the budget, so a bid's stMOR/hr is its
-	// price per second × 3600 (far below the default Max stMOR/hr).
+	// Stake inputs: supply equal to the budget, so a session's stake is its
+	// price per second × (duration + 1) (far below the default Max stMOR per
+	// session).
 	mux.HandleFunc("GET /blockchain/token/supply", requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"supply": "1000000000000000000000000"})
 	}))

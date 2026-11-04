@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"math/rand/v2"
@@ -11,26 +12,81 @@ import (
 	"github.com/absgrafx/morpheus-uplink/internal/router"
 )
 
-// Max stMOR/hr limit: a bid whose price, as the MOR a session locks per
-// hour (router.StMorPerHourWei), is above the limit is never opened.
+// Max stMOR per session: a bid whose stake for the session length the open
+// asks for (router.StakeForDurationWei) is above the cap is never opened.
 
 // ErrStakeLimitExceeded: no session was opened and at least one candidate
-// bid was skipped because its stMOR/hr is above the limit.
-var ErrStakeLimitExceeded = errors.New("no provider for this model could be opened within the Max stMOR/hr limit")
+// bid was skipped because its stake is above the cap. The error returned is
+// a *StakeLimitError (errors.Is matches this).
+var ErrStakeLimitExceeded = errors.New("no provider for this model could be opened within the Max stMOR per session cap")
 
-// ErrStakeLimitInvalid: the saved Max stMOR/hr value is invalid; every
-// open is refused until it is fixed and Uplink restarts.
-var ErrStakeLimitInvalid = errors.New("the Max stMOR/hr setting is invalid")
+// ErrStakeLimitInvalid: the saved Max stMOR per session value is invalid;
+// every open is refused until it is fixed and Uplink restarts.
+var ErrStakeLimitInvalid = errors.New("the Max stMOR per session setting is invalid")
+
+// StakeLimitError is a stake-cap refusal: the least stake any skipped bid
+// needed for the session length asked, the cap and that length.
+type StakeLimitError struct {
+	NeedWei     *big.Int
+	CapWei      *big.Int
+	DurationSec int
+}
+
+func (e *StakeLimitError) Error() string {
+	return fmt.Sprintf("%v: a %s session needs at least %s stMOR, the cap is %s stMOR",
+		ErrStakeLimitExceeded, FormatDuration(e.DurationSec), FormatMor(e.NeedWei), FormatMor(e.CapWei))
+}
+
+func (e *StakeLimitError) Is(target error) bool { return target == ErrStakeLimitExceeded }
+
+// FormatMor is wei as MOR with 2 decimals, rounded up (an amount needed
+// is never shown below what it is), or 6 when under 0.01.
+func FormatMor(wei *big.Int) string {
+	if wei == nil {
+		return "?"
+	}
+	r := new(big.Rat).SetFrac(wei, big.NewInt(1e18))
+	if r.Cmp(big.NewRat(1, 100)) < 0 {
+		return ceilRat(r, 6)
+	}
+	return ceilRat(r, 2)
+}
+
+func ceilRat(r *big.Rat, dp int) string {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(dp)), nil)
+	n := new(big.Int).Mul(r.Num(), scale)
+	q, m := new(big.Int).QuoRem(n, r.Denom(), new(big.Int))
+	if m.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	return new(big.Rat).SetFrac(q, scale).FloatString(dp)
+}
+
+// FormatDuration is a session length as "2 h", "90 min" or "1 h 30 min".
+func FormatDuration(sec int) string {
+	m := (sec + 59) / 60
+	switch {
+	case m < 60:
+		return fmt.Sprintf("%d min", m)
+	case m%60 == 0:
+		return fmt.Sprintf("%d h", m/60)
+	default:
+		return fmt.Sprintf("%d h %d min", m/60, m%60)
+	}
+}
 
 // stakeRefusalShowFor is how long the Status page shows the last
 // stake-limit refusal (like the chain-wait one).
 const stakeRefusalShowFor = chainWaitShowFor
 
-// Held supply/budget boot read backoff (display only).
+// Held supply/budget pair: boot read backoff, and how long an open or a
+// price may use it before it is read again (also on a new UTC day, when
+// the budget changes).
 const (
 	stakeInputsBootFirst = 60 * time.Second
 	stakeInputsBootMax   = 5 * time.Minute
 	stakeInputsReadTime  = 10 * time.Second
+	stakeInputsMaxAge    = time.Hour
 )
 
 type stakeLimit struct {
@@ -45,8 +101,9 @@ type StakeInputs struct {
 	At             time.Time
 }
 
-// SetStakeLimit installs the boot value of the Max stMOR/hr setting: limit
-// in wei per hour (nil: off), or invalid (every open is refused).
+// SetStakeLimit installs the boot value of the Max stMOR per session
+// setting: the cap in wei per session (nil: off), or invalid (every open is
+// refused).
 func (p *Pool) SetStakeLimit(limit *big.Int, invalid bool) {
 	var w *big.Int
 	if limit != nil {
@@ -55,8 +112,8 @@ func (p *Pool) SetStakeLimit(limit *big.Int, invalid bool) {
 	p.stakeLim.Store(&stakeLimit{wei: w, invalid: invalid})
 }
 
-// StakeLimit returns the installed limit (a copy; nil: off) and whether
-// the setting is invalid.
+// StakeLimit returns the installed cap (a copy; nil: off) and whether the
+// setting is invalid.
 func (p *Pool) StakeLimit() (*big.Int, bool) {
 	l := p.stakeLim.Load()
 	if l == nil {
@@ -68,29 +125,40 @@ func (p *Pool) StakeLimit() (*big.Int, bool) {
 	return new(big.Int).Set(l.wei), l.invalid
 }
 
-// withinLimit reports whether bid b may be opened under limit (wei per
-// hour, nil: off). While on, a bid with no price, or whose price cannot be
-// computed, is skipped; the compare is whole wei, strictly greater skips.
-func withinLimit(b router.RatedBid, in StakeInputs, limit *big.Int) bool {
-	if limit == nil {
-		return true
-	}
-	w, err := router.StMorPerHourWei(in.Supply, in.Budget, b.PricePerSecond)
+// bidStake is bid b's stake for durationSec at in; nil when it has no
+// price or cannot be computed.
+func bidStake(b router.RatedBid, in StakeInputs, durationSec int) *big.Int {
+	w, err := router.StakeForDurationWei(in.Supply, in.Budget, b.PricePerSecond, int64(durationSec))
 	if err != nil {
-		return false
+		return nil
 	}
-	return w.Cmp(limit) <= 0
+	return w
 }
 
-// HeldStakeInputs is the last supply/budget pair read by an open, a user
-// action or the boot read; ok false before the first one. Display only:
-// an open never uses it.
+// HeldStakeInputs is the last supply/budget pair read; ok false before the
+// first one.
 func (p *Pool) HeldStakeInputs() (StakeInputs, bool) {
 	h := p.heldInputs.Load()
 	if h == nil {
 		return StakeInputs{}, false
 	}
 	return *h, true
+}
+
+// heldFresh reports whether in may still be used: under an hour old and
+// read on the current UTC day.
+func (p *Pool) heldFresh(in StakeInputs) bool {
+	now := p.now()
+	return now.Sub(in.At) < stakeInputsMaxAge && now.UTC().Format(time.DateOnly) == in.At.UTC().Format(time.DateOnly)
+}
+
+// FreshStakeInputs is the held pair while it is fresh (heldFresh).
+func (p *Pool) FreshStakeInputs() (StakeInputs, bool) {
+	in, ok := p.HeldStakeInputs()
+	if !ok || !p.heldFresh(in) {
+		return StakeInputs{}, false
+	}
+	return in, true
 }
 
 // SetHeldStakeInputs records a fresh supply/budget pair (both > 0).
@@ -119,6 +187,15 @@ func (p *Pool) ReadStakeInputs(ctx context.Context) (StakeInputs, error) {
 	return StakeInputs{Supply: s, Budget: b, At: p.now()}, nil
 }
 
+// EnsureStakeInputs is the held pair while fresh, else a new read (two
+// router calls, no per-bid read).
+func (p *Pool) EnsureStakeInputs(ctx context.Context) (StakeInputs, error) {
+	if in, ok := p.FreshStakeInputs(); ok {
+		return in, nil
+	}
+	return p.ReadStakeInputs(ctx)
+}
+
 // RunStakeInputsBoot fills the held pair at boot: it reads at once, then
 // retries with backoff from 60 s up to 5 min (with jitter) until the pair
 // is held (by this read or any other) or ctx ends.
@@ -142,14 +219,25 @@ func (p *Pool) RunStakeInputsBoot(ctx context.Context) {
 	}
 }
 
-// StakeRefusal is the last stake_limit_exceeded refusal (Status page).
+// StakeRefusal is the last stake_limit_exceeded refusal (Status page): the
+// least stake needed, the cap and the session length, in wei and seconds.
 type StakeRefusal struct {
-	At time.Time `json:"at"`
+	At          time.Time `json:"at"`
+	NeedWei     string    `json:"needWei,omitempty"`
+	CapWei      string    `json:"capWei,omitempty"`
+	DurationSec int       `json:"durationSec,omitempty"`
 }
 
-func (p *Pool) setStakeRefusal() {
+func (p *Pool) setStakeRefusal(e *StakeLimitError) {
+	r := StakeRefusal{At: p.now(), DurationSec: e.DurationSec}
+	if e.NeedWei != nil {
+		r.NeedWei = e.NeedWei.String()
+	}
+	if e.CapWei != nil {
+		r.CapWei = e.CapWei.String()
+	}
 	p.mu.Lock()
-	p.stakeRefusal = StakeRefusal{At: p.now()}
+	p.stakeRefusal = r
 	p.mu.Unlock()
 }
 
@@ -178,11 +266,14 @@ func (p *Pool) openSucceeded() {
 	p.clearStakeRefusal()
 }
 
-// readStakeInputsInSlot reads supply and budget fresh inside the wallet
-// slot for an open while the limit is on. Any failure or a value <= 0
-// refuses the open; the held pair is never used for it.
-func (op *openOp) readStakeInputsInSlot(ctx context.Context) (StakeInputs, error) {
+// stakeInputsForOpen is the supply/budget pair an open checks the cap
+// with while it is on: the held pair while fresh, else a read inside the
+// wallet slot (then held). A failed read or a value <= 0 refuses the open.
+func (op *openOp) stakeInputsForOpen(ctx context.Context) (StakeInputs, error) {
 	p := op.p
+	if in, ok := p.FreshStakeInputs(); ok {
+		return in, nil
+	}
 	rctx, cancel := p.slot.callCtx(ctx, op.tok, readCallTimeout)
 	defer cancel()
 	in, err := p.ReadStakeInputs(rctx)
@@ -194,53 +285,4 @@ func (op *openOp) readStakeInputsInSlot(ctx context.Context) (StakeInputs, error
 		return StakeInputs{}, &NoAvailableError{Reason: "stake_inputs_unreadable"}
 	}
 	return in, nil
-}
-
-// FirstTry is the bid an open would try first, for display.
-type FirstTry struct {
-	Bid router.RatedBid
-	// StMorPerHourWei: the bid's price per hour from the held pair; nil
-	// when no pair is held yet or the bid has no price.
-	StMorPerHourWei *big.Int
-	// OverLimit: no candidate is within the limit; Bid is the router's
-	// first candidate.
-	OverLimit bool
-}
-
-// firstTryReadTimeout bounds FirstTry's rated-bids read.
-const firstTryReadTimeout = 10 * time.Second
-
-// FirstTry reads the model's rated bids outside the wallet slot (own
-// deadline of at most 10 s), applies the open's filters quietly, then the
-// limit with the held supply/budget pair: the first passing bid, else the
-// router's first candidate marked over limit. It never opens anything.
-func (p *Pool) FirstTry(ctx context.Context, modelID string) (FirstTry, error) {
-	rctx, cancel := context.WithTimeout(ctx, firstTryReadTimeout)
-	rows, rerr := p.client.RatedBidsCtx(rctx, modelID)
-	cancel()
-	cands, _, err := p.candidatesFromQuiet(modelID, "", rows, rerr)
-	if err != nil {
-		return FirstTry{}, err
-	}
-	in, held := p.HeldStakeInputs()
-	price := func(b router.RatedBid) *big.Int {
-		if !held {
-			return nil
-		}
-		w, err := router.StMorPerHourWei(in.Supply, in.Budget, b.PricePerSecond)
-		if err != nil {
-			return nil
-		}
-		return w
-	}
-	limit, _ := p.StakeLimit()
-	if limit == nil || !held {
-		return FirstTry{Bid: cands[0], StMorPerHourWei: price(cands[0])}, nil
-	}
-	for _, b := range cands {
-		if withinLimit(b, in, limit) {
-			return FirstTry{Bid: b, StMorPerHourWei: price(b)}, nil
-		}
-	}
-	return FirstTry{Bid: cands[0], StMorPerHourWei: price(cands[0]), OverLimit: true}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -165,19 +166,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessions := sessionRows(s.pool.ChainOpen(), s.pool.Snapshot(), time.Now())
-	byID := map[string]catalog.Model{}
-	if models, err := s.catalog.List(); err == nil {
-		for _, m := range models {
-			byID[strings.ToLower(m.ID)] = m
-		}
-	}
 	for i := range sessions {
 		if name := s.catalog.NameByID(sessions[i].ModelID); name != "" {
 			sessions[i].ModelName = name
-		}
-		// The session's own bid at the held supply/budget (spec §4).
-		if m, ok := byID[strings.ToLower(sessions[i].ModelID)]; ok && sessions[i].BidID != "" {
-			sessions[i].StMorPerHourWei = s.sessionStMorPerHourWei(m, sessions[i].BidID)
 		}
 	}
 	status := map[string]any{
@@ -377,7 +368,7 @@ func (s *Server) handlePoolCloseAll(w http.ResponseWriter, r *http.Request) {
 
 // handleEstimateStake returns the on-chain MOR lock for a model + duration:
 // stake ≈ (supply × pricePerSecond × duration) ÷ today's emissions budget,
-// at the bid the next open would try first (spec §4). A polled request
+// at the cheapest bid in the feed an open could use. A polled request
 // (X-Uplink-Poll: 1) reads nothing: held prices and supply/budget only.
 func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 	modelName := r.URL.Query().Get("model")
@@ -421,20 +412,18 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("X-Uplink-Poll") != "1" {
-		if _, err := s.pool.ReadStakeInputs(r.Context()); err != nil {
+		if _, err := s.pool.EnsureStakeInputs(r.Context()); err != nil {
 			http.Error(w, "token supply: "+router.SafeError(err), http.StatusBadGateway)
 			return
 		}
-		s.fillStakePrices(r.Context(), []catalog.Model{model})
 	}
-	p := s.heldStakePrice(model)
+	p := s.feedStakePrice(model, durationSec)
 	if p.PPS == nil {
 		http.Error(w, "no bid price for model", http.StatusNotFound)
 		return
 	}
 	out := stakePriceFields(p)
-	held := s.heldStakeFields(p, durationSec)
-	for k, v := range held {
+	for k, v := range s.heldStakeFields() {
 		out[k] = v
 	}
 	out["model"] = modelName
@@ -445,19 +434,12 @@ func (s *Server) handleEstimateStake(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// heldStakeFields are stakeWei, supplyWei and budgetWei at the held
-// supply/budget pair; null before the first read.
-func (s *Server) heldStakeFields(p stakePrice, durationSec int) map[string]any {
-	out := map[string]any{"stakeWei": nil, "supplyWei": nil, "budgetWei": nil}
-	h, ok := s.pool.HeldStakeInputs()
-	if !ok {
-		return out
-	}
-	out["supplyWei"], out["budgetWei"] = h.Supply.String(), h.Budget.String()
-	if p.PPS != nil {
-		if stake, err := router.StakeForDurationWei(h.Supply, h.Budget, p.PPS, int64(durationSec)); err == nil {
-			out["stakeWei"] = stake.String()
-		}
+// heldStakeFields are the held supplyWei and budgetWei; null before the
+// first read.
+func (s *Server) heldStakeFields() map[string]any {
+	out := map[string]any{"supplyWei": nil, "budgetWei": nil}
+	if h, ok := s.pool.HeldStakeInputs(); ok {
+		out["supplyWei"], out["budgetWei"] = h.Supply.String(), h.Budget.String()
 	}
 	return out
 }
@@ -489,35 +471,56 @@ func (s *Server) handleEstimateStakes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("X-Uplink-Poll") != "1" {
-		if _, err := s.pool.ReadStakeInputs(r.Context()); err != nil {
+		if _, err := s.pool.EnsureStakeInputs(r.Context()); err != nil {
 			routerErr(w, "token supply", err)
 			return
 		}
-		s.fillStakePrices(r.Context(), models)
 	}
 
 	var liquidWei *big.Int
 	if bal, err := s.router.Balance(); err == nil {
 		liquidWei = morFromBalance(bal)
 	}
+	capWei, _ := s.pool.StakeLimit()
 
-	out := make([]map[string]any, 0, len(models))
+	type pricedRow struct {
+		name  string
+		stake *big.Int
+		row   map[string]any
+	}
+	rows := make([]pricedRow, 0, len(models))
 	for _, m := range models {
-		p := s.heldStakePrice(m)
+		p := s.feedStakePrice(m, durationSec)
 		if p.PPS == nil {
 			continue
 		}
 		row := stakePriceFields(p)
-		row["stakeWei"] = s.heldStakeFields(p, durationSec)["stakeWei"]
+		row["group"] = nilIfEmpty(stakeGroup(p.StakeWei, capWei, liquidWei))
 		row["model"] = m.Name
 		row["modelId"] = m.ID
-		out = append(out, row)
+		rows = append(rows, pricedRow{name: m.Name, stake: p.StakeWei, row: row})
 	}
-	body := s.heldStakeFields(stakePrice{}, durationSec)
+	// Name, then stake (cheapest first; unknown last).
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := strings.ToLower(rows[i].name), strings.ToLower(rows[j].name)
+		if a != b {
+			return a < b
+		}
+		if rows[i].stake == nil || rows[j].stake == nil {
+			return rows[j].stake == nil && rows[i].stake != nil
+		}
+		return rows[i].stake.Cmp(rows[j].stake) < 0
+	})
+	out := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.row)
+	}
+	body := s.heldStakeFields()
 	delete(body, "stakeWei")
 	body["durationSec"] = durationSec
 	body["minDurationSec"] = 600
 	body["liquidWei"] = bigStr(liquidWei)
+	body["maxStMorPerSessionWei"] = weiStr(capWei)
 	body["models"] = out
 	body["explanation"] = "On-chain lock ≈ (MOR supply × bid price/sec × duration) ÷ today's emissions budget."
 	writeJSON(w, http.StatusOK, body)
@@ -610,9 +613,6 @@ type sessionRow struct {
 	Holders     []string   `json:"holders"` // key ids
 	OpenedAt    *time.Time `json:"openedAt,omitempty"`
 	Opener      string     `json:"opener,omitempty"`
-	// StMorPerHourWei: the session's bid price at the held supply/budget;
-	// null when unknown.
-	StMorPerHourWei *string `json:"stMorPerHourWei"`
 }
 
 // sessionRows merges the pool's lease state into the on-chain list by

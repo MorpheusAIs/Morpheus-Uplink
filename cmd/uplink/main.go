@@ -51,7 +51,9 @@ func main() {
 		log.Fatalf("store: %v", err)
 	}
 	// Console settings that apply on start (saved > default).
-	config.ApplyPersisted(cfg, st.GetSettings().All())
+	saved := st.GetSettings()
+	config.ApplyPersisted(cfg, saved.All())
+	resolveStakeCap(cfg, st, saved)
 
 	rc := router.New(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	cat := catalog.New(cfg.ActiveModelsURL).WithBidsURL(cfg.GatewayBidsURL)
@@ -65,7 +67,8 @@ func main() {
 	// Opens use only rated bids the gateway health feeds mark healthy.
 	pl.SetHealthyBids(cat.HealthyBidIDs)
 	pl.SetDurationMax(cfg.SessionDurationMax)
-	// Max stMOR/hr (boot value; an invalid saved value refuses every open).
+	// Max stMOR per session (boot value; an invalid saved value refuses
+	// every open).
 	pl.SetStakeLimit(cfg.StakeLimitWei, cfg.StakeLimitInvalid)
 	// Presence only: whether the operator set the router's chain RPC.
 	pl.SetProvidedRPC(strings.TrimSpace(cfg.EthRPCURL) != "")
@@ -259,3 +262,42 @@ const (
 	shutdownBudget   = 40 * time.Second
 	shutdownPerClose = 8 * time.Second
 )
+
+// bootDefaultSessionSec is the default session length at boot: the saved
+// value, else the built-in default, kept within 600 s and the session max
+// (as the API server resolves it).
+func bootDefaultSessionSec(cfg *config.Config, saved store.Settings) int {
+	d, hi := cfg.SessionDurationSec, cfg.SessionDurationMax
+	if saved.SessionDurationMax != nil {
+		hi = *saved.SessionDurationMax
+	}
+	if saved.SessionDurationDefault != nil {
+		d = *saved.SessionDurationDefault
+	}
+	if d > hi {
+		d = hi
+	}
+	return max(d, 600)
+}
+
+// resolveStakeCap settles Max stMOR per session at boot and, when a saved
+// hourly cap was converted, saves the result and drops the hourly key
+// (once). A failed save keeps the converted value for this run only.
+func resolveStakeCap(cfg *config.Config, st *store.Store, saved store.Settings) {
+	sec := bootDefaultSessionSec(cfg, saved)
+	v := config.ResolveStakeCap(cfg, saved.All(), sec)
+	if v == nil {
+		return
+	}
+	err := st.UpdateSettings(func(x *store.Settings) error {
+		if err := x.SetValue("maxStMorPerSession", v); err != nil {
+			return err
+		}
+		return x.SetValue(config.LegacyMaxStMorPerHour, nil)
+	})
+	if err != nil {
+		slog.Warn("settings: converted Max stMOR per session not saved; using it for this run", "err", err)
+		return
+	}
+	slog.Info("settings: Max stMOR/hr converted to Max stMOR per session", "defaultSessionSec", sec, "invalid", cfg.StakeLimitInvalid)
+}

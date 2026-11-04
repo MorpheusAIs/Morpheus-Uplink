@@ -117,6 +117,13 @@ curl -sS https://YOUR_HOST/v1/chat/completions \
   "uplink_idle_timeout"` (or `uplink_total_timeout`) and `[DONE]`.
 - Uplink adds no limit on long sessions or calls at once; a `429` from
   the router or provider is passed through.
+- A longer session stakes more MOR. When the stake for the requested
+  length is above the operator's Max stMOR per session, the call is a
+  `503` `stake_limit_exceeded` that states the stake needed, the cap and
+  the length (for example "Opening glm-5.1 for 2 h needs at least
+  5.01 stMOR; the Uplink cap is 4.00 stMOR per session. Raise Max stMOR
+  per session or ask for a shorter session."). Ask for a shorter session
+  or have the operator raise the cap.
 - When done, release your hold so unused stake returns early:
 
 ```bash
