@@ -104,12 +104,13 @@ type Config struct {
 	IgnoredEnv []string
 	// EnvOnlySet names the env-only settings whose variable is set.
 	EnvOnlySet map[string]bool
-	// MaxStMorPerHour is the maxStMorPerHour setting as stored (default
-	// "150"; "" is off). StakeLimitWei is its parse (nil: off);
-	// StakeLimitInvalid is set when the stored value does not parse.
-	MaxStMorPerHour   string
-	StakeLimitWei     *big.Int
-	StakeLimitInvalid bool
+	// MaxStMorPerSession is the maxStMorPerSession setting as stored ("" is
+	// off; the default follows the default session length, see
+	// ResolveStakeCap). StakeLimitWei is its parse in wei per session (nil:
+	// off); StakeLimitInvalid is set when the stored value does not parse.
+	MaxStMorPerSession string
+	StakeLimitWei      *big.Int
+	StakeLimitInvalid  bool
 
 	// SettingNotes are persisted settings ignored at boot (names only).
 	SettingNotes []string

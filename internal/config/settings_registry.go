@@ -66,7 +66,7 @@ type SettingDef struct {
 	set      func(*Config, string) // live and restart rows: default, then saved (restart) at boot
 	// keepInvalid: an invalid saved value is not ignored at boot; it is
 	// kept (set) as is and the row's set marks it invalid (see
-	// ApplyPersisted and maxStMorPerHour).
+	// ApplyPersisted and maxStMorPerSession).
 	keepInvalid bool
 }
 
@@ -112,9 +112,9 @@ var Settings = []SettingDef{
 	{Name: "sessionRelease", Env: "UPLINK_SESSION_RELEASE", Kind: KindBool, Default: "true", Scope: ScopeRestart, Group: "release",
 		Help: "Lets a generated key drop its hold on a model's session with POST /v1/sessions/release (true or false; false answers 403 release_disabled). The session closes when no holder and no request is left; otherwise the idle sweep closes it. Takes effect after an Uplink restart.", Consumer: "api handleSessionRelease (Config.SessionRelease)",
 		get: func(c *Config) string { return btoa(c.SessionRelease) }, set: func(c *Config, v string) { c.SessionRelease = atob(v) }},
-	{Name: "maxStMorPerHour", Kind: KindString, Default: "150", Scope: ScopeRestart, check: checkMorLimit, keepInvalid: true,
-		Help: "Highest price a new session may open at, in stMOR/hr; empty means no limit. Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetStakeLimit",
-		get: func(c *Config) string { return c.MaxStMorPerHour }, set: setMaxStMorPerHour},
+	{Name: "maxStMorPerSession", Kind: KindString, Default: "25", Scope: ScopeRestart, check: checkMorLimit, keepInvalid: true,
+		Help: "The most stMOR one new session may stake, whatever its length; bids that would stake more are skipped when opening. Empty means no limit. Default: 150 per hour of the default session (25 for 10 min). Takes effect after an Uplink restart.", Consumer: "cmd/uplink pool.SetStakeLimit",
+		get: func(c *Config) string { return c.MaxStMorPerSession }, set: setMaxStMorPerSession},
 	{Name: "auditRetentionDays", Env: "AUDIT_RETENTION_DAYS", Kind: KindInt, Min: 1, Max: 3650, Default: "90", Scope: ScopeRestart,
 		Help: "Days the high-value audit stream (audit-security.jsonl) is kept (1–3650). Takes effect after an Uplink restart.", Consumer: "api.NewServer openAuditSink",
 		get: func(c *Config) string { return itoa(c.AuditRetentionDays) }, set: func(c *Config, v string) { c.AuditRetentionDays = atoi(v) }},
@@ -279,7 +279,7 @@ func ApplyPersisted(c *Config, vals map[string]string) []string {
 		v, err := d.Validate(raw)
 		if err != nil && d.keepInvalid {
 			warnf("config: persisted %s is invalid; kept as invalid", d.Name)
-			notes = append(notes, MaxStMorPerHourInvalidNote)
+			notes = append(notes, MaxStMorPerSessionInvalidNote)
 			d.set(c, strings.TrimSpace(raw))
 			continue
 		}

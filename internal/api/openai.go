@@ -363,8 +363,8 @@ func (s *Server) writeModelList(w http.ResponseWriter, models []catalog.Model) {
 	}
 	data := make([]map[string]any, 0, len(models))
 	for _, m := range models {
-		// Held prices only: no rated, supply or budget read (spec §4 Load).
-		meta := stakePriceFields(s.heldStakePrice(m))
+		// Feed prices at the held pair only: no router read.
+		meta := stakePriceFields(s.feedStakePrice(m, defaultDur))
 		meta["name"] = m.Name
 		meta["blockchainId"] = m.ID
 		meta["tags"] = m.Tags
