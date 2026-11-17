@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in Uplink is broken
+type: Bug
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - gateway (/v1 API and routing)
+        - sessions and MOR
+        - keys and admin sign-in
+        - gui
+        - deploy (SecretVM, VPS, Railway)
+        - docs
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: How Uplink is deployed
+      options:
+        - SecretVM
+        - Generic VPS
+        - Railway
+        - Local (docker compose)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Uplink version
+      description: The release tag, shown on the GUI Status tab
+      placeholder: v1.0.32
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: The exact name from GET /v1/models, if the request names a model
+    validations:
+      required: false
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove API keys, wallet keys, seeds, and cookies before pasting
+    validations:
+      required: false

@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Operator guide
+    url: https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/docs/README.md
+    about: Install, fund, connect clients, and update. Questions are not tracked as issues
+  - name: Report a security issue
+    url: https://github.com/MorpheusAIs/Morpheus-Uplink/blob/main/DISCLAIMER.md#contact
+    about: Use a private channel to the maintainer. Do not open a public issue
+  - name: Hosted API
+    url: https://github.com/MorpheusAIs/Morpheus-Marketplace-API/issues/new/choose
+    about: Bugs and requests for api.mor.org belong on Morpheus-Marketplace-API
+  - name: Node software
+    url: https://github.com/MorpheusAIs/Morpheus-Lumerin-Node/issues/new/choose
+    about: Bugs and requests for the proxy-router, MorpheusUI, and the CLI belong on Morpheus-Lumerin-Node
