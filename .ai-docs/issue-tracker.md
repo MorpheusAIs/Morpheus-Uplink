@@ -54,7 +54,7 @@ Shipped means the commit is on `main`. The workflow comments on the linked issue
 
 The tracker files are not material paths, so a pull request that changes only them does not run the build and does not cut a release.
 
-`.github/scripts/issue-tracker.js` is the Morpheus-Lumerin-Node script with two additions: the branch feature pull requests target is set by `FEATURE_BASE` (here `main`), and it can handle a commit pushed to `main` without a pull request. This repository does not use the second one.
+`.github/scripts/issue-tracker.js` is the Morpheus-Lumerin-Node script with one addition: the branch feature pull requests target is set by `FEATURE_BASE` (here `main`). It is the same file as in Morpheus-Infra.
 
 ## Setup checklist
 
