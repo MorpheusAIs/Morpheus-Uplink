@@ -6,10 +6,6 @@ const FEATURE_BASE = process.env.FEATURE_BASE || 'dev'
 module.exports.main = async function main({ github, context, core }) {
   const owner = context.repo.owner
   const repo = context.repo.repo
-  if (context.eventName === 'push') {
-    await trackPush({ github, context, core, owner, repo })
-    return
-  }
   const pr = context.payload.pull_request
   const base = pr.base.ref
   const body = pr.body || ''
@@ -69,43 +65,6 @@ module.exports.main = async function main({ github, context, core }) {
       }
       if (status) await setProjectStatus({ github, core, owner, repo, issueNumber: n, status })
     }
-  }
-}
-
-// A commit pushed to `main` without a pull request. The commit message carries
-// `Refs #N`; the issue is commented, closed, and moved to Shipped. A commit that
-// arrived through a merged pull request is left to the pull_request event.
-async function trackPush({ github, context, core, owner, repo }) {
-  if (context.ref !== 'refs/heads/main') return
-  const shipped = new Map()
-  for (const commit of context.payload.commits || []) {
-    const refs = refsIn(commit.message)
-    if (!refs.length) continue
-    const short = commit.id.slice(0, 7)
-    let pulls
-    try {
-      pulls = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-        owner,
-        repo,
-        commit_sha: commit.id,
-      })
-    } catch (err) {
-      core.warning(`Commit ${short}: ${err.message}`)
-      continue
-    }
-    if (pulls.data.some((pull) => pull.merged_at)) continue
-    for (const n of refs) shipped.set(n, short)
-  }
-  for (const [n, short] of shipped) {
-    await note(github, core, owner, repo, n, `Shipped on \`main\` in ${short}.`)
-    await quietly(core, n, () => github.rest.issues.update({
-      owner,
-      repo,
-      issue_number: Number(n),
-      state: 'closed',
-      state_reason: 'completed',
-    }))
-    await setProjectStatus({ github, core, owner, repo, issueNumber: n, status: 'Shipped' })
   }
 }
 
