@@ -158,6 +158,9 @@ deploy/              secretvm + generic + railway overlays (CI pins digests)
 - Compose templates and env examples must pass
   `bash scripts/deploy-assets.sh pr` (the release uses the same script).
 - Feature work: branch → PR → `main` (release tags cut on merge to `main`).
+- The PR body contains `Refs #123`, or the checked no-issue line for a
+  chore, revert, or CI-only change. The issue closes when the PR merges to
+  `main`. Rules: [`.ai-docs/issue-tracker.md`](.ai-docs/issue-tracker.md).
 
 ## Regenerating the corpus
 

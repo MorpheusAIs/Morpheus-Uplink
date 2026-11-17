@@ -1,0 +1,27 @@
+name: Docs
+description: A wrong or missing page in the operator guide, the README, or AGENTS.md
+type: Task
+labels:
+  - documentation
+  - needs-triage
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: The path in this repository
+      placeholder: docs/02-bootstrap.md
+    validations:
+      required: true
+  - type: textarea
+    id: wrong
+    attributes:
+      label: What is wrong or missing
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+    validations:
+      required: false
