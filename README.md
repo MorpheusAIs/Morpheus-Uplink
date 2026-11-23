@@ -20,6 +20,8 @@
   <a href="AGENTS.md">Agents</a>
 </p>
 
+**Community:** questions and ideas go in [Morpheus Discussions](https://github.com/orgs/MorpheusAIs/discussions).
+
 > Self-custodial and experimental: you hold the wallet keys; any Prompt key can
 > lock MOR on that wallet; prompts go to third-party providers. Read
 > [DISCLAIMER.md](DISCLAIMER.md) before you fund a box or share a key.
